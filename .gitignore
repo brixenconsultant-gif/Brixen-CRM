@@ -1,0 +1,28 @@
+# SQLite Database Files
+*.db
+*.sqlite
+*.sqlite3
+hypetex.db
+
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+
+# Storage & Private Files
+storage/clients/*
+!storage/clients/.gitkeep
+
+# Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+
+# IDE & OS Files
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.tmp

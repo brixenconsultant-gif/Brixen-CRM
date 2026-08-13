@@ -1,0 +1,965 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Brixen Consultants - Corporate CMS & Client Portal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Red+Hat+Display:wght@500;700;800&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="/static/css/styles.css?v=13.0">
+</head>
+<body>
+
+    <div id="app-container">
+        <!-- ====================================================
+             CLIENT PORTAL SIDEBAR
+             ==================================================== -->
+        <aside id="client-sidebar" class="sidebar">
+            <div class="sidebar-logo">
+                <div class="logo-container-glass">
+                    <img src="/static/img/brixen-logo.png" alt="Brixen Consultants" class="brixen-brand-logo">
+                </div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <div class="nav-group">
+                    <ul class="nav-list">
+                        <li class="nav-item active" data-view="client-dashboard"><a href="#dashboard" onclick="switchView('client-dashboard')"><i data-lucide="layout-dashboard"></i> <span>Dashboard</span></a></li>
+                        <li class="nav-item" data-view="client-profile"><a href="#profile" onclick="switchView('client-profile')"><i data-lucide="user"></i> <span>My Profile</span></a></li>
+                    </ul>
+                </div>
+
+                <div class="nav-group">
+                    <div class="nav-group-title">MY PORTFOLIO</div>
+                    <ul class="nav-list">
+                        <li class="nav-item" data-view="client-companies"><a href="#companies" onclick="switchView('client-companies')"><i data-lucide="building-2"></i> <span>My Companies</span></a></li>
+                        <li class="nav-item" data-view="client-addresses"><a href="#addresses" onclick="switchView('client-addresses')"><i data-lucide="map-pin"></i> <span>Addresses</span></a></li>
+                    </ul>
+                </div>
+
+                <div class="nav-group">
+                    <div class="nav-group-title">FINANCIALS</div>
+                    <ul class="nav-list">
+                        <li class="nav-item" data-view="client-orders"><a href="#orders" onclick="switchView('client-orders')"><i data-lucide="shopping-bag"></i> <span>Orders</span></a></li>
+                        <li class="nav-item" data-view="client-invoices"><a href="#invoices" onclick="switchView('client-invoices')"><i data-lucide="file-text"></i> <span>Invoices</span></a></li>
+                        <li class="nav-item" data-view="client-payments"><a href="#payments" onclick="switchView('client-payments')"><i data-lucide="credit-card"></i> <span>Payments</span></a></li>
+                    </ul>
+                </div>
+
+                <div class="nav-group">
+                    <div class="nav-group-title">SERVICES</div>
+                    <ul class="nav-list">
+                        <li class="nav-item" data-view="client-documents"><a href="#documents" onclick="switchView('client-documents')"><i data-lucide="folder-lock"></i> <span>Documents</span></a></li>
+                        <li class="nav-item" data-view="client-services"><a href="#services" onclick="switchView('client-services')"><i data-lucide="layers"></i> <span>Services</span></a></li>
+                    </ul>
+                </div>
+
+                <div class="nav-group">
+                    <div class="nav-group-title">SUPPORT</div>
+                    <ul class="nav-list">
+                        <li class="nav-item" data-view="client-support"><a href="#support" onclick="switchView('client-support')"><i data-lucide="headphones"></i> <span>Order Support</span></a></li>
+                        <li class="nav-item" data-view="client-messages"><a href="#messages" onclick="switchView('client-messages')"><i data-lucide="message-square"></i> <span>Messages</span></a></li>
+                    </ul>
+                </div>
+
+                <div class="nav-group">
+                    <div class="nav-group-title">ACCOUNT</div>
+                    <ul class="nav-list">
+                        <li class="nav-item" data-view="client-profile"><a href="#profile" onclick="switchView('client-profile')"><i data-lucide="user-check"></i> <span>Profile</span></a></li>
+                    </ul>
+                </div>
+            </nav>
+
+            <div class="support-card">
+                <h4>Need Help?</h4>
+                <p>Speak to your dedicated corporate advisor.</p>
+                <button class="btn-support-card" onclick="switchView('client-support')">Contact Support</button>
+            </div>
+
+            <div class="sidebar-user">
+                <div class="user-info-wrapper">
+                    <div class="user-avatar" id="current-user-avatar">JH</div>
+                    <div class="user-details">
+                        <div class="name" id="current-user-name">James Harrington</div>
+                        <div class="role-badge" id="current-user-role">CLIENT • Active</div>
+                    </div>
+                </div>
+                <button class="btn-logout" title="Sign Out" onclick="handleLogout()">
+                    <i data-lucide="log-out"></i>
+                </button>
+            </div>
+        </aside>
+
+        <!-- ====================================================
+             ADMIN CMS SIDEBAR
+             ==================================================== -->
+        <aside id="admin-sidebar" class="sidebar" style="display: none;">
+            <div class="sidebar-logo">
+                <div class="logo-container-glass">
+                    <img src="/static/img/brixen-logo.png" alt="Brixen Consultants Admin" class="brixen-brand-logo">
+                </div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <div class="nav-group">
+                    <div class="nav-group-title">Admin Management</div>
+                    <ul class="nav-list">
+                        <li class="nav-item" data-view="admin-dashboard"><a href="#admin-dashboard"><i data-lucide="pie-chart"></i> <span>Overview</span></a></li>
+                        <li class="nav-item" data-view="admin-customers"><a href="#admin-customers"><i data-lucide="users"></i> <span>Customers</span></a></li>
+                        <li class="nav-item" data-view="admin-orders"><a href="#admin-orders"><i data-lucide="package-check"></i> <span>Orders Manager</span></a></li>
+                        <li class="nav-item" data-view="admin-services"><a href="#admin-services"><i data-lucide="layers"></i> <span>Services Catalog</span></a></li>
+                        <li class="nav-item" data-view="admin-invoices"><a href="#admin-invoices"><i data-lucide="receipt"></i> <span>Invoices Manager</span></a></li>
+                        <li class="nav-item" data-view="admin-documents"><a href="#admin-documents"><i data-lucide="file-check"></i> <span>Documents Review</span></a></li>
+                        <li class="nav-item" data-view="admin-logs"><a href="#admin-logs"><i data-lucide="history"></i> <span>Audit Logs</span></a></li>
+                        <li class="nav-item" data-view="admin-settings"><a href="#admin-settings"><i data-lucide="settings"></i> <span>System Settings</span></a></li>
+                    </ul>
+                </div>
+            </nav>
+
+            <div class="sidebar-user">
+                <div class="user-info-wrapper">
+                    <div class="user-avatar" style="background: #ef4444;">AV</div>
+                    <div class="user-details">
+                        <div class="name">Alexander Vance</div>
+                        <div class="role-badge">ADMINISTRATOR</div>
+                    </div>
+                </div>
+                <button class="btn-logout" title="Sign Out" onclick="handleLogout()">
+                    <i data-lucide="log-out"></i>
+                </button>
+            </div>
+        </aside>
+
+        <!-- ====================================================
+             MAIN WRAPPER & TOP HEADER
+             ==================================================== -->
+        <main class="main-wrapper">
+            <header class="top-header">
+                <div class="search-box">
+                    <i data-lucide="search" style="width:16px; height:16px; color:#94a3b8;"></i>
+                    <input type="text" id="global-search-input" placeholder="Search orders, companies, invoices..." oninput="handleGlobalSearch(this.value)">
+                </div>
+
+                <div class="header-right">
+                    <!-- ====================================================
+         CENTRALIZED CLIENT CRM RECORD MODAL
+         ==================================================== -->
+    <div id="crm-client-modal" class="modal-overlay">
+        <div class="modal-card" style="max-width:850px;">
+            <div class="modal-header">
+                <div style="display:flex; align-items:center; gap:12px;">
+                    <div id="crm-modal-avatar" class="user-avatar" style="width:44px; height:44px; font-size:1.1rem;">JH</div>
+                    <div>
+                        <h3 id="crm-modal-name">James Harrington</h3>
+                        <p style="font-size:0.78rem; color:#64748b;" id="crm-modal-meta">WP User ID: wp_user_101 | client1@acmecorp.co.uk</p>
+                    </div>
+                </div>
+                <button class="btn-close" onclick="closeCrmClientModal()"><i data-lucide="x"></i></button>
+            </div>
+
+            <!-- CRM Tabs -->
+            <div style="display:flex; gap:8px; border-bottom:1px solid #e2e8f0; padding-bottom:8px;">
+                <button class="btn-secondary active" onclick="switchCrmTab('overview')" id="crm-tab-overview" style="padding:6px 12px; font-size:0.78rem;">Overview</button>
+                <button class="btn-secondary" onclick="switchCrmTab('companies')" id="crm-tab-companies" style="padding:6px 12px; font-size:0.78rem;">Companies</button>
+                <button class="btn-secondary" onclick="switchCrmTab('orders')" id="crm-tab-orders" style="padding:6px 12px; font-size:0.78rem;">Orders</button>
+                <button class="btn-secondary" onclick="switchCrmTab('invoices')" id="crm-tab-invoices" style="padding:6px 12px; font-size:0.78rem;">Invoices</button>
+                <button class="btn-secondary" onclick="switchCrmTab('documents')" id="crm-tab-documents" style="padding:6px 12px; font-size:0.78rem;">Documents</button>
+                <button class="btn-secondary" onclick="switchCrmTab('support')" id="crm-tab-support" style="padding:6px 12px; font-size:0.78rem;">Support</button>
+                <button class="btn-secondary" onclick="switchCrmTab('logs')" id="crm-tab-logs" style="padding:6px 12px; font-size:0.78rem;">Activity</button>
+            </div>
+
+            <!-- Tab Contents -->
+            <div id="crm-tab-content-overview" class="crm-tab-pane">
+                <div style="display:grid; grid-template-columns:repeat(2, 1fr); gap:14px; font-size:0.85rem;">
+                    <div><strong>Email:</strong> <span id="crm-ov-email">client1@acmecorp.co.uk</span></div>
+                    <div><strong>Phone:</strong> <span id="crm-ov-phone">+44 7700 900001</span></div>
+                    <div><strong>Country:</strong> <span id="crm-ov-country">United Kingdom</span></div>
+                    <div><strong>Status:</strong> <span id="crm-ov-status" class="status-badge completed">Active</span></div>
+                    <div><strong>WordPress Sync:</strong> <span id="crm-ov-synced">Synced (12 Aug 2026)</span></div>
+                    <div><strong>Address:</strong> <span id="crm-ov-address">15 Regent Street, London</span></div>
+                </div>
+            </div>
+
+            <div id="crm-tab-content-companies" class="crm-tab-pane" style="display:none;">
+                <div id="crm-companies-list"></div>
+            </div>
+
+            <div id="crm-tab-content-orders" class="crm-tab-pane" style="display:none;">
+                <div id="crm-orders-list"></div>
+            </div>
+
+            <div id="crm-tab-content-invoices" class="crm-tab-pane" style="display:none;">
+                <div id="crm-invoices-list"></div>
+            </div>
+
+            <div id="crm-tab-content-documents" class="crm-tab-pane" style="display:none;">
+                <div id="crm-documents-list"></div>
+            </div>
+
+            <div id="crm-tab-content-support" class="crm-tab-pane" style="display:none;">
+                <div id="crm-support-list"></div>
+            </div>
+
+            <div id="crm-tab-content-logs" class="crm-tab-pane" style="display:none;">
+                <div id="crm-logs-list"></div>
+            </div>
+
+            <div class="modal-footer" style="padding-top:12px; border-top:1px solid #e2e8f0; text-align:right;">
+                <button class="btn-secondary" onclick="closeCrmClientModal()">Close</button>
+            </div>
+        </div>
+    </div>
+                    <!-- Glass Client View / Account Control -->
+                    <div class="glass-account-control" title="Switch Client / Account View">
+                        <div class="account-avatar" id="header-user-avatar">JH</div>
+                        <div class="account-details">
+                            <span class="account-name" id="header-user-name">James Harrington</span>
+                            <span class="account-role" id="header-user-role">Client Account</span>
+                        </div>
+                        <i data-lucide="chevron-down" style="width:14px; height:14px; color:#64748b; margin-left:4px;"></i>
+                        <select class="role-switcher-select glass-select" onchange="switchRoleDemo(this.value)">
+                            <option value="client1@acmecorp.co.uk">Client View (James Harrington)</option>
+                            <option value="v.smith@vantagecyber.co.uk">Client View (Victoria Smith)</option>
+                            <option value="admin@brixenconsultant.co.uk">Admin CMS View (Alexander Vance)</option>
+                        </select>
+                    </div>
+
+                    <button class="btn-icon-relative" title="Notifications" onclick="toggleNotificationsModal()">
+                        <i data-lucide="bell"></i>
+                        <span class="notification-badge" id="header-unread-count">2</span>
+                    </button>
+                </div>
+            </header>
+
+            <!-- ====================================================
+                 PAGES / VIEWS CONTAINER
+                 ==================================================== -->
+            <div class="page-container">
+
+                <!-- 0. LOGIN VIEW -->
+                <div id="view-login" class="view-panel" style="display:none; max-width: 440px; margin: 40px auto;">
+                    <div style="background: #ffffff; border: 1px solid var(--border-color); border-radius: var(--radius-xl); padding: 32px; box-shadow: var(--shadow-card);">
+                        <div style="text-align: center; margin-bottom: 24px;">
+                            <img src="/static/img/brixen-logo.png" alt="Brixen Consultants" style="height: 38px; margin-bottom: 12px;">
+                            <h2 style="font-size: 1.4rem; font-weight: 800; color: var(--text-primary);">Sign in to Client Portal</h2>
+                            <p style="font-size: 0.82rem; color: var(--text-muted); margin-top: 4px;">Enter your email and password to access your corporate dashboard.</p>
+                        </div>
+                        <form id="login-form" onsubmit="handleFormLogin(event)">
+                            <div style="margin-bottom: 16px;">
+                                <label style="display: block; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px;">Email Address</label>
+                                <input type="email" id="login-email" required placeholder="client@company.com" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: var(--radius-md); font-size: 0.9rem;">
+                            </div>
+                            <div style="margin-bottom: 20px;">
+                                <label style="display: block; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px;">Password</label>
+                                <input type="password" id="login-password" required placeholder="••••••••" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: var(--radius-md); font-size: 0.9rem;">
+                            </div>
+                            <div id="login-error-msg" style="display: none; padding: 10px; border-radius: var(--radius-sm); background: #fef2f2; color: #dc2626; font-size: 0.8rem; font-weight: 600; margin-bottom: 16px;"></div>
+                            <button type="submit" class="btn-primary" style="width: 100%; justify-content: center; padding: 12px; font-weight: 700; border-radius: var(--radius-md);">Sign In</button>
+                        </form>
+                        <div style="margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-color); display: flex; gap: 8px; justify-content: center;">
+                            <button type="button" class="btn-secondary" style="font-size: 0.75rem; padding: 6px 12px;" onclick="fillDemoLogin('client1@acmecorp.co.uk', 'ClientPass123!')">Fill Client Demo</button>
+                            <button type="button" class="btn-secondary" style="font-size: 0.75rem; padding: 6px 12px;" onclick="fillDemoLogin('admin@brixenconsultant.co.uk', 'AdminPass123!')">Fill Admin Demo</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 1. CLIENT ORDERS VIEW (Matching Reference Screenshot) -->
+                <div id="view-client-orders" class="view-panel">
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>Orders</h1>
+                            <p>Track your orders and view purchase history.</p>
+                        </div>
+                        <button class="btn-secondary" onclick="loadClientOrders()">
+                            <i data-lucide="rotate-cw"></i> Refresh Orders
+                        </button>
+                    </div>
+
+                    <!-- 4 Top Dynamic Stat Cards -->
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-info">
+                                <div class="label">Total Orders</div>
+                                <div class="value" id="stat-total-orders">115</div>
+                            </div>
+                            <div class="stat-icon navy">
+                                <i data-lucide="shopping-bag"></i>
+                            </div>
+                        </div>
+
+                        <div class="stat-card">
+                            <div class="stat-info">
+                                <div class="label">Completed</div>
+                                <div class="value" id="stat-completed-orders">97</div>
+                            </div>
+                            <div class="stat-icon green">
+                                <i data-lucide="check-circle-2"></i>
+                            </div>
+                        </div>
+
+                        <div class="stat-card">
+                            <div class="stat-info">
+                                <div class="label">In Progress</div>
+                                <div class="value" id="stat-in-progress-orders">9</div>
+                            </div>
+                            <div class="stat-icon blue">
+                                <i data-lucide="clock"></i>
+                            </div>
+                        </div>
+
+                        <div class="stat-card">
+                            <div class="stat-info">
+                                <div class="label">Total Spent</div>
+                                <div class="value" id="stat-total-spent">£2,608.00</div>
+                            </div>
+                            <div class="stat-icon orange">
+                                <i data-lucide="credit-card"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Filter & Search Controls Bar -->
+                    <div class="orders-filter-row">
+                        <div class="filter-group">
+                            <select class="select-filter" id="filter-order-status" onchange="loadClientOrders()">
+                                <option value="">All Statuses</option>
+                                <option value="Processing">Processing</option>
+                                <option value="In Progress">In Progress</option>
+                                <option value="Completed">Completed</option>
+                                <option value="Pending">Pending</option>
+                                <option value="Cancelled">Cancelled</option>
+                            </select>
+
+                            <select class="select-filter" id="filter-order-sort" onchange="loadClientOrders()">
+                                <option value="date_desc">Newest First</option>
+                                <option value="date_asc">Oldest First</option>
+                                <option value="price_desc">Highest Price</option>
+                                <option value="price_asc">Lowest Price</option>
+                            </select>
+                        </div>
+
+                        <div class="filter-group">
+                            <span id="orders-count-label" style="font-size:0.8rem; color:#64748b; font-weight:600;">Showing orders</span>
+                        </div>
+                    </div>
+
+                    <!-- 3-Column Order Cards Grid -->
+                    <div id="orders-cards-container" class="orders-grid">
+                        <!-- Order Cards dynamically inserted by app.js -->
+                    </div>
+                </div>
+
+                <!-- 2. CLIENT DASHBOARD VIEW (Brixen Corporate UI/UX Layout) -->
+                <div id="view-client-dashboard" class="view-panel" style="display: none;">
+                    
+                    <!-- Welcome Hero Banner -->
+                    <div class="welcome-hero">
+                        <div class="hero-left">
+                            <div class="hero-date" id="hero-current-date">12 August 2026</div>
+                            <h2>Welcome back, <span id="hero-user-name">James Harrington</span>! <span class="wave-emoji">👋</span></h2>
+                            <p>Manage your companies and stay on top of compliance deadlines.</p>
+                        </div>
+                        <div class="hero-right">
+                            <div class="hero-stat-number" id="hero-companies-count">3</div>
+                            <div class="hero-stat-label">Companies</div>
+                        </div>
+                    </div>
+
+                    <!-- 3 Horizontal Statistic Cards -->
+                    <div class="stats-grid-3">
+                        <!-- Card 1: PORTFOLIO -->
+                        <div class="stat-card-brixen">
+                            <div class="card-head">
+                                <div>
+                                    <div class="card-title">PORTFOLIO</div>
+                                    <div class="card-subtitle">All registered entities</div>
+                                </div>
+                                <div class="stat-icon purple"><i data-lucide="building-2"></i></div>
+                            </div>
+                            <div class="card-body">
+                                <div class="card-big-value" id="dash-card-portfolio-count">3</div>
+                                <div class="country-badges-row">
+                                    <span class="country-tag" id="dash-uk-count">3 UK</span>
+                                    <span class="country-tag" id="dash-usa-count">0 USA</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Card 2: OVERDUE -->
+                        <div class="stat-card-brixen">
+                            <div class="card-head">
+                                <div>
+                                    <div class="card-title">OVERDUE</div>
+                                    <div class="card-subtitle">Missed compliance deadlines</div>
+                                </div>
+                                <div class="stat-icon green"><i data-lucide="check-circle-2"></i></div>
+                            </div>
+                            <div class="card-body">
+                                <div class="card-big-value" id="dash-card-overdue-count">0</div>
+                                <div>
+                                    <span class="health-badge success" id="dash-overdue-badge">
+                                        <i data-lucide="check-circle-2"></i> All on track
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Card 3: UPCOMING -->
+                        <div class="stat-card-brixen">
+                            <div class="card-head">
+                                <div>
+                                    <div class="card-title">UPCOMING</div>
+                                    <div class="card-subtitle">Next 30 days</div>
+                                </div>
+                                <div class="stat-icon blue"><i data-lucide="calendar"></i></div>
+                            </div>
+                            <div class="card-body">
+                                <div class="card-big-value" id="dash-card-upcoming-count">0</div>
+                                <div>
+                                    <span class="health-badge info" id="dash-upcoming-badge">
+                                        <i data-lucide="calendar"></i> No deadlines soon
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Order Status Tracker Section Header -->
+                    <div class="tracker-section-header">
+                        <div>
+                            <h2>Order Status Tracker</h2>
+                            <p>Active orders — delivered orders are hidden</p>
+                        </div>
+                        <div class="active-orders-pill">
+                            <span id="dash-active-orders-num">9</span> Active Orders
+                        </div>
+                    </div>
+
+                    <!-- Active Orders 3-Column Responsive Grid -->
+                    <div id="dash-active-orders-grid" class="orders-grid">
+                        <!-- Dynamic active order cards with timeline & sub-table inserted by app.js -->
+                    </div>
+
+                </div>
+
+                <!-- 3. MY COMPANIES VIEW -->
+                <div id="view-client-companies" class="view-panel" style="display: none;">
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>My Companies</h1>
+                            <p>Manage your registered UK corporate entities and services.</p>
+                        </div>
+                    </div>
+                    <div class="data-table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Company Name</th>
+                                    <th>Company Number</th>
+                                    <th>Inc. Date</th>
+                                    <th>Director</th>
+                                    <th>Package</th>
+                                    <th>Status</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="companies-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 4. ADDRESSES VIEW -->
+                <div id="view-client-addresses" class="view-panel" style="display: none;">
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>Addresses</h1>
+                            <p>Registered Office, Trading, and Virtual Office address subscriptions.</p>
+                        </div>
+                    </div>
+                    <div class="data-table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Address Type</th>
+                                    <th>Address</th>
+                                    <th>Company</th>
+                                    <th>Start Date</th>
+                                    <th>Expiry Date</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="addresses-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 5. INVOICES VIEW -->
+                <div id="view-client-invoices" class="view-panel" style="display: none;">
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>Invoices</h1>
+                            <p>View billing history, payment receipts, and VAT statements.</p>
+                        </div>
+                    </div>
+                    <div class="data-table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Invoice #</th>
+                                    <th>Service</th>
+                                    <th>Amount</th>
+                                    <th>Due Date</th>
+                                    <th>Status</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="invoices-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 6. PAYMENTS VIEW -->
+                <div id="view-client-payments" class="view-panel" style="display: none;">
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>Payment History & Receipts</h1>
+                            <p>Track processed transactions, Stripe payment methods, and tax invoices.</p>
+                        </div>
+                    </div>
+                    <div class="data-table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Transaction ID</th>
+                                    <th>Service</th>
+                                    <th>Order #</th>
+                                    <th>Amount Paid</th>
+                                    <th>Payment Method</th>
+                                    <th>Status</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="payments-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 7. DOCUMENTS VIEW -->
+                <div id="view-client-documents" class="view-panel" style="display: none;">
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>Documents Vault</h1>
+                            <p>Upload, download, and review corporate certificates & KYC files.</p>
+                        </div>
+                        <button class="btn-primary" onclick="openUploadDocumentModal()"><i data-lucide="upload"></i> Upload Document</button>
+                    </div>
+                    <div class="data-table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Document Name</th>
+                                    <th>Category</th>
+                                    <th>Size</th>
+                                    <th>Uploaded By</th>
+                                    <th>Review Status</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="documents-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 8. SERVICES CATALOG VIEW -->
+                <div id="view-client-services" class="view-panel" style="display: none;">
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>Corporate Services Catalogue</h1>
+                            <p>Explore official UK company formation, compliance, and legal address services.</p>
+                        </div>
+                    </div>
+                    <div id="services-cards-grid" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap:20px; margin-top:16px;">
+                        <!-- Dynamic Service Cards loaded by app.js -->
+                    </div>
+                </div>
+
+                <!-- 9. SUPPORT VIEW -->
+                <div id="view-client-support" class="view-panel" style="display: none;">
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>Order Support</h1>
+                            <p>Submit inquiries and communicate directly with corporate staff.</p>
+                        </div>
+                        <button class="btn-primary" onclick="openNewTicketModal()"><i data-lucide="plus-circle"></i> New Support Ticket</button>
+                    </div>
+                    <div class="data-table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Ticket #</th>
+                                    <th>Subject</th>
+                                    <th>Category</th>
+                                    <th>Priority</th>
+                                    <th>Status</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tickets-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 10. MESSAGES VIEW -->
+                <div id="view-client-messages" class="view-panel" style="display: none;">
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>Messages & Advisory Inbox</h1>
+                            <p>Direct communication thread with your assigned Brixen corporate advisor.</p>
+                        </div>
+                    </div>
+                    <div id="messages-container" style="display:grid; grid-template-columns: 300px 1fr; gap:20px; min-height:450px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:16px;">
+                        <div id="conversations-sidebar" style="border-right:1fr solid #e2e8f0; padding-right:12px;">
+                            <h4 style="font-size:0.85rem; color:#64748b; text-transform:uppercase; margin-bottom:12px;">Active Threads</h4>
+                            <div id="threads-list"></div>
+                        </div>
+                        <div id="thread-chat-view" style="display:flex; flex-direction:column; justify-content:space-between;">
+                            <div id="chat-messages-body" style="flex:1; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:12px;">
+                                <p style="color:#64748b; font-size:0.9rem;">Select a support ticket thread to view messages.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 11. PROFILE VIEW -->
+                <div id="view-client-profile" class="view-panel" style="display: none;">
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>My Profile & Security</h1>
+                            <p>Manage contact information, password, and security preferences.</p>
+                        </div>
+                    </div>
+                    <div class="modal-card" style="max-width:800px; margin:0;">
+                        <form id="profile-form" onsubmit="saveProfile(event)">
+                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+                                <div>
+                                    <label style="font-size:0.8rem; font-weight:700;">Full Name</label>
+                                    <input type="text" id="prof-fullname" class="select-filter" style="width:100%; margin-top:4px;" required>
+                                </div>
+                                <div>
+                                    <label style="font-size:0.8rem; font-weight:700;">Phone Number</label>
+                                    <input type="text" id="prof-phone" class="select-filter" style="width:100%; margin-top:4px;">
+                                </div>
+                                <div>
+                                    <label style="font-size:0.8rem; font-weight:700;">Country</label>
+                                    <input type="text" id="prof-country" class="select-filter" style="width:100%; margin-top:4px;">
+                                </div>
+                                <div>
+                                    <label style="font-size:0.8rem; font-weight:700;">Billing Address</label>
+                                    <input type="text" id="prof-address" class="select-filter" style="width:100%; margin-top:4px;">
+                                </div>
+                            </div>
+                            <div style="margin-top:20px;">
+                                <button type="submit" class="btn-primary">Save Changes</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- 11. ADMIN DASHBOARD VIEW -->
+                <div id="view-admin-dashboard" class="view-panel" style="display: none;">
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>Admin Control Dashboard</h1>
+                            <p>Real-time analytics, order tracking, and system performance metrics.</p>
+                        </div>
+                    </div>
+
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-info">
+                                <div class="label">Total Customers</div>
+                                <div class="value" id="adm-tot-cust">20</div>
+                            </div>
+                            <div class="stat-icon purple"><i data-lucide="users"></i></div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-info">
+                                <div class="label">Total Orders</div>
+                                <div class="value" id="adm-tot-ord">115</div>
+                            </div>
+                            <div class="stat-icon blue"><i data-lucide="shopping-bag"></i></div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-info">
+                                <div class="label">Total Revenue</div>
+                                <div class="value" id="adm-tot-rev">£12,450.00</div>
+                            </div>
+                            <div class="stat-icon green"><i data-lucide="dollar-sign"></i></div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-info">
+                                <div class="label">Open Tickets</div>
+                                <div class="value" id="adm-tot-tix">4</div>
+                            </div>
+                            <div class="stat-icon orange"><i data-lucide="message-square"></i></div>
+                        </div>
+                    </div>
+
+                    <div style="background:#ffffff; border-radius:16px; padding:24px; border:1px solid #e2e8f0;">
+                        <h3 style="font-size:1rem; font-weight:700; margin-bottom:16px;">Revenue Trend</h3>
+                        <canvas id="admin-chart-canvas" height="80"></canvas>
+                    </div>
+                </div>
+
+                <!-- 12. ADMIN ORDERS MANAGER VIEW -->
+                <div id="view-admin-orders" class="view-panel" style="display: none;">
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>Admin Orders Manager</h1>
+                            <p>Update order progress %, change status, and dispatch client notifications.</p>
+                        </div>
+                    </div>
+                    <div class="data-table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Order #</th>
+                                    <th>Client</th>
+                                    <th>Service</th>
+                                    <th>Price</th>
+                                    <th>Progress</th>
+                                    <th>Status</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="adm-orders-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 13. ADMIN CUSTOMERS VIEW -->
+                <div id="view-admin-customers" class="view-panel" style="display: none;">
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>Customer Accounts</h1>
+                            <p>Manage registered accounts and company portfolios.</p>
+                        </div>
+                    </div>
+                    <div class="data-table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Customer Name</th>
+                                    <th>Email</th>
+                                    <th>Companies</th>
+                                    <th>Orders</th>
+                                    <th>Status</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="adm-customers-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 14. ADMIN DOCUMENTS VIEW -->
+                <div id="view-admin-documents" class="view-panel" style="display: none;">
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>Documents Review Center</h1>
+                            <p>Approve or reject customer compliance documents.</p>
+                        </div>
+                    </div>
+                    <div class="data-table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Client</th>
+                                    <th>Document</th>
+                                    <th>Category</th>
+                                    <th>Status</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="adm-documents-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 15. ADMIN LOGS VIEW -->
+                <div id="view-admin-logs" class="view-panel" style="display: none;">
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>Audit & Activity Logs</h1>
+                            <p>System security trail and user action history.</p>
+                        </div>
+                    </div>
+                    <div class="data-table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Timestamp</th>
+                                    <th>User</th>
+                                    <th>Action</th>
+                                    <th>Details</th>
+                                </tr>
+                            </thead>
+                            <tbody id="adm-logs-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 16. ADMIN SETTINGS VIEW -->
+                <div id="view-admin-settings" class="view-panel" style="display: none;">
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>System Settings</h1>
+                            <p>Configure company branding, logo, support contact, and prefixes.</p>
+                        </div>
+                    </div>
+                    <div class="modal-card" style="max-width:800px; margin:0;">
+                        <form id="settings-form" onsubmit="saveAdminSettings(event)">
+                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+                                <div>
+                                    <label style="font-size:0.8rem; font-weight:700;">Company Name</label>
+                                    <input type="text" id="set-company-name" class="select-filter" style="width:100%; margin-top:4px;" value="Brixen Consultant">
+                                </div>
+                                <div>
+                                    <label style="font-size:0.8rem; font-weight:700;">Support Email</label>
+                                    <input type="text" id="set-support-email" class="select-filter" style="width:100%; margin-top:4px;" value="support@brixenconsultant.co.uk">
+                                </div>
+                                <div>
+                                    <label style="font-size:0.8rem; font-weight:700;">Currency Symbol</label>
+                                    <input type="text" id="set-currency" class="select-filter" style="width:100%; margin-top:4px;" value="£">
+                                </div>
+                                <div>
+                                    <label style="font-size:0.8rem; font-weight:700;">Order Prefix</label>
+                                    <input type="text" id="set-order-prefix" class="select-filter" style="width:100%; margin-top:4px;" value="#GB">
+                                </div>
+                            </div>
+                            <div style="margin-top:20px;">
+                                <button type="submit" class="btn-primary">Save Settings</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+            </div>
+        </main>
+    </div>
+
+    <!-- ====================================================
+         ORDER DETAILS MODAL (HIDDEN UNTIL CLICKED)
+         ==================================================== -->
+    <div id="order-details-modal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div>
+                    <h3 id="modal-order-number">#GB103449JUL26</h3>
+                    <p id="modal-order-date" style="font-size:0.8rem; color:#64748b;">28 July 2026</p>
+                </div>
+                <button class="btn-close" onclick="closeOrderModal()"><i data-lucide="x"></i></button>
+            </div>
+
+            <div style="display:flex; justify-content:space-between; align-items:center; background:#faf5ff; padding:14px; border-radius:12px; border:1px solid #f3e8ff;">
+                <div>
+                    <div style="font-size:0.75rem; color:#64748b; font-weight:700;">SERVICE NAME</div>
+                    <div id="modal-service-name" style="font-size:1rem; font-weight:700; color:#7c3aed;">Registered Office Address</div>
+                </div>
+                <div style="text-align:right;">
+                    <div style="font-size:0.75rem; color:#64748b; font-weight:700;">TOTAL PRICE</div>
+                    <div id="modal-order-total" style="font-size:1.2rem; font-weight:800; color:#0f172a;">£24.00</div>
+                </div>
+            </div>
+
+            <div>
+                <h4 style="font-size:0.85rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:#64748b; margin-bottom:12px;">Order Progress Timeline</h4>
+                <div class="timeline" id="modal-order-timeline"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ====================================================
+         NEW SUPPORT TICKET MODAL
+         ==================================================== -->
+    <div id="modal-new-ticket" class="modal-overlay">
+        <div class="modal-card" style="max-width:600px;">
+            <div class="modal-header">
+                <div>
+                    <h3>Create New Support Ticket</h3>
+                    <p style="font-size:0.8rem; color:#64748b;">Submit an inquiry to your dedicated corporate advisor.</p>
+                </div>
+                <button class="btn-close" onclick="closeNewTicketModal()"><i data-lucide="x"></i></button>
+            </div>
+
+            <form id="new-ticket-form" onsubmit="submitNewTicketForm(event)">
+                <div style="display:flex; flex-direction:column; gap:14px; margin-top:10px;">
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Subject *</label>
+                        <input type="text" id="ticket-subject" class="select-filter" style="width:100%; margin-top:4px;" placeholder="e.g. Registered Office Address Inquiry" required>
+                    </div>
+
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Category</label>
+                            <select id="ticket-category" class="select-filter" style="width:100%; margin-top:4px;">
+                                <option value="General Support">General Support</option>
+                                <option value="Company Formation">Company Formation</option>
+                                <option value="Address Service">Address Service</option>
+                                <option value="Accounting & Tax">Accounting & Tax</option>
+                                <option value="KYC Compliance">KYC Compliance</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Priority</label>
+                            <select id="ticket-priority" class="select-filter" style="width:100%; margin-top:4px;">
+                                <option value="Low">Low</option>
+                                <option value="Medium" selected>Medium</option>
+                                <option value="High">High</option>
+                                <option value="Urgent">Urgent</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Description / Message *</label>
+                        <textarea id="ticket-message" class="select-filter" style="width:100%; height:120px; margin-top:4px; font-family:inherit; padding:10px;" placeholder="Describe your question or issue in detail..." required></textarea>
+                    </div>
+
+                    <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:10px;">
+                        <button type="button" class="btn-secondary" onclick="closeNewTicketModal()">Cancel</button>
+                        <button type="submit" class="btn-primary"><i data-lucide="check-circle"></i> Submit Ticket</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ====================================================
+         SUPPORT TICKET CHAT MODAL (HIDDEN UNTIL CLICKED)
+         ==================================================== -->
+    <div id="ticket-chat-modal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div>
+                    <h3 id="chat-ticket-subject">Support Ticket Chat</h3>
+                    <p id="chat-ticket-num" style="font-size:0.8rem; color:#64748b;"></p>
+                </div>
+                <button class="btn-close" onclick="closeChatModal()"><i data-lucide="x"></i></button>
+            </div>
+
+            <div class="chat-container" id="chat-messages-box"></div>
+
+            <div style="display:flex; gap:10px; margin-top:10px;">
+                <input type="text" id="chat-input" class="select-filter" style="flex:1;" placeholder="Type your reply message...">
+                <button class="btn-primary" onclick="sendChatMessage()"><i data-lucide="send"></i> Send</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js?v=13.0"></script>
+</body>
+</html>
