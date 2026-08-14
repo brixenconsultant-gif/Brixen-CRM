@@ -6,6 +6,13 @@ let currentUser = null;
 let activeView = 'client-orders';
 let activeTicketId = null;
 let adminChart = null;
+let lastNotifications = [];
+let notificationsOpen = false;
+
+function isAdminShellUser(user) {
+    if (!user) return false;
+    return ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF'].includes(user.role);
+}
 
 // Initialize Application on Page Load
 document.addEventListener('DOMContentLoaded', async () => {
@@ -23,6 +30,12 @@ function setupEventListeners() {
             if (view) switchView(view);
         });
     });
+    document.addEventListener('click', (e) => {
+        const wrap = document.getElementById('notification-bell-wrap');
+        if (notificationsOpen && wrap && !wrap.contains(e.target)) {
+            closeNotificationsDropdown();
+        }
+    });
 }
 
 // ----------------------------------------------------
@@ -35,7 +48,7 @@ async function checkAuth() {
         if (data.status === 'success') {
             currentUser = data.user;
             updateUserUI();
-            switchView(currentUser.role === 'ADMIN' || currentUser.role === 'STAFF' ? 'admin-dashboard' : 'client-orders');
+            switchView(isAdminShellUser(currentUser) ? 'admin-dashboard' : 'client-orders');
         } else {
             showLoginView();
         }
@@ -50,13 +63,6 @@ function showLoginView() {
     document.querySelectorAll('.view-panel').forEach(panel => panel.style.display = 'none');
     const loginView = document.getElementById('view-login');
     if (loginView) loginView.style.display = 'block';
-}
-
-function fillDemoLogin(email, password) {
-    const emailInput = document.getElementById('login-email');
-    const passInput = document.getElementById('login-password');
-    if (emailInput) emailInput.value = email;
-    if (passInput) passInput.value = password;
 }
 
 async function handleFormLogin(e) {
@@ -74,13 +80,14 @@ async function handleFormLogin(e) {
         const res = await fetch('/api/auth/login', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
+            credentials: 'same-origin',
             body: JSON.stringify({ email, password })
         });
         const data = await res.json();
         if (data.status === 'success') {
             currentUser = data.user;
             updateUserUI();
-            if (currentUser.role === 'ADMIN' || currentUser.role === 'STAFF') {
+            if (isAdminShellUser(currentUser)) {
                 switchView('admin-dashboard');
             } else {
                 switchView('client-orders');
@@ -99,21 +106,10 @@ async function handleFormLogin(e) {
     }
 }
 
-async function loginWithEmail(email) {
-    let password = 'ClientPass123!';
-    if (email === 'admin@brixenconsultant.co.uk') password = 'AdminPass123!';
-    if (email.startsWith && email.startsWith('staff')) password = 'StaffPass123!';
-    fillDemoLogin(email, password);
-    await handleFormLogin(null);
-}
-
-async function switchRoleDemo(email) {
-    await loginWithEmail(email);
-}
-
 async function handleLogout() {
     await fetch('/api/auth/logout', { method: 'POST' });
     currentUser = null;
+    closeNotificationsDropdown();
     showLoginView();
 }
 
@@ -141,17 +137,26 @@ function updateUserUI() {
     const headerRole = document.getElementById('header-user-role');
     
     if (headerName) headerName.textContent = currentUser.full_name;
-    if (headerRole) headerRole.textContent = currentUser.role === 'ADMIN' ? 'Admin CMS View' : 'Client Account';
+    if (headerRole) headerRole.textContent = isAdminShellUser(currentUser) ? 'Admin CMS View' : 'Client Account';
     if (headerAvatar) {
         const initials = currentUser.full_name.split(' ').map(n => n[0]).join('').substring(0,2);
         headerAvatar.textContent = initials;
+    }
+
+    const adminName = document.getElementById('admin-user-name');
+    const adminRole = document.getElementById('admin-user-role');
+    const adminAvatar = document.getElementById('admin-user-avatar');
+    if (adminName) adminName.textContent = currentUser.full_name;
+    if (adminRole) adminRole.textContent = currentUser.role;
+    if (adminAvatar) {
+        adminAvatar.textContent = currentUser.full_name.split(' ').map(n => n[0]).join('').substring(0,2);
     }
     
     // Toggle Sidebar View (Client vs Admin)
     const clientSide = document.getElementById('client-sidebar');
     const adminSide = document.getElementById('admin-sidebar');
     
-    if (currentUser.role === 'ADMIN' || currentUser.role === 'STAFF') {
+    if (isAdminShellUser(currentUser)) {
         clientSide.style.display = 'none';
         adminSide.style.display = 'flex';
     } else {
@@ -207,6 +212,7 @@ function switchView(viewName) {
         
         case 'admin-dashboard': loadAdminDashboard(); break;
         case 'admin-orders': loadAdminOrders(); break;
+        case 'admin-tasks': loadAdminTasks(); break;
         case 'admin-customers': loadAdminCustomers(); break;
         case 'admin-documents': loadAdminDocuments(); break;
         case 'admin-logs': loadAdminLogs(); break;
@@ -898,6 +904,424 @@ async function advanceOrderProgress(orderId, currentProgress) {
     } catch (err) { console.error(err); }
 }
 
+let taskStaffCache = [];
+let taskCustomerCache = [];
+let taskAssocCache = {};
+
+function canAssignStaffTasks() {
+    return currentUser && ['ADMIN', 'SUPER_ADMIN', 'MANAGER'].includes(currentUser.role);
+}
+
+function showTasksError(message) {
+    const box = document.getElementById('adm-tasks-error');
+    if (!box) return;
+    if (!message) {
+        box.style.display = 'none';
+        box.textContent = '';
+        return;
+    }
+    box.textContent = message;
+    box.style.display = 'block';
+}
+
+function showModalError(id, message) {
+    const box = document.getElementById(id);
+    if (!box) return;
+    if (!message) {
+        box.style.display = 'none';
+        box.textContent = '';
+        return;
+    }
+    box.textContent = message;
+    box.style.display = 'block';
+}
+
+function escapeHtml(value) {
+    return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function optionalId(value) {
+    if (value === undefined || value === null || value === '') return null;
+    const parsed = parseInt(value, 10);
+    return Number.isNaN(parsed) ? null : parsed;
+}
+
+function taskStatusClass(status) {
+    const key = (status || '').toLowerCase().replace(/ /g, '-');
+    if (key === 'completed') return 'completed';
+    if (key === 'in-progress') return 'in-progress';
+    if (key === 'cancelled') return 'cancelled';
+    return 'open';
+}
+
+function taskPriorityClass(priority) {
+    if (priority === 'Urgent') return 'cancelled';
+    if (priority === 'High') return 'pending';
+    if (priority === 'Low') return 'open';
+    return 'in-progress';
+}
+
+function applyTaskUiPermissions() {
+    const canAssign = canAssignStaffTasks();
+    const newBtn = document.getElementById('btn-new-task');
+    if (newBtn) newBtn.style.display = canAssign ? 'inline-flex' : 'none';
+    const assigneeFilter = document.getElementById('filter-task-assignee');
+    if (assigneeFilter) assigneeFilter.style.display = canAssign ? '' : 'none';
+}
+
+async function fetchTaskStaff() {
+    const res = await fetch('/api/admin/staff');
+    const data = await res.json();
+    if (!res.ok || data.status !== 'success') {
+        throw new Error(data.message || 'Unable to load staff list.');
+    }
+    taskStaffCache = data.staff || [];
+    return taskStaffCache;
+}
+
+async function fetchTaskCustomers() {
+    const res = await fetch('/api/admin/customers');
+    const data = await res.json();
+    if (!res.ok || data.status !== 'success') {
+        throw new Error(data.message || 'Unable to load clients.');
+    }
+    taskCustomerCache = data.customers || [];
+    return taskCustomerCache;
+}
+
+function fillStaffSelect(selectId, selectedId, includeAllLabel) {
+    const sel = document.getElementById(selectId);
+    if (!sel) return;
+    const first = includeAllLabel || 'Unassigned';
+    sel.innerHTML = `<option value="">${escapeHtml(first)}</option>` + taskStaffCache.map(s =>
+        `<option value="${s.id}">${escapeHtml(s.full_name)} (${escapeHtml(s.role)})</option>`
+    ).join('');
+    if (selectedId) sel.value = String(selectedId);
+}
+
+function fillClientSelect(selectId, selectedId) {
+    const sel = document.getElementById(selectId);
+    if (!sel) return;
+    sel.innerHTML = `<option value="">No client</option>` + taskCustomerCache.map(c =>
+        `<option value="${c.id}">${escapeHtml(c.full_name)}</option>`
+    ).join('');
+    if (selectedId) sel.value = String(selectedId);
+}
+
+async function loadTaskAssociations(clientId) {
+    if (!clientId) return { companies: [], orders: [] };
+    if (taskAssocCache[clientId]) return taskAssocCache[clientId];
+    const res = await fetch(`/api/admin/clients/${clientId}/full`);
+    const data = await res.json();
+    if (!res.ok || data.status !== 'success') {
+        throw new Error(data.message || 'Unable to load client companies and orders.');
+    }
+    const packed = { companies: data.companies || [], orders: data.orders || [] };
+    taskAssocCache[clientId] = packed;
+    return packed;
+}
+
+function fillCompanyOrderSelects(prefix, assoc, selectedCompanyId, selectedOrderId) {
+    const companySel = document.getElementById(`${prefix}-task-company`);
+    const orderSel = document.getElementById(`${prefix}-task-order`);
+    const companies = assoc.companies || [];
+    const orders = assoc.orders || [];
+    if (companySel) {
+        companySel.innerHTML = `<option value="">No company</option>` + companies.map(c =>
+            `<option value="${c.id}">${escapeHtml(c.name)}</option>`
+        ).join('');
+        if (selectedCompanyId) companySel.value = String(selectedCompanyId);
+    }
+    fillTaskOrderSelect(prefix, orders, companySel ? companySel.value : '', selectedOrderId);
+}
+
+function fillTaskOrderSelect(prefix, orders, companyId, selectedOrderId) {
+    const orderSel = document.getElementById(`${prefix}-task-order`);
+    if (!orderSel) return;
+    const filtered = companyId
+        ? orders.filter(o => !o.company_id || String(o.company_id) === String(companyId))
+        : orders;
+    orderSel.innerHTML = `<option value="">No order</option>` + filtered.map(o =>
+        `<option value="${o.id}">${escapeHtml(o.order_number)} — ${escapeHtml(o.service_name || '')}</option>`
+    ).join('');
+    if (selectedOrderId) orderSel.value = String(selectedOrderId);
+}
+
+async function onTaskAssociationChange(prefix, selectedCompanyId, selectedOrderId) {
+    const clientId = document.getElementById(`${prefix}-task-client`)?.value;
+    try {
+        const assoc = await loadTaskAssociations(clientId);
+        fillCompanyOrderSelects(prefix, assoc, selectedCompanyId, selectedOrderId);
+    } catch (err) {
+        showModalError(prefix === 'new' ? 'new-task-error' : 'edit-task-error', err.message);
+    }
+}
+
+async function onTaskCompanyChange(prefix) {
+    const clientId = document.getElementById(`${prefix}-task-client`)?.value;
+    const companyId = document.getElementById(`${prefix}-task-company`)?.value;
+    try {
+        const assoc = await loadTaskAssociations(clientId);
+        fillTaskOrderSelect(prefix, assoc.orders || [], companyId, '');
+    } catch (err) {
+        showModalError(prefix === 'new' ? 'new-task-error' : 'edit-task-error', err.message);
+    }
+}
+
+function setAssociationFieldsEnabled(enabled) {
+    ['edit-task-assignee', 'edit-task-client', 'edit-task-company', 'edit-task-order'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.disabled = !enabled;
+    });
+}
+
+async function loadAdminTasks() {
+    applyTaskUiPermissions();
+    showTasksError('');
+    const tbody = document.getElementById('adm-tasks-table-body');
+    if (tbody) {
+        tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:#64748b; padding:28px;">Loading tasks...</td></tr>`;
+    }
+
+    try {
+        await fetchTaskStaff();
+        const assigneeSel = document.getElementById('filter-task-assignee');
+        const previousAssignee = assigneeSel ? assigneeSel.value : '';
+        fillStaffSelect('filter-task-assignee', previousAssignee, 'All Assignees');
+        if (assigneeSel && previousAssignee) assigneeSel.value = previousAssignee;
+
+        const params = new URLSearchParams();
+        const status = document.getElementById('filter-task-status')?.value;
+        const priority = document.getElementById('filter-task-priority')?.value;
+        const assignee = document.getElementById('filter-task-assignee')?.value;
+        const due = document.getElementById('filter-task-due')?.value;
+        if (status) params.set('status', status);
+        if (priority) params.set('priority', priority);
+        if (due) params.set('due', due);
+        if (assignee && canAssignStaffTasks()) params.set('assigned_staff_id', assignee);
+
+        const qs = params.toString();
+        const res = await fetch(`/api/admin/tasks${qs ? '?' + qs : ''}`);
+        const data = await res.json();
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Unable to load tasks.');
+        }
+        renderAdminTasks(data.tasks || []);
+    } catch (err) {
+        console.error(err);
+        showTasksError(err.message || 'Unable to load tasks.');
+        if (tbody) {
+            tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:#dc2626; padding:28px;">Unable to load tasks. Please try again.</td></tr>`;
+        }
+    }
+}
+
+function renderAdminTasks(tasks) {
+    const tbody = document.getElementById('adm-tasks-table-body');
+    if (!tbody) return;
+    if (!tasks.length) {
+        tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:#64748b; padding:36px;">No tasks found.</td></tr>`;
+        lucide.createIcons();
+        return;
+    }
+    tbody.innerHTML = tasks.map(t => {
+        const canComplete = t.status !== 'Completed' && t.status !== 'Cancelled';
+        return `
+            <tr>
+                <td style="font-weight:700;">${escapeHtml(t.title)}</td>
+                <td>${escapeHtml(t.assigned_staff_name || 'Unassigned')}</td>
+                <td>${escapeHtml(t.client_name || '—')}</td>
+                <td style="font-weight:600; color:#7c3aed;">${escapeHtml(t.order_number || '—')}</td>
+                <td><span class="status-badge ${taskPriorityClass(t.priority)}">${escapeHtml(t.priority)}</span></td>
+                <td>${t.due_date ? formatDate(t.due_date) : '—'}</td>
+                <td><span class="status-badge ${taskStatusClass(t.status)}">${escapeHtml(t.status)}</span></td>
+                <td>
+                    <button class="btn-primary" style="padding:4px 10px; font-size:0.75rem; margin-right:6px;" onclick="openEditTaskModal(${t.id})">Open</button>
+                    ${canComplete ? `<button class="btn-secondary" style="padding:4px 10px; font-size:0.75rem;" onclick="completeAdminTask(${t.id})">Complete</button>` : ''}
+                </td>
+            </tr>
+        `;
+    }).join('');
+    lucide.createIcons();
+}
+
+async function openNewTaskModal() {
+    if (!canAssignStaffTasks()) {
+        alert('You do not have permission to create tasks.');
+        return;
+    }
+    showModalError('new-task-error', '');
+    const form = document.getElementById('new-task-form');
+    if (form) form.reset();
+    document.getElementById('new-task-priority').value = 'Medium';
+    try {
+        await Promise.all([fetchTaskStaff(), fetchTaskCustomers()]);
+        fillStaffSelect('new-task-assignee', '', 'Unassigned');
+        fillClientSelect('new-task-client', '');
+        fillCompanyOrderSelects('new', { companies: [], orders: [] }, '', '');
+        document.getElementById('modal-new-task').classList.add('active');
+        lucide.createIcons();
+    } catch (err) {
+        alert(err.message || 'Unable to open new task form.');
+    }
+}
+
+function closeNewTaskModal() {
+    const modal = document.getElementById('modal-new-task');
+    if (modal) modal.classList.remove('active');
+}
+
+function collectTaskForm(prefix, includeStatus) {
+    const payload = {
+        title: document.getElementById(`${prefix}-task-title`).value.trim(),
+        description: document.getElementById(`${prefix}-task-description`).value,
+        priority: document.getElementById(`${prefix}-task-priority`).value,
+        due_date: document.getElementById(`${prefix}-task-due`).value || null,
+        assigned_staff_id: optionalId(document.getElementById(`${prefix}-task-assignee`).value),
+        client_id: optionalId(document.getElementById(`${prefix}-task-client`).value),
+        company_id: optionalId(document.getElementById(`${prefix}-task-company`).value),
+        order_id: optionalId(document.getElementById(`${prefix}-task-order`).value),
+        internal_notes: document.getElementById(`${prefix}-task-notes`).value
+    };
+    if (includeStatus) {
+        payload.status = document.getElementById('edit-task-status').value;
+    }
+    return payload;
+}
+
+async function submitNewTaskForm(e) {
+    e.preventDefault();
+    showModalError('new-task-error', '');
+    const submitBtn = document.getElementById('new-task-submit');
+    const payload = collectTaskForm('new', false);
+    if (!payload.title) {
+        showModalError('new-task-error', 'Title is required.');
+        return;
+    }
+    if (submitBtn) submitBtn.disabled = true;
+    try {
+        const res = await fetch('/api/admin/tasks', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Unable to create task.');
+        }
+        closeNewTaskModal();
+        alert('Task created successfully.');
+        loadAdminTasks();
+        loadNotificationsCount();
+    } catch (err) {
+        showModalError('new-task-error', err.message || 'Unable to create task.');
+    } finally {
+        if (submitBtn) submitBtn.disabled = false;
+    }
+}
+
+async function openEditTaskModal(taskId) {
+    showModalError('edit-task-error', '');
+    try {
+        const [taskRes] = await Promise.all([
+            fetch(`/api/admin/tasks/${taskId}`),
+            fetchTaskStaff(),
+            fetchTaskCustomers()
+        ]);
+        const data = await taskRes.json();
+        if (!taskRes.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Unable to load task.');
+        }
+        const t = data.task;
+        document.getElementById('edit-task-id').value = t.id;
+        document.getElementById('edit-task-heading').textContent = t.title;
+        document.getElementById('edit-task-meta').textContent = t.created_by_name ? `Created by ${t.created_by_name}` : 'Internal staff task';
+        document.getElementById('edit-task-title').value = t.title || '';
+        document.getElementById('edit-task-description').value = t.description || '';
+        document.getElementById('edit-task-priority').value = t.priority || 'Medium';
+        document.getElementById('edit-task-status').value = t.status || 'Open';
+        document.getElementById('edit-task-due').value = t.due_date ? String(t.due_date).slice(0, 10) : '';
+        document.getElementById('edit-task-notes').value = t.internal_notes || '';
+        fillStaffSelect('edit-task-assignee', t.assigned_staff_id, 'Unassigned');
+        fillClientSelect('edit-task-client', t.client_id);
+        await onTaskAssociationChange('edit', t.company_id, t.order_id);
+        setAssociationFieldsEnabled(canAssignStaffTasks());
+        const completeBtn = document.getElementById('edit-task-complete-btn');
+        if (completeBtn) completeBtn.style.display = (t.status === 'Completed' || t.status === 'Cancelled') ? 'none' : 'inline-flex';
+        document.getElementById('modal-edit-task').classList.add('active');
+        lucide.createIcons();
+    } catch (err) {
+        alert(err.message || 'Unable to open task.');
+    }
+}
+
+function closeEditTaskModal() {
+    const modal = document.getElementById('modal-edit-task');
+    if (modal) modal.classList.remove('active');
+}
+
+async function submitEditTaskForm(e) {
+    e.preventDefault();
+    showModalError('edit-task-error', '');
+    const taskId = document.getElementById('edit-task-id').value;
+    const submitBtn = document.getElementById('edit-task-submit');
+    const payload = collectTaskForm('edit', true);
+    if (!payload.title) {
+        showModalError('edit-task-error', 'Title is required.');
+        return;
+    }
+    if (!canAssignStaffTasks()) {
+        delete payload.assigned_staff_id;
+        delete payload.client_id;
+        delete payload.company_id;
+        delete payload.order_id;
+    }
+    if (submitBtn) submitBtn.disabled = true;
+    try {
+        const res = await fetch(`/api/admin/tasks/${taskId}`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Unable to update task.');
+        }
+        closeEditTaskModal();
+        alert('Task updated successfully.');
+        loadAdminTasks();
+    } catch (err) {
+        showModalError('edit-task-error', err.message || 'Unable to update task.');
+    } finally {
+        if (submitBtn) submitBtn.disabled = false;
+    }
+}
+
+async function completeAdminTask(taskId) {
+    try {
+        const res = await fetch(`/api/admin/tasks/${taskId}/complete`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Unable to complete task.');
+        }
+        alert('Task marked complete.');
+        closeEditTaskModal();
+        loadAdminTasks();
+        loadNotificationsCount();
+    } catch (err) {
+        alert(err.message || 'Unable to complete task.');
+    }
+}
+
+async function completeTaskFromModal() {
+    const taskId = document.getElementById('edit-task-id').value;
+    if (taskId) await completeAdminTask(taskId);
+}
+
 async function loadAdminCustomers() {
     try {
         const res = await fetch('/api/admin/customers');
@@ -1106,14 +1530,148 @@ async function saveAdminSettings(e) {
 // ----------------------------------------------------
 // UTILITIES & NOTIFICATIONS
 // ----------------------------------------------------
+function isStaffTaskNotification(note) {
+    const type = String(note && note.type ? note.type : '').toLowerCase();
+    return type === 'task_assigned' || type === 'task_completed' || type.startsWith('task');
+}
+
+function visibleNotificationsForUser(notes) {
+    const list = Array.isArray(notes) ? notes : [];
+    if (currentUser && currentUser.role === 'CLIENT') {
+        return list.filter(n => !isStaffTaskNotification(n));
+    }
+    return list;
+}
+
+function setUnreadBadge(count) {
+    const badge = document.getElementById('header-unread-count');
+    if (!badge) return;
+    const n = Number(count) || 0;
+    badge.textContent = n > 99 ? '99+' : String(n);
+    badge.style.display = n > 0 ? 'flex' : 'none';
+}
+
 async function loadNotificationsCount() {
     try {
         const res = await fetch('/api/client/notifications');
         const data = await res.json();
         if (data.status === 'success') {
-            document.getElementById('header-unread-count').textContent = data.unread_count;
+            const visible = visibleNotificationsForUser(data.notifications || []);
+            const unread = visible.filter(n => !n.is_read).length;
+            setUnreadBadge(unread);
         }
     } catch (err) { console.error(err); }
+}
+
+function closeNotificationsDropdown() {
+    const dropdown = document.getElementById('notifications-dropdown');
+    if (dropdown) dropdown.style.display = 'none';
+    notificationsOpen = false;
+}
+
+async function toggleNotificationsModal(event) {
+    if (event) event.stopPropagation();
+    const dropdown = document.getElementById('notifications-dropdown');
+    if (!dropdown) return;
+    if (notificationsOpen) {
+        closeNotificationsDropdown();
+        return;
+    }
+    await openNotificationsDropdown();
+}
+
+async function openNotificationsDropdown() {
+    const dropdown = document.getElementById('notifications-dropdown');
+    const list = document.getElementById('notifications-list');
+    if (!dropdown || !list) return;
+    notificationsOpen = true;
+    dropdown.style.display = 'block';
+    list.innerHTML = `<div style="padding:20px 14px; text-align:center; color:#64748b; font-size:0.82rem;">Loading notifications...</div>`;
+    try {
+        const res = await fetch('/api/client/notifications');
+        const data = await res.json();
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Unable to load notifications.');
+        }
+        lastNotifications = visibleNotificationsForUser(data.notifications || []);
+        renderNotificationsList(lastNotifications);
+        const unread = lastNotifications.filter(n => !n.is_read).length;
+        setUnreadBadge(unread);
+    } catch (err) {
+        list.innerHTML = `<div style="padding:16px 14px; color:#dc2626; font-size:0.82rem; font-weight:600;">${escapeHtml(err.message || 'Unable to load notifications.')}</div>`;
+    }
+}
+
+function renderNotificationsList(notes) {
+    const list = document.getElementById('notifications-list');
+    if (!list) return;
+    if (!notes.length) {
+        list.innerHTML = `<div style="padding:28px 14px; text-align:center; color:#64748b; font-size:0.82rem;">No notifications.</div>`;
+        return;
+    }
+    list.innerHTML = notes.map((n, idx) => {
+        const unread = !n.is_read;
+        return `
+            <button type="button" data-note-idx="${idx}" onclick="handleNotificationItemClick(${idx})" style="display:block; width:100%; text-align:left; border:0; border-bottom:1px solid #f1f5f9; background:${unread ? '#f8fafc' : '#ffffff'}; padding:12px 14px; cursor:pointer;">
+                <div style="font-size:0.82rem; font-weight:700; color:#0f172a;">${escapeHtml(n.title || 'Notification')}</div>
+                <div style="font-size:0.78rem; color:#64748b; margin-top:4px;">${escapeHtml(n.message || '')}</div>
+                <div style="font-size:0.72rem; color:#94a3b8; margin-top:6px;">${escapeHtml(formatDateTime(n.created_at))}</div>
+            </button>
+        `;
+    }).join('');
+}
+
+function resolveNotificationView(note) {
+    if (!note) return null;
+    if (isStaffTaskNotification(note)) {
+        if (currentUser && currentUser.role === 'CLIENT') return null;
+        return isAdminShellUser(currentUser) ? 'admin-tasks' : null;
+    }
+    const raw = String(note.link || '').replace(/^#/, '').replace(/^\//, '');
+    if (isAdminShellUser(currentUser)) {
+        if (raw === 'admin-tasks' || raw.includes('admin-tasks')) return 'admin-tasks';
+        if (raw === 'orders' || raw === 'admin-orders') return 'admin-orders';
+        if (raw === 'documents' || raw === 'admin-documents') return 'admin-documents';
+        if (raw.startsWith('admin-')) return raw;
+        return null;
+    }
+    if (raw === 'orders' || raw === 'client-orders') return 'client-orders';
+    if (raw === 'documents' || raw === 'client-documents') return 'client-documents';
+    if (raw === 'invoices' || raw === 'client-invoices') return 'client-invoices';
+    if (raw === 'dashboard' || raw === 'client-dashboard') return 'client-dashboard';
+    return null;
+}
+
+function handleNotificationItemClick(idx) {
+    const note = lastNotifications[idx];
+    closeNotificationsDropdown();
+    const view = resolveNotificationView(note);
+    if (view) switchView(view);
+}
+
+async function markNotificationsRead(event) {
+    if (event) event.stopPropagation();
+    try {
+        const res = await fetch('/api/client/notifications/read', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Unable to mark notifications read.');
+        }
+        lastNotifications = lastNotifications.map(n => ({ ...n, is_read: 1 }));
+        renderNotificationsList(lastNotifications);
+        setUnreadBadge(0);
+    } catch (err) {
+        const list = document.getElementById('notifications-list');
+        if (list) {
+            list.insertAdjacentHTML('afterbegin', `<div style="padding:10px 14px; color:#dc2626; font-size:0.78rem; font-weight:600;">${escapeHtml(err.message)}</div>`);
+        }
+    }
+}
+
+function formatDateTime(dateStr) {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    return d.toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 function handleGlobalSearch(query) {

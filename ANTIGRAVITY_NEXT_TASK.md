@@ -135,7 +135,7 @@ Based on `AGENT_HANDOFF.md`, Antigravity brain walkthrough (`brain/6d586972-589e
 | **Hardcoded demo passwords in JS** | `ClientPass123!`, `AdminPass123!` visible in client-side source |
 | **CORS `Access-Control-Allow-Origin: *`** | On all JSON responses |
 | **Session cookie missing `Secure` flag** | Only `HttpOnly; SameSite=Lax` — needed for HTTPS production |
-| **Server binds `0.0.0.0`** | `make_server('0.0.0.0', PORT, ...)` exposes dev server on all interfaces |
+| **Server binds `127.0.0.1`** | Default WSGI bind is localhost-only; override with HOST env if needed |
 | **SMTP not configured** | All emails log to stdout only |
 | **Hardcoded `http://127.0.0.1:5050` in email bodies** | Notification emails link to localhost |
 | **Two-factor auth** | Column exists in schema; no implementation |
@@ -346,7 +346,7 @@ All existing tests must continue to pass, plus new tests for fixes:
 | Client | `client1@acmecorp.co.uk` | `ClientPass123!` |
 | Client 2 | `v.smith@vantagecyber.co.uk` | `ClientPass123!` |
 | Admin | `admin@brixenconsultant.co.uk` | `AdminPass123!` |
-| Webhook secret (dev) | — | `brixen_wp_secret_key_998877` (from `settings` table) |
+| Webhook secret (dev) | — | `CHANGE_ME_IN_LOCAL_ENV` (from `settings` table / local env) |
 
 ---
 

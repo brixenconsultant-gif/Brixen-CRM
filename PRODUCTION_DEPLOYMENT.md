@@ -23,7 +23,7 @@ PORT=5050
 HOST="127.0.0.1"
 
 # Cryptographic Webhook Secret (Generated 32-byte Hex Token)
-WORDPRESS_WEBHOOK_SECRET="e9f4c3d8a1b2c5d7e0f3a6b9c2d5e8f1a4b7c0d3e6f9a2b5c8d1e4f7a0b3c6d9"
+WORDPRESS_WEBHOOK_SECRET="CHANGE_ME_IN_LOCAL_ENV"
 
 # Storage & Database Paths (Outside Public Web Root)
 STORAGE_PATH="/var/www/brixen-crm/storage"
@@ -166,7 +166,7 @@ sudo systemctl reload nginx
 1. In WP Admin, navigate to **WP Admin → Brixen CRM**.
 2. Enter:
    - **CRM Base URL**: `https://portal.brixenconsultants.com`
-   - **Webhook Secret**: `e9f4c3d8a1b2c5d7e0f3a6b9c2d5e8f1a4b7c0d3e6f9a2b5c8d1e4f7a0b3c6d9`
+   - **Webhook Secret**: `CHANGE_ME_IN_LOCAL_ENV` (set a unique secret in the local/production environment; never commit the real value)
 3. Click **Save Changes**.
 
 ---

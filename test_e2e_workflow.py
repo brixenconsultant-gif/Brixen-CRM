@@ -7,7 +7,21 @@ import hashlib
 from app import application
 from db import query_db, execute_db
 
-WEBHOOK_SECRET = "brixen_wp_secret_key_998877"
+def extract_session_token(headers):
+    cookie = ''
+    if isinstance(headers, dict):
+        cookie = headers.get('Set-Cookie') or headers.get('set-cookie') or ''
+    for part in cookie.split(';'):
+        part = part.strip()
+        if part.startswith('session_token='):
+            val = part.split('=', 1)[1].strip()
+            if val:
+                return val
+    return None
+
+def webhook_secret_bytes():
+    row = query_db("SELECT value FROM settings WHERE key = 'wordpress_webhook_secret';", one=True)
+    return (row['value'] if row and row['value'] else '').encode('utf-8')
 
 def make_request(path, method='GET', body=None, headers=None, cookie=None):
     if '?' in path:
@@ -73,7 +87,7 @@ def run_e2e_test():
         }
     }
     payload_bytes = json.dumps(user_created_payload).encode('utf-8')
-    hmac_signature = hmac.new(WEBHOOK_SECRET.encode('utf-8'), payload_bytes, hashlib.sha256).hexdigest()
+    hmac_signature = hmac.new(webhook_secret_bytes(), payload_bytes, hashlib.sha256).hexdigest()
     print(f"  - Event ID: {user_created_payload['event_id']}")
     print(f"  - User: {customer_name} ({customer_email})")
     print(f"  - Generated HMAC-SHA256 Signature: {hmac_signature[:12]}...")
@@ -138,7 +152,7 @@ def run_e2e_test():
         }
     }
     ord_payload_bytes = json.dumps(order_created_payload).encode('utf-8')
-    ord_hmac_sig = hmac.new(WEBHOOK_SECRET.encode('utf-8'), ord_payload_bytes, hashlib.sha256).hexdigest()
+    ord_hmac_sig = hmac.new(webhook_secret_bytes(), ord_payload_bytes, hashlib.sha256).hexdigest()
 
     status, headers, ord_response = make_request(
         '/api/v1/wordpress/webhook',
@@ -187,7 +201,9 @@ def run_e2e_test():
         body={'email': 'admin@brixenconsultant.co.uk', 'password': 'AdminPass123!'}
     )
     assert status == "200 OK", "Error: Admin login failed."
-    admin_token = admin_login['token']
+    assert 'token' not in admin_login
+    admin_token = extract_session_token(headers)
+    assert admin_token, "Error: Login did not return a session cookie."
 
     # Fetch Customer Detail Profile via Staff API
     status, headers, staff_client_res = make_request(

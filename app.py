@@ -4,9 +4,18 @@ import json
 import urllib.parse
 import mimetypes
 from wsgiref.simple_server import make_server
-from db import query_db, execute_db, hash_password, get_db
+from db import query_db, execute_db, hash_password, verify_password, needs_rehash, unusable_password_hash, get_db
 
-PORT = 5050
+PORT = int(os.environ.get('PORT', '5050'))
+HOST = os.environ.get('HOST', '127.0.0.1')
+ALLOWED_CORS_ORIGINS = frozenset({
+    'https://brixenconsultants.com',
+    'https://www.brixenconsultants.com',
+    'https://portal.brixenconsultants.com',
+    'http://127.0.0.1:5050',
+    'http://localhost:5050',
+})
+INTERNAL_STAFF_ROLES = ('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF')
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, 'static')
 TEMPLATES_DIR = os.path.join(BASE_DIR, 'templates')
@@ -102,16 +111,39 @@ def json_response(start_response, data, status="200 OK", extra_headers=None):
     headers = [
         ('Content-Type', 'application/json; charset=utf-8'),
         ('Content-Length', str(len(body))),
-        ('Access-Control-Allow-Origin', '*'),
-        ('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS'),
-        ('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cookie')
     ]
     if extra_headers:
         headers.extend(extra_headers)
     start_response(status, headers)
     return [body]
 
-def serve_static(environ, start_response, filepath):
+def session_cookie_header(token=None, clear=False):
+    if clear:
+        return 'session_token=; Path=/; HttpOnly; Secure; SameSite=Lax; Expires=Thu, 01 Jan 1970 00:00:00 GMT'
+    return f'session_token={token}; Path=/; HttpOnly; Secure; SameSite=Lax'
+
+def cors_allowed_origin(environ):
+    origin = environ.get('HTTP_ORIGIN', '')
+    if origin in ALLOWED_CORS_ORIGINS:
+        return origin
+    return None
+
+def is_internal_staff(user):
+    return bool(user and user.get('role') in INTERNAL_STAFF_ROLES)
+
+def _is_path_inside(root_dir, target_path):
+    root_real = os.path.realpath(root_dir)
+    target_real = os.path.realpath(target_path)
+    try:
+        common = os.path.commonpath([root_real, target_real])
+    except ValueError:
+        return False
+    return common == root_real
+
+def serve_static(environ, start_response, filepath, allowed_root=None):
+    if allowed_root and not _is_path_inside(allowed_root, filepath):
+        start_response("403 Forbidden", [('Content-Type', 'text/plain; charset=utf-8')])
+        return [b"Forbidden"]
     if not os.path.exists(filepath) or os.path.isdir(filepath):
         start_response("404 Not Found", [('Content-Type', 'text/plain')])
         return [b"404 File Not Found"]
@@ -181,14 +213,145 @@ def check_permission(user, permission_name):
     """, (user['role'], permission_name), one=True)
     return row is not None
 
+def require_permission(start_response, user, permission_name):
+    if not user:
+        return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
+    if not check_permission(user, permission_name):
+        return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
+    return None
+
+TASK_PRIORITIES = ('Low', 'Medium', 'High', 'Urgent')
+TASK_STATUSES = ('Open', 'In Progress', 'Completed', 'Cancelled')
+TASK_ASSIGNABLE_ROLES = ('STAFF', 'MANAGER', 'ADMIN', 'SUPER_ADMIN')
+TASK_DETAIL_SQL = """
+    SELECT t.*,
+        a.full_name AS assigned_staff_name,
+        a.email AS assigned_staff_email,
+        cr.full_name AS created_by_name,
+        cl.full_name AS client_name,
+        cl.email AS client_email,
+        c.name AS company_name,
+        o.order_number
+    FROM tasks t
+    LEFT JOIN users a ON t.assigned_staff_id = a.id
+    LEFT JOIN users cr ON t.created_by_id = cr.id
+    LEFT JOIN users cl ON t.client_id = cl.id
+    LEFT JOIN companies c ON t.company_id = c.id
+    LEFT JOIN orders o ON t.order_id = o.id
+"""
+
+def task_auth_error(start_response, user, permission_name):
+    if not user:
+        return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
+    if not check_permission(user, permission_name):
+        return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
+    return None
+
+def staff_can_access_task(user, task):
+    if not user or not task:
+        return False
+    if user['role'] == 'STAFF':
+        return task.get('assigned_staff_id') == user['id']
+    if user['role'] in ('SUPER_ADMIN', 'ADMIN', 'MANAGER'):
+        return True
+    return False
+
+def to_optional_int(value, field_name):
+    if value is None or value == '' or value == 'null':
+        return None, None
+    try:
+        return int(value), None
+    except (TypeError, ValueError):
+        return None, f'Invalid {field_name}'
+
+def fetch_task(task_id):
+    return query_db(TASK_DETAIL_SQL + " WHERE t.id = ?;", (task_id,), one=True)
+
+def validate_task_assignee(assigned_staff_id):
+    if assigned_staff_id is None:
+        return True, None
+    rec = query_db("SELECT id, role, status FROM users WHERE id = ?;", (assigned_staff_id,), one=True)
+    if not rec:
+        return False, 'Assigned staff not found'
+    if rec['role'] not in TASK_ASSIGNABLE_ROLES:
+        return False, 'Assignee must be an internal staff user'
+    if rec['status'] != 'Active':
+        return False, 'Assignee is not an active user'
+    return True, None
+
+def validate_task_links(client_id, company_id, order_id):
+    resolved_client = client_id
+    resolved_company = company_id
+    resolved_order = order_id
+
+    if order_id is not None:
+        order = query_db("SELECT id, user_id, company_id FROM orders WHERE id = ?;", (order_id,), one=True)
+        if not order:
+            return False, 'Order not found', None, None, None
+        if resolved_client is None:
+            resolved_client = order['user_id']
+        elif int(resolved_client) != int(order['user_id']):
+            return False, 'Order does not belong to the specified client', None, None, None
+        if resolved_company is None:
+            resolved_company = order['company_id']
+        elif order['company_id'] is not None and int(resolved_company) != int(order['company_id']):
+            return False, 'Order does not belong to the specified company', None, None, None
+
+    if resolved_company is not None:
+        company = query_db("SELECT id, user_id FROM companies WHERE id = ?;", (resolved_company,), one=True)
+        if not company:
+            return False, 'Company not found', None, None, None
+        if resolved_client is None:
+            resolved_client = company['user_id']
+        elif int(resolved_client) != int(company['user_id']):
+            return False, 'Company does not belong to the specified client', None, None, None
+
+    if resolved_client is not None:
+        client = query_db("SELECT id, role FROM users WHERE id = ?;", (resolved_client,), one=True)
+        if not client:
+            return False, 'Client not found', None, None, None
+        if client['role'] != 'CLIENT':
+            return False, 'client_id must refer to a CLIENT user', None, None, None
+
+    return True, None, resolved_client, resolved_company, resolved_order
+
+def notify_staff_task(recipient_id, actor_id, title, message, ntype):
+    if not recipient_id or recipient_id == actor_id:
+        return
+    recipient = query_db("SELECT id, email, full_name, role FROM users WHERE id = ?;", (recipient_id,), one=True)
+    if not recipient or recipient['role'] == 'CLIENT':
+        return
+    execute_db("""
+        INSERT INTO notifications (user_id, title, message, type, link)
+        VALUES (?, ?, ?, ?, ?);
+    """, (recipient_id, title, message, ntype, '#admin-tasks'))
+    EmailService.send_notification_email(
+        recipient['email'],
+        f"{title} - Brixen Consultants Portal",
+        f"Hello {recipient['full_name']},\n\n{message}\n\nLog in to the Brixen Portal to review: http://127.0.0.1:5050"
+    )
+
 def application(environ, start_response):
     path = environ.get('PATH_INFO', '')
     method = environ.get('REQUEST_METHOD', 'GET')
-    
+    allowed_origin = cors_allowed_origin(environ)
+    orig_start_response = start_response
+
+    def secured_start_response(status, headers, exc_info=None):
+        filtered = [(k, v) for k, v in headers if k.lower() != 'access-control-allow-origin']
+        if allowed_origin:
+            filtered.append(('Access-Control-Allow-Origin', allowed_origin))
+            filtered.append(('Access-Control-Allow-Credentials', 'true'))
+        filtered.append(('Vary', 'Origin'))
+        if exc_info is not None:
+            return orig_start_response(status, filtered, exc_info)
+        return orig_start_response(status, filtered)
+
+    start_response = secured_start_response
+
     # Handle CORS preflight
     if method == 'OPTIONS':
         start_response("200 OK", [
-            ('Access-Control-Allow-Origin', '*'),
             ('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS'),
             ('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cookie, X-Brixen-Signature, X-WP-Signature')
         ])
@@ -200,10 +363,14 @@ def application(environ, start_response):
     # Static files & Homepage
     # ----------------------------------------------------
     if path == '/' or path == '/index.html':
-        return serve_static(environ, start_response, os.path.join(TEMPLATES_DIR, 'index.html'))
+        return serve_static(environ, start_response, os.path.join(TEMPLATES_DIR, 'index.html'), allowed_root=TEMPLATES_DIR)
     elif path.startswith('/static/'):
-        rel_path = path[len('/static/'):]
-        return serve_static(environ, start_response, os.path.join(STATIC_DIR, rel_path))
+        rel_path = urllib.parse.unquote(path[len('/static/'):]).replace('\\', '/')
+        if not rel_path or '\x00' in rel_path:
+            start_response("404 Not Found", [('Content-Type', 'text/plain; charset=utf-8')])
+            return [b"Not Found"]
+        candidate = os.path.join(STATIC_DIR, rel_path)
+        return serve_static(environ, start_response, candidate, allowed_root=STATIC_DIR)
 
     # ----------------------------------------------------
     # WORDPRESS INTEGRATION & WEBHOOK APIs
@@ -268,7 +435,7 @@ def application(environ, start_response):
                 action_msg = "Updated existing client from WordPress webhook"
                 client_id = existing_user['id']
             else:
-                pwd_hash = hash_password("WpClientPass2026!")
+                pwd_hash = unusable_password_hash()
                 client_id = execute_db("""
                     INSERT INTO users (wordpress_user_id, email, password_hash, full_name, phone, country, role, status, last_synced_at)
                     VALUES (?, ?, ?, ?, ?, ?, 'CLIENT', 'Active', CURRENT_TIMESTAMP);
@@ -316,7 +483,7 @@ def application(environ, start_response):
                 # Bind order to a guest account or mark for staff verification.
                 guest_user = query_db("SELECT id FROM users WHERE email = 'guest.unlinked@brixenconsultants.com';", one=True)
                 if not guest_user:
-                    pwd_hash = hash_password("GuestAccountUnlinked2026!")
+                    pwd_hash = unusable_password_hash()
                     cid = execute_db("""
                         INSERT INTO users (wordpress_user_id, email, password_hash, full_name, role, status, last_synced_at)
                         VALUES ('guest_unlinked', 'guest.unlinked@brixenconsultants.com', ?, 'Unlinked Guest Customer', 'CLIENT', 'Active', CURRENT_TIMESTAMP);
@@ -375,7 +542,7 @@ def application(environ, start_response):
                 execute_db("""
                     INSERT INTO users (wordpress_user_id, email, password_hash, full_name, phone, role, status, last_synced_at)
                     VALUES (?, ?, ?, ?, ?, 'CLIENT', 'Active', CURRENT_TIMESTAMP);
-                """, (wp_id, email, hash_password('SyncPass123!'), name, phone))
+                """, (wp_id, email, unusable_password_hash(), name, phone))
                 synced_cnt += 1
                 
         return json_response(start_response, {
@@ -418,7 +585,7 @@ def application(environ, start_response):
             client_rec = query_db("SELECT id FROM users WHERE wordpress_user_id = ? OR email = ?;", (wp_user_id, email), one=True)
             if not client_rec:
                 if not email: continue
-                pwd_hash = hash_password("SyncPass123!")
+                pwd_hash = unusable_password_hash()
                 cid = execute_db("""
                     INSERT INTO users (wordpress_user_id, email, password_hash, full_name, role, status, last_synced_at)
                     VALUES (?, ?, ?, ?, 'CLIENT', 'Active', CURRENT_TIMESTAMP);
@@ -455,33 +622,48 @@ def application(environ, start_response):
             params = parse_qs(query_str)
             wp_id = params.get('wordpress_user_id', [''])[0]
             email = params.get('email', [''])[0]
-            timestamp = params.get('timestamp', ['0'])[0]
+            timestamp = params.get('timestamp', [''])[0]
             sig = params.get('signature', [''])[0]
         else:
             data = parse_body(environ)
-            wp_id = str(data.get('wordpress_user_id', ''))
-            email = data.get('email', '').strip()
-            timestamp = str(data.get('timestamp', '0'))
-            sig = data.get('signature', '')
+            wp_id = str(data.get('wordpress_user_id') or '')
+            email = str(data.get('email') or '')
+            timestamp = str(data.get('timestamp') or '')
+            sig = str(data.get('signature') or '')
+
+        wp_id = wp_id.strip()
+        email = email.strip()
+        timestamp = timestamp.strip()
+        sig = sig.strip()
+
+        if not wp_id:
+            return json_response(start_response, {'status': 'error', 'message': 'Missing wordpress_user_id'}, "401 Unauthorized")
+        if not timestamp or timestamp == '0':
+            return json_response(start_response, {'status': 'error', 'message': 'Missing timestamp'}, "401 Unauthorized")
+        if not sig:
+            return json_response(start_response, {'status': 'error', 'message': 'Missing signature'}, "401 Unauthorized")
 
         row = query_db("SELECT value FROM settings WHERE key = 'wordpress_webhook_secret';", one=True)
         secret = (row['value'] if row and row['value'] else None) or os.environ.get('WORDPRESS_WEBHOOK_SECRET')
-        if not secret and timestamp != '0':
+        if not secret:
             return json_response(start_response, {'status': 'error', 'message': 'SSO feature unconfigured'}, "500 Internal Server Error")
-        
-        # Verify signed token timestamp expiration (300s window) & HMAC signature
-        if timestamp != '0':
-            try:
-                ts_int = int(timestamp)
-                if abs(int(datetime.datetime.now().timestamp()) - ts_int) > 300:
-                    return json_response(start_response, {'status': 'error', 'message': 'SSO token expired'}, "401 Unauthorized")
-            except ValueError:
-                return json_response(start_response, {'status': 'error', 'message': 'Invalid timestamp'}, "400 Bad Request")
 
-            expected_payload = f"{wp_id}|{email}|{timestamp}".encode('utf-8')
-            expected_sig = hmac.new(secret.encode('utf-8'), expected_payload, hashlib.sha256).hexdigest()
-            if not sig or not hmac.compare_digest(sig.replace('sha256=', ''), expected_sig):
-                return json_response(start_response, {'status': 'error', 'message': 'Invalid SSO signature'}, "401 Unauthorized")
+        try:
+            ts_int = int(timestamp)
+        except (TypeError, ValueError):
+            return json_response(start_response, {'status': 'error', 'message': 'Invalid timestamp'}, "401 Unauthorized")
+        if abs(int(datetime.datetime.now().timestamp()) - ts_int) > 300:
+            return json_response(start_response, {'status': 'error', 'message': 'SSO token expired'}, "401 Unauthorized")
+
+        expected_payload = f"{wp_id}|{email}|{timestamp}".encode('utf-8')
+        expected_sig = hmac.new(secret.encode('utf-8'), expected_payload, hashlib.sha256).hexdigest()
+        provided_sig = sig.replace('sha256=', '').strip()
+        try:
+            sig_ok = hmac.compare_digest(provided_sig, expected_sig)
+        except (TypeError, ValueError):
+            sig_ok = False
+        if not sig_ok:
+            return json_response(start_response, {'status': 'error', 'message': 'Invalid SSO signature'}, "401 Unauthorized")
 
         client_rec = query_db("SELECT id, email, full_name, role FROM users WHERE wordpress_user_id = ? OR email = ?;", (wp_id, email), one=True)
         if not client_rec:
@@ -493,15 +675,14 @@ def application(environ, start_response):
         if method == 'GET':
             start_response("302 Found", [
                 ('Location', '/'),
-                ('Set-Cookie', f'session_token={token}; Path=/; HttpOnly; SameSite=Lax')
+                ('Set-Cookie', session_cookie_header(token))
             ])
             return [b""]
         else:
             return json_response(start_response, {
                 'status': 'success',
-                'token': token,
-                'user': client_rec
-            }, extra_headers=[('Set-Cookie', f'session_token={token}; Path=/; HttpOnly; SameSite=Lax')])
+                'user': dict(client_rec)
+            }, extra_headers=[('Set-Cookie', session_cookie_header(token))])
 
     # ----------------------------------------------------
     # P3: ADMIN WEBHOOK MONITORING & RETRY API
@@ -594,9 +775,12 @@ def application(environ, start_response):
         if not doc:
             return json_response(start_response, {'status': 'error', 'message': 'Document not found'}, "404 Not Found")
             
-        # Security check: Client can ONLY access their OWN documents
-        if user['role'] == 'CLIENT' and doc['user_id'] != user['id']:
-            return json_response(start_response, {'status': 'error', 'message': 'Access denied to target document'}, "403 Forbidden")
+        # Security: CLIENT may only download their own files; staff need documents.view
+        if user['role'] == 'CLIENT':
+            if doc['user_id'] != user['id']:
+                return json_response(start_response, {'status': 'error', 'message': 'Access denied to target document'}, "403 Forbidden")
+        elif not check_permission(user, 'documents.view'):
+            return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
             
         file_path = doc['file_path']
         if os.path.exists(file_path):
@@ -610,19 +794,30 @@ def application(environ, start_response):
                 ('Content-Disposition', f'attachment; filename="{safe_name}"')
             ])
             return [content]
-        else:
-            return json_response(start_response, {
-                'status': 'success',
-                'document': dict(doc),
-                'download_url': doc['file_path']
-            })
+        return json_response(start_response, {'status': 'error', 'message': 'Document file not found'}, "404 Not Found")
 
     # ----------------------------------------------------
     # API: System Settings
     # ----------------------------------------------------
     if path == '/api/settings' and method == 'GET':
+        public_keys = {
+            'company_name', 'logo_url', 'primary_color', 'support_email',
+            'support_phone', 'currency', 'vat_rate', 'order_prefix', 'invoice_prefix'
+        }
+        blocked_fragments = (
+            'secret', 'password', 'passwd', 'token', 'hash', 'credential',
+            'private_key', 'api_key', 'session'
+        )
         rows = query_db("SELECT key, value FROM settings;")
-        settings_dict = {r['key']: r['value'] for r in rows}
+        settings_dict = {}
+        for r in rows:
+            key = r['key']
+            key_l = (key or '').lower()
+            if key not in public_keys:
+                continue
+            if any(frag in key_l for frag in blocked_fragments):
+                continue
+            settings_dict[key] = r['value']
         return json_response(start_response, {'status': 'success', 'settings': settings_dict})
 
     # ----------------------------------------------------
@@ -632,11 +827,16 @@ def application(environ, start_response):
         data = parse_body(environ)
         email = data.get('email', '').strip().lower()
         password = data.get('password', '')
-        
-        phash = hash_password(password)
-        found_user = query_db("SELECT * FROM users WHERE LOWER(email) = ? AND password_hash = ?;", (email, phash), one=True)
-        if not found_user:
+
+        found_user = query_db("SELECT * FROM users WHERE LOWER(email) = ?;", (email,), one=True)
+        stored_hash = found_user['password_hash'] if found_user else None
+        if not verify_password(password, stored_hash):
             return json_response(start_response, {'status': 'error', 'message': 'Invalid email or password.'}, "401 Unauthorized")
+        if needs_rehash(stored_hash):
+            execute_db(
+                "UPDATE users SET password_hash = ? WHERE id = ?;",
+                (hash_password(password), found_user['id'])
+            )
         
         if found_user['status'] != 'Active':
             return json_response(start_response, {'status': 'error', 'message': 'Your account is suspended. Please contact support.'}, "403 Forbidden")
@@ -645,15 +845,25 @@ def application(environ, start_response):
         log_activity(found_user, 'USER_LOGIN', 'users', str(found_user['id']), 'User logged in successfully.')
         
         u_dict = dict(found_user)
-        del u_dict['password_hash']
+        u_dict.pop('password_hash', None)
+        u_dict.pop('session_token', None)
         
-        cookie_header = ('Set-Cookie', f'session_token={token}; Path=/; HttpOnly; SameSite=Lax')
-        return json_response(start_response, {'status': 'success', 'user': u_dict, 'token': token}, extra_headers=[cookie_header])
+        cookie_header = ('Set-Cookie', session_cookie_header(token))
+        return json_response(start_response, {'status': 'success', 'user': u_dict}, extra_headers=[cookie_header])
 
     if path == '/api/auth/me' and method == 'GET':
         if not user:
             return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
-        u_dict = dict(user)
+        src = dict(user)
+        u_dict = {
+            'wordpress_user_id': src.get('wordpress_user_id'),
+            'email': src.get('email'),
+            'full_name': src.get('full_name'),
+            'phone': src.get('phone'),
+            'country': src.get('country'),
+            'status': src.get('status'),
+            'role': src.get('role')
+        }
         return json_response(start_response, {'status': 'success', 'user': u_dict})
 
     if path == '/api/auth/logout' and method == 'POST':
@@ -670,7 +880,7 @@ def application(environ, start_response):
                 token = auth_hdr.split(' ', 1)[1]
                 
         revoke_db_session(token)
-        cookie_header = ('Set-Cookie', 'session_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT')
+        cookie_header = ('Set-Cookie', session_cookie_header(clear=True))
         return json_response(start_response, {'status': 'success', 'message': 'Logged out'}, extra_headers=[cookie_header])
 
     if path == '/api/auth/profile' and method == 'POST':
@@ -866,11 +1076,16 @@ def application(environ, start_response):
             LEFT JOIN companies c ON o.company_id = c.id
             LEFT JOIN users u ON o.user_id = u.id
             LEFT JOIN users s ON o.assigned_staff_id = s.id
-            WHERE o.id = ? AND (o.user_id = ? OR ? IN ('ADMIN', 'STAFF'));
-        """, (oid, user['id'], user['role']), one=True)
+            WHERE o.id = ?;
+        """, (oid,), one=True)
         
         if not order:
             return json_response(start_response, {'status': 'error', 'message': 'Order not found'}, "404 Not Found")
+        if user['role'] == 'CLIENT':
+            if order['user_id'] != user['id']:
+                return json_response(start_response, {'status': 'error', 'message': 'Order not found'}, "404 Not Found")
+        elif not check_permission(user, 'orders.view'):
+            return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
             
         timeline = query_db("SELECT * FROM order_timeline WHERE order_id = ? ORDER BY id ASC;", (oid,))
         invoice = query_db("SELECT * FROM invoices WHERE order_id = ?;", (oid,), one=True)
@@ -1016,7 +1231,7 @@ def application(environ, start_response):
     if path == '/api/client/tickets' and method == 'GET':
         if not user:
             return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
-        if user['role'] in ('ADMIN', 'STAFF'):
+        if is_internal_staff(user):
             tickets = query_db("""
                 SELECT t.*, u.full_name as client_name, u.email as client_email, c.name as company_name, o.order_number
                 FROM support_tickets t
@@ -1070,7 +1285,10 @@ def application(environ, start_response):
         if not t_rec:
             return json_response(start_response, {'status': 'error', 'message': 'Ticket not found'}, "404 Not Found")
             
-        if user['role'] == 'CLIENT' and t_rec['user_id'] != user['id']:
+        if user['role'] == 'CLIENT':
+            if t_rec['user_id'] != user['id']:
+                return json_response(start_response, {'status': 'error', 'message': 'Access denied to target ticket'}, "403 Forbidden")
+        elif not is_internal_staff(user):
             return json_response(start_response, {'status': 'error', 'message': 'Access denied to target ticket'}, "403 Forbidden")
 
         if method == 'GET':
@@ -1109,8 +1327,9 @@ def application(environ, start_response):
     # API: Admin CMS
     # ----------------------------------------------------
     if path == '/api/admin/stats' and method == 'GET':
-        if not user or user['role'] not in ('ADMIN', 'STAFF'):
-            return json_response(start_response, {'status': 'error', 'message': 'Admin access required'}, "403 Forbidden")
+        denied = require_permission(start_response, user, 'orders.view')
+        if denied:
+            return denied
             
         tot_customers = query_db("SELECT COUNT(*) as c FROM users WHERE role = 'CLIENT';", one=True)['c']
         tot_companies = query_db("SELECT COUNT(*) as c FROM companies;", one=True)['c']
@@ -1225,14 +1444,16 @@ def application(environ, start_response):
         return json_response(start_response, {'status': 'success', 'message': 'Order updated successfully'})
 
     if path == '/api/admin/services' and method == 'GET':
-        if not user or user['role'] not in ('ADMIN', 'STAFF'):
-            return json_response(start_response, {'status': 'error', 'message': 'Admin access required'}, "403 Forbidden")
+        denied = require_permission(start_response, user, 'orders.view')
+        if denied:
+            return denied
         svcs = query_db("SELECT * FROM services ORDER BY created_at DESC;")
         return json_response(start_response, {'status': 'success', 'services': svcs})
 
     if path == '/api/admin/services' and method == 'POST':
-        if not user or user['role'] not in ('ADMIN', 'STAFF'):
-            return json_response(start_response, {'status': 'error', 'message': 'Admin access required'}, "403 Forbidden")
+        denied = require_permission(start_response, user, 'settings.manage')
+        if denied:
+            return denied
         data = parse_body(environ)
         sid = execute_db("""
             INSERT INTO services (name, description, category, price, duration, status, featured, vat_rate, renewal_period)
@@ -1242,8 +1463,9 @@ def application(environ, start_response):
         return json_response(start_response, {'status': 'success', 'message': 'Service created.'})
 
     if path == '/api/admin/documents' and method == 'GET':
-        if not user or user['role'] not in ('ADMIN', 'STAFF'):
-            return json_response(start_response, {'status': 'error', 'message': 'Admin access required'}, "403 Forbidden")
+        denied = require_permission(start_response, user, 'documents.view')
+        if denied:
+            return denied
         docs = query_db("""
             SELECT d.*, u.full_name as client_name, u.email as client_email, c.name as company_name
             FROM documents d
@@ -1254,8 +1476,9 @@ def application(environ, start_response):
         return json_response(start_response, {'status': 'success', 'documents': docs})
 
     if path.startswith('/api/admin/documents/') and method == 'PUT':
-        if not user or user['role'] not in ('ADMIN', 'STAFF'):
-            return json_response(start_response, {'status': 'error', 'message': 'Admin access required'}, "403 Forbidden")
+        denied = require_permission(start_response, user, 'documents.view')
+        if denied:
+            return denied
         doc_id = path.split('/')[-1]
         data = parse_body(environ)
         status = data.get('status')
@@ -1275,14 +1498,298 @@ def application(environ, start_response):
         return json_response(start_response, {'status': 'success', 'message': f'Document status updated to {status}'})
 
     if path == '/api/admin/activity-logs' and method == 'GET':
-        if not user or user['role'] not in ('ADMIN', 'STAFF'):
-            return json_response(start_response, {'status': 'error', 'message': 'Admin access required'}, "403 Forbidden")
+        denied = require_permission(start_response, user, 'settings.manage')
+        if denied:
+            return denied
         logs = query_db("SELECT * FROM activity_logs ORDER BY created_at DESC LIMIT 100;")
         return json_response(start_response, {'status': 'success', 'logs': logs})
 
+    # ----------------------------------------------------
+    # API: Staff Task Management
+    # ----------------------------------------------------
+    if path == '/api/admin/staff' and method == 'GET':
+        denied = task_auth_error(start_response, user, 'tasks.view')
+        if denied:
+            return denied
+        staff_rows = query_db("""
+            SELECT id, wordpress_user_id, email, full_name, phone, role, status, avatar_url
+            FROM users
+            WHERE role IN ('STAFF', 'MANAGER', 'ADMIN', 'SUPER_ADMIN')
+              AND status = 'Active'
+            ORDER BY full_name ASC;
+        """)
+        return json_response(start_response, {'status': 'success', 'staff': staff_rows})
+
+    if path == '/api/admin/tasks' and method == 'GET':
+        denied = task_auth_error(start_response, user, 'tasks.view')
+        if denied:
+            return denied
+        qs = urllib.parse.parse_qs(environ.get('QUERY_STRING', ''))
+        sql = TASK_DETAIL_SQL + " WHERE 1=1"
+        params = []
+
+        if user['role'] == 'STAFF':
+            sql += " AND t.assigned_staff_id = ?"
+            params.append(user['id'])
+        else:
+            assigned_filter = qs.get('assigned_staff_id', [None])[0]
+            if assigned_filter:
+                assigned_id, err = to_optional_int(assigned_filter, 'assigned_staff_id')
+                if err:
+                    return json_response(start_response, {'status': 'error', 'message': err}, "400 Bad Request")
+                sql += " AND t.assigned_staff_id = ?"
+                params.append(assigned_id)
+
+        status_filter = qs.get('status', [None])[0]
+        if status_filter:
+            if status_filter not in TASK_STATUSES:
+                return json_response(start_response, {'status': 'error', 'message': 'Invalid status'}, "400 Bad Request")
+            sql += " AND t.status = ?"
+            params.append(status_filter)
+
+        priority_filter = qs.get('priority', [None])[0]
+        if priority_filter:
+            if priority_filter not in TASK_PRIORITIES:
+                return json_response(start_response, {'status': 'error', 'message': 'Invalid priority'}, "400 Bad Request")
+            sql += " AND t.priority = ?"
+            params.append(priority_filter)
+
+        client_filter = qs.get('client_id', [None])[0]
+        if client_filter:
+            client_id, err = to_optional_int(client_filter, 'client_id')
+            if err:
+                return json_response(start_response, {'status': 'error', 'message': err}, "400 Bad Request")
+            sql += " AND t.client_id = ?"
+            params.append(client_id)
+
+        order_filter = qs.get('order_id', [None])[0]
+        if order_filter:
+            order_id, err = to_optional_int(order_filter, 'order_id')
+            if err:
+                return json_response(start_response, {'status': 'error', 'message': err}, "400 Bad Request")
+            sql += " AND t.order_id = ?"
+            params.append(order_id)
+
+        due_filter = qs.get('due', [None])[0]
+        if due_filter == 'overdue':
+            sql += " AND t.due_date IS NOT NULL AND date(t.due_date) < date('now') AND t.status NOT IN ('Completed', 'Cancelled')"
+        elif due_filter == 'today':
+            sql += " AND t.due_date IS NOT NULL AND date(t.due_date) = date('now')"
+        elif due_filter:
+            return json_response(start_response, {'status': 'error', 'message': 'Invalid due filter'}, "400 Bad Request")
+
+        sql += " ORDER BY t.created_at DESC;"
+        tasks = query_db(sql, params)
+        return json_response(start_response, {'status': 'success', 'tasks': tasks})
+
+    if path == '/api/admin/tasks' and method == 'POST':
+        denied = task_auth_error(start_response, user, 'tasks.create')
+        if denied:
+            return denied
+        data = parse_body(environ)
+        title = (data.get('title') or '').strip()
+        if not title:
+            return json_response(start_response, {'status': 'error', 'message': 'Title is required'}, "400 Bad Request")
+
+        description = data.get('description')
+        internal_notes = data.get('internal_notes')
+        due_date = data.get('due_date') or None
+        priority = data.get('priority') or 'Medium'
+        if priority not in TASK_PRIORITIES:
+            return json_response(start_response, {'status': 'error', 'message': 'Invalid priority'}, "400 Bad Request")
+
+        assigned_staff_id, err = to_optional_int(data.get('assigned_staff_id'), 'assigned_staff_id')
+        if err:
+            return json_response(start_response, {'status': 'error', 'message': err}, "400 Bad Request")
+        client_id, err = to_optional_int(data.get('client_id'), 'client_id')
+        if err:
+            return json_response(start_response, {'status': 'error', 'message': err}, "400 Bad Request")
+        company_id, err = to_optional_int(data.get('company_id'), 'company_id')
+        if err:
+            return json_response(start_response, {'status': 'error', 'message': err}, "400 Bad Request")
+        order_id, err = to_optional_int(data.get('order_id'), 'order_id')
+        if err:
+            return json_response(start_response, {'status': 'error', 'message': err}, "400 Bad Request")
+
+        ok, msg = validate_task_assignee(assigned_staff_id)
+        if not ok:
+            return json_response(start_response, {'status': 'error', 'message': msg}, "400 Bad Request")
+        ok, msg, client_id, company_id, order_id = validate_task_links(client_id, company_id, order_id)
+        if not ok:
+            return json_response(start_response, {'status': 'error', 'message': msg}, "400 Bad Request")
+
+        task_id = execute_db("""
+            INSERT INTO tasks (
+                title, description, priority, status, due_date,
+                assigned_staff_id, created_by_id, client_id, company_id, order_id,
+                internal_notes, updated_at
+            ) VALUES (?, ?, ?, 'Open', ?, ?, ?, ?, ?, ?, ?, datetime('now'));
+        """, (title, description, priority, due_date, assigned_staff_id, user['id'], client_id, company_id, order_id, internal_notes))
+
+        log_activity(user, 'TASK_CREATED', 'tasks', str(task_id), f"Created task '{title}'")
+        notify_staff_task(
+            assigned_staff_id, user['id'],
+            'Task Assigned',
+            f"You have been assigned task '{title}'.",
+            'task_assigned'
+        )
+        created = fetch_task(task_id)
+        return json_response(start_response, {'status': 'success', 'message': 'Task created.', 'task': dict(created)})
+
+    if path.startswith('/api/admin/tasks/') and path.endswith('/complete') and method == 'POST':
+        denied = task_auth_error(start_response, user, 'tasks.complete')
+        if denied:
+            return denied
+        parts = path.strip('/').split('/')
+        if len(parts) != 5 or not parts[3].isdigit():
+            return json_response(start_response, {'status': 'error', 'message': 'Invalid task id'}, "400 Bad Request")
+        task_id = int(parts[3])
+        task = fetch_task(task_id)
+        if not task:
+            return json_response(start_response, {'status': 'error', 'message': 'Task not found'}, "404 Not Found")
+        if not staff_can_access_task(user, task):
+            return json_response(start_response, {'status': 'error', 'message': 'Access denied to target task'}, "403 Forbidden")
+
+        execute_db("""
+            UPDATE tasks
+            SET status = 'Completed', completed_at = datetime('now'), updated_at = datetime('now')
+            WHERE id = ?;
+        """, (task_id,))
+        log_activity(user, 'TASK_COMPLETED', 'tasks', str(task_id), f"Completed task '{task['title']}'")
+        notify_staff_task(
+            task.get('assigned_staff_id'), user['id'],
+            'Task Completed',
+            f"Task '{task['title']}' has been marked completed.",
+            'task_completed'
+        )
+        notify_staff_task(
+            task.get('created_by_id'), user['id'],
+            'Task Completed',
+            f"Task '{task['title']}' has been marked completed.",
+            'task_completed'
+        )
+        updated = fetch_task(task_id)
+        return json_response(start_response, {'status': 'success', 'message': 'Task completed.', 'task': dict(updated)})
+
+    if path.startswith('/api/admin/tasks/') and method == 'GET':
+        denied = task_auth_error(start_response, user, 'tasks.view')
+        if denied:
+            return denied
+        tid = path.rstrip('/').split('/')[-1]
+        if not tid.isdigit():
+            return json_response(start_response, {'status': 'error', 'message': 'Invalid task id'}, "400 Bad Request")
+        task = fetch_task(int(tid))
+        if not task:
+            return json_response(start_response, {'status': 'error', 'message': 'Task not found'}, "404 Not Found")
+        if not staff_can_access_task(user, task):
+            return json_response(start_response, {'status': 'error', 'message': 'Access denied to target task'}, "403 Forbidden")
+        return json_response(start_response, {'status': 'success', 'task': dict(task)})
+
+    if path.startswith('/api/admin/tasks/') and method == 'PUT':
+        denied = task_auth_error(start_response, user, 'tasks.edit')
+        if denied:
+            return denied
+        tid = path.rstrip('/').split('/')[-1]
+        if not tid.isdigit():
+            return json_response(start_response, {'status': 'error', 'message': 'Invalid task id'}, "400 Bad Request")
+        task_id = int(tid)
+        task = fetch_task(task_id)
+        if not task:
+            return json_response(start_response, {'status': 'error', 'message': 'Task not found'}, "404 Not Found")
+        if not staff_can_access_task(user, task):
+            return json_response(start_response, {'status': 'error', 'message': 'Access denied to target task'}, "403 Forbidden")
+
+        data = parse_body(environ)
+        title = task['title'] if data.get('title') is None else str(data.get('title')).strip()
+        if not title:
+            return json_response(start_response, {'status': 'error', 'message': 'Title is required'}, "400 Bad Request")
+        description = task['description'] if data.get('description') is None else data.get('description')
+        internal_notes = task['internal_notes'] if data.get('internal_notes') is None else data.get('internal_notes')
+        due_date = task['due_date'] if data.get('due_date') is None else (data.get('due_date') or None)
+        priority = task['priority'] if data.get('priority') is None else data.get('priority')
+        status_val = task['status'] if data.get('status') is None else data.get('status')
+        if priority not in TASK_PRIORITIES:
+            return json_response(start_response, {'status': 'error', 'message': 'Invalid priority'}, "400 Bad Request")
+        if status_val not in TASK_STATUSES:
+            return json_response(start_response, {'status': 'error', 'message': 'Invalid status'}, "400 Bad Request")
+
+        assigned_staff_id = task['assigned_staff_id']
+        client_id = task['client_id']
+        company_id = task['company_id']
+        order_id = task['order_id']
+
+        if 'assigned_staff_id' in data:
+            new_assignee, err = to_optional_int(data.get('assigned_staff_id'), 'assigned_staff_id')
+            if err:
+                return json_response(start_response, {'status': 'error', 'message': err}, "400 Bad Request")
+            if new_assignee != task['assigned_staff_id'] and not check_permission(user, 'tasks.assign'):
+                return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
+            assigned_staff_id = new_assignee
+
+        relink_requested = any(k in data for k in ('client_id', 'company_id', 'order_id'))
+        if relink_requested:
+            if not check_permission(user, 'tasks.assign'):
+                return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
+            if 'client_id' in data:
+                client_id, err = to_optional_int(data.get('client_id'), 'client_id')
+                if err:
+                    return json_response(start_response, {'status': 'error', 'message': err}, "400 Bad Request")
+            if 'company_id' in data:
+                company_id, err = to_optional_int(data.get('company_id'), 'company_id')
+                if err:
+                    return json_response(start_response, {'status': 'error', 'message': err}, "400 Bad Request")
+            if 'order_id' in data:
+                order_id, err = to_optional_int(data.get('order_id'), 'order_id')
+                if err:
+                    return json_response(start_response, {'status': 'error', 'message': err}, "400 Bad Request")
+
+        ok, msg = validate_task_assignee(assigned_staff_id)
+        if not ok:
+            return json_response(start_response, {'status': 'error', 'message': msg}, "400 Bad Request")
+        ok, msg, client_id, company_id, order_id = validate_task_links(client_id, company_id, order_id)
+        if not ok:
+            return json_response(start_response, {'status': 'error', 'message': msg}, "400 Bad Request")
+
+        completed_at = task['completed_at']
+        if status_val == 'Completed' and task['status'] != 'Completed':
+            completed_at_sql = "datetime('now')"
+        elif status_val != 'Completed':
+            completed_at_sql = "NULL"
+        else:
+            completed_at_sql = "?"
+
+        if completed_at_sql == "?":
+            execute_db("""
+                UPDATE tasks SET
+                    title = ?, description = ?, priority = ?, status = ?, due_date = ?,
+                    assigned_staff_id = ?, client_id = ?, company_id = ?, order_id = ?,
+                    internal_notes = ?, completed_at = ?, updated_at = datetime('now')
+                WHERE id = ?;
+            """, (title, description, priority, status_val, due_date, assigned_staff_id, client_id, company_id, order_id, internal_notes, completed_at, task_id))
+        else:
+            execute_db(f"""
+                UPDATE tasks SET
+                    title = ?, description = ?, priority = ?, status = ?, due_date = ?,
+                    assigned_staff_id = ?, client_id = ?, company_id = ?, order_id = ?,
+                    internal_notes = ?, completed_at = {completed_at_sql}, updated_at = datetime('now')
+                WHERE id = ?;
+            """, (title, description, priority, status_val, due_date, assigned_staff_id, client_id, company_id, order_id, internal_notes, task_id))
+
+        log_activity(user, 'TASK_UPDATED', 'tasks', str(task_id), f"Updated task '{title}'")
+        if assigned_staff_id and assigned_staff_id != task['assigned_staff_id']:
+            notify_staff_task(
+                assigned_staff_id, user['id'],
+                'Task Assigned',
+                f"You have been assigned task '{title}'.",
+                'task_assigned'
+            )
+        updated = fetch_task(task_id)
+        return json_response(start_response, {'status': 'success', 'message': 'Task updated successfully', 'task': dict(updated)})
+
     if path == '/api/admin/settings' and method == 'POST':
-        if not user or user['role'] != 'ADMIN':
-            return json_response(start_response, {'status': 'error', 'message': 'Admin privilege required'}, "403 Forbidden")
+        denied = require_permission(start_response, user, 'settings.manage')
+        if denied:
+            return denied
         data = parse_body(environ)
         for k, v in data.items():
             execute_db("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?);", (k, str(v)))
@@ -1293,8 +1800,8 @@ def application(environ, start_response):
     return [json.dumps({'status': 'error', 'message': f'Route {path} not found'}).encode('utf-8')]
 
 def run():
-    print(f"Hypetex Limited Server starting on http://127.0.0.1:{PORT}")
-    httpd = make_server('0.0.0.0', PORT, application)
+    print(f"Hypetex Limited Server starting on http://{HOST}:{PORT}")
+    httpd = make_server(HOST, PORT, application)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

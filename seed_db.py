@@ -16,7 +16,7 @@ def seed():
     # Clear existing data for clean re-seed
     tables = ['webhook_events', 'role_permissions', 'permissions', 'roles', 'activity_logs', 'notifications', 
               'support_messages', 'support_tickets', 'registered_agents', 'proxies', 'documents', 'addresses', 
-              'invoices', 'order_timeline', 'orders', 'services', 'company_directors', 'companies', 'users', 'settings']
+              'invoices', 'order_timeline', 'tasks', 'orders', 'services', 'company_directors', 'companies', 'users', 'settings']
     for t in tables:
         execute_db(f"DELETE FROM {t};")
     execute_db("DELETE FROM sqlite_sequence;")
@@ -32,7 +32,7 @@ def seed():
         ('vat_rate', '0.20'),
         ('order_prefix', '#GB'),
         ('invoice_prefix', 'INV-2026-'),
-        ('wordpress_webhook_secret', 'brixen_wp_secret_key_998877')
+        ('wordpress_webhook_secret', 'CHANGE_ME_IN_LOCAL_ENV')
     ]
     for k, v in settings:
         execute_db("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?);", (k, v))
@@ -67,7 +67,12 @@ def seed():
         ('invoices.create', 'Create invoices'),
         ('notifications.send', 'Send notifications'),
         ('staff.manage', 'Manage internal staff accounts'),
-        ('settings.manage', 'Modify system & integration settings')
+        ('settings.manage', 'Modify system & integration settings'),
+        ('tasks.view', 'View staff tasks'),
+        ('tasks.create', 'Create staff tasks'),
+        ('tasks.edit', 'Edit staff tasks'),
+        ('tasks.assign', 'Assign staff to tasks'),
+        ('tasks.complete', 'Mark staff tasks complete')
     ]
     perm_map = {}
     for pname, pdesc in permissions_list:
@@ -82,6 +87,12 @@ def seed():
     # Manager & Staff restricted permissions
     for pname in ['clients.view', 'orders.view', 'orders.edit', 'documents.view', 'documents.upload', 'documents.send', 'invoices.view']:
         execute_db("INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?);", (role_map['MANAGER'], perm_map[pname]))
+        execute_db("INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?);", (role_map['STAFF'], perm_map[pname]))
+
+    # Staff Task Management: Manager gets full task workflow; Staff can view/edit/complete assigned work
+    for pname in ['tasks.view', 'tasks.create', 'tasks.edit', 'tasks.assign', 'tasks.complete']:
+        execute_db("INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?);", (role_map['MANAGER'], perm_map[pname]))
+    for pname in ['tasks.view', 'tasks.edit', 'tasks.complete']:
         execute_db("INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?);", (role_map['STAFF'], perm_map[pname]))
 
     # 2. Users

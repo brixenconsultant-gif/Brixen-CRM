@@ -110,6 +110,7 @@
                         <li class="nav-item" data-view="admin-dashboard"><a href="#admin-dashboard"><i data-lucide="pie-chart"></i> <span>Overview</span></a></li>
                         <li class="nav-item" data-view="admin-customers"><a href="#admin-customers"><i data-lucide="users"></i> <span>Customers</span></a></li>
                         <li class="nav-item" data-view="admin-orders"><a href="#admin-orders"><i data-lucide="package-check"></i> <span>Orders Manager</span></a></li>
+                        <li class="nav-item" data-view="admin-tasks"><a href="#admin-tasks"><i data-lucide="list-checks"></i> <span>Tasks</span></a></li>
                         <li class="nav-item" data-view="admin-services"><a href="#admin-services"><i data-lucide="layers"></i> <span>Services Catalog</span></a></li>
                         <li class="nav-item" data-view="admin-invoices"><a href="#admin-invoices"><i data-lucide="receipt"></i> <span>Invoices Manager</span></a></li>
                         <li class="nav-item" data-view="admin-documents"><a href="#admin-documents"><i data-lucide="file-check"></i> <span>Documents Review</span></a></li>
@@ -121,10 +122,10 @@
 
             <div class="sidebar-user">
                 <div class="user-info-wrapper">
-                    <div class="user-avatar" style="background: #ef4444;">AV</div>
+                    <div class="user-avatar" id="admin-user-avatar" style="background: #ef4444;">AV</div>
                     <div class="user-details">
-                        <div class="name">Alexander Vance</div>
-                        <div class="role-badge">ADMINISTRATOR</div>
+                        <div class="name" id="admin-user-name">Alexander Vance</div>
+                        <div class="role-badge" id="admin-user-role">ADMINISTRATOR</div>
                     </div>
                 </div>
                 <button class="btn-logout" title="Sign Out" onclick="handleLogout()">
@@ -213,24 +214,27 @@
         </div>
     </div>
                     <!-- Glass Client View / Account Control -->
-                    <div class="glass-account-control" title="Switch Client / Account View">
+                    <div class="glass-account-control" title="Signed-in account">
                         <div class="account-avatar" id="header-user-avatar">JH</div>
                         <div class="account-details">
                             <span class="account-name" id="header-user-name">James Harrington</span>
                             <span class="account-role" id="header-user-role">Client Account</span>
                         </div>
-                        <i data-lucide="chevron-down" style="width:14px; height:14px; color:#64748b; margin-left:4px;"></i>
-                        <select class="role-switcher-select glass-select" onchange="switchRoleDemo(this.value)">
-                            <option value="client1@acmecorp.co.uk">Client View (James Harrington)</option>
-                            <option value="v.smith@vantagecyber.co.uk">Client View (Victoria Smith)</option>
-                            <option value="admin@brixenconsultant.co.uk">Admin CMS View (Alexander Vance)</option>
-                        </select>
                     </div>
 
-                    <button class="btn-icon-relative" title="Notifications" onclick="toggleNotificationsModal()">
-                        <i data-lucide="bell"></i>
-                        <span class="notification-badge" id="header-unread-count">2</span>
-                    </button>
+                    <div id="notification-bell-wrap" style="position:relative;">
+                        <button class="btn-icon-relative" title="Notifications" onclick="toggleNotificationsModal(event)">
+                            <i data-lucide="bell"></i>
+                            <span class="notification-badge" id="header-unread-count" style="display:none;">0</span>
+                        </button>
+                        <div id="notifications-dropdown" style="display:none; position:absolute; right:0; top:calc(100% + 8px); width:360px; max-width:min(360px, 90vw); background:#ffffff; border:1px solid #e2e8f0; border-radius:16px; z-index:1200; overflow:hidden;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 14px; border-bottom:1px solid #e2e8f0;">
+                                <strong style="font-size:0.88rem; color:#0f172a;">Notifications</strong>
+                                <button type="button" class="btn-secondary" style="padding:4px 8px; font-size:0.72rem;" onclick="markNotificationsRead(event)">Mark all read</button>
+                            </div>
+                            <div id="notifications-list" style="max-height:380px; overflow-y:auto;"></div>
+                        </div>
+                    </div>
                 </div>
             </header>
 
@@ -259,10 +263,6 @@
                             <div id="login-error-msg" style="display: none; padding: 10px; border-radius: var(--radius-sm); background: #fef2f2; color: #dc2626; font-size: 0.8rem; font-weight: 600; margin-bottom: 16px;"></div>
                             <button type="submit" class="btn-primary" style="width: 100%; justify-content: center; padding: 12px; font-weight: 700; border-radius: var(--radius-md);">Sign In</button>
                         </form>
-                        <div style="margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-color); display: flex; gap: 8px; justify-content: center;">
-                            <button type="button" class="btn-secondary" style="font-size: 0.75rem; padding: 6px 12px;" onclick="fillDemoLogin('client1@acmecorp.co.uk', 'ClientPass123!')">Fill Client Demo</button>
-                            <button type="button" class="btn-secondary" style="font-size: 0.75rem; padding: 6px 12px;" onclick="fillDemoLogin('admin@brixenconsultant.co.uk', 'AdminPass123!')">Fill Admin Demo</button>
-                        </div>
                     </div>
                 </div>
 
@@ -740,6 +740,64 @@
                     </div>
                 </div>
 
+                <!-- 12b. ADMIN TASKS VIEW -->
+                <div id="view-admin-tasks" class="view-panel" style="display: none;">
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>Staff Tasks</h1>
+                            <p>Create, assign, and complete internal work items linked to clients and orders.</p>
+                        </div>
+                        <button class="btn-primary" id="btn-new-task" onclick="openNewTaskModal()"><i data-lucide="plus-circle"></i> New Task</button>
+                    </div>
+
+                    <div id="adm-tasks-error" style="display:none; padding:10px 14px; border-radius:8px; background:#fef2f2; color:#dc2626; font-size:0.82rem; font-weight:600; margin-bottom:12px;" role="alert"></div>
+
+                    <div class="orders-filter-row">
+                        <div class="filter-group">
+                            <select class="select-filter" id="filter-task-status" onchange="loadAdminTasks()">
+                                <option value="">All Statuses</option>
+                                <option value="Open">Open</option>
+                                <option value="In Progress">In Progress</option>
+                                <option value="Completed">Completed</option>
+                                <option value="Cancelled">Cancelled</option>
+                            </select>
+                            <select class="select-filter" id="filter-task-priority" onchange="loadAdminTasks()">
+                                <option value="">All Priorities</option>
+                                <option value="Low">Low</option>
+                                <option value="Medium">Medium</option>
+                                <option value="High">High</option>
+                                <option value="Urgent">Urgent</option>
+                            </select>
+                            <select class="select-filter" id="filter-task-assignee" onchange="loadAdminTasks()">
+                                <option value="">All Assignees</option>
+                            </select>
+                            <select class="select-filter" id="filter-task-due" onchange="loadAdminTasks()">
+                                <option value="">All Due Dates</option>
+                                <option value="overdue">Overdue</option>
+                                <option value="today">Due Today</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="data-table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Task</th>
+                                    <th>Assignee</th>
+                                    <th>Client</th>
+                                    <th>Order</th>
+                                    <th>Priority</th>
+                                    <th>Due Date</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="adm-tasks-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
                 <!-- 13. ADMIN CUSTOMERS VIEW -->
                 <div id="view-admin-customers" class="view-panel" style="display: none;">
                     <div class="page-title-row">
@@ -960,6 +1018,177 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=13.0"></script>
+    <!-- ====================================================
+         NEW STAFF TASK MODAL
+         ==================================================== -->
+    <div id="modal-new-task" class="modal-overlay">
+        <div class="modal-card" style="max-width:700px;">
+            <div class="modal-header">
+                <div>
+                    <h3>Create New Task</h3>
+                    <p style="font-size:0.8rem; color:#64748b;">Assign internal work to staff. Clients will not see this task.</p>
+                </div>
+                <button class="btn-close" onclick="closeNewTaskModal()"><i data-lucide="x"></i></button>
+            </div>
+
+            <form id="new-task-form" onsubmit="submitNewTaskForm(event)">
+                <div id="new-task-error" style="display:none; padding:10px; border-radius:8px; background:#fef2f2; color:#dc2626; font-size:0.8rem; font-weight:600;" role="alert"></div>
+                <div style="display:flex; flex-direction:column; gap:14px; margin-top:10px;">
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Title *</label>
+                        <input type="text" id="new-task-title" class="select-filter" style="width:100%; margin-top:4px;" placeholder="e.g. Prepare Registered Office pack" required>
+                    </div>
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Description</label>
+                        <textarea id="new-task-description" class="select-filter" style="width:100%; height:80px; margin-top:4px; font-family:inherit; padding:10px;" placeholder="What needs to be done?"></textarea>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Priority</label>
+                            <select id="new-task-priority" class="select-filter" style="width:100%; margin-top:4px;">
+                                <option value="Low">Low</option>
+                                <option value="Medium" selected>Medium</option>
+                                <option value="High">High</option>
+                                <option value="Urgent">Urgent</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Due Date</label>
+                            <input type="date" id="new-task-due" class="select-filter" style="width:100%; margin-top:4px;">
+                        </div>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Assignee</label>
+                            <select id="new-task-assignee" class="select-filter" style="width:100%; margin-top:4px;">
+                                <option value="">Unassigned</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Client</label>
+                            <select id="new-task-client" class="select-filter" style="width:100%; margin-top:4px;" onchange="onTaskAssociationChange('new')">
+                                <option value="">No client</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Company</label>
+                            <select id="new-task-company" class="select-filter" style="width:100%; margin-top:4px;" onchange="onTaskCompanyChange('new')">
+                                <option value="">No company</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Order</label>
+                            <select id="new-task-order" class="select-filter" style="width:100%; margin-top:4px;">
+                                <option value="">No order</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Internal Notes</label>
+                        <textarea id="new-task-notes" class="select-filter" style="width:100%; height:80px; margin-top:4px; font-family:inherit; padding:10px;" placeholder="Staff-only notes. Never shown to clients."></textarea>
+                    </div>
+                    <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:10px;">
+                        <button type="button" class="btn-secondary" onclick="closeNewTaskModal()">Cancel</button>
+                        <button type="submit" class="btn-primary" id="new-task-submit"><i data-lucide="check-circle"></i> Create Task</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ====================================================
+         EDIT / DETAIL STAFF TASK MODAL
+         ==================================================== -->
+    <div id="modal-edit-task" class="modal-overlay">
+        <div class="modal-card" style="max-width:700px;">
+            <div class="modal-header">
+                <div>
+                    <h3 id="edit-task-heading">Task Details</h3>
+                    <p style="font-size:0.8rem; color:#64748b;" id="edit-task-meta">Internal staff task</p>
+                </div>
+                <button class="btn-close" onclick="closeEditTaskModal()"><i data-lucide="x"></i></button>
+            </div>
+
+            <form id="edit-task-form" onsubmit="submitEditTaskForm(event)">
+                <input type="hidden" id="edit-task-id">
+                <div id="edit-task-error" style="display:none; padding:10px; border-radius:8px; background:#fef2f2; color:#dc2626; font-size:0.8rem; font-weight:600;" role="alert"></div>
+                <div style="display:flex; flex-direction:column; gap:14px; margin-top:10px;">
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Title *</label>
+                        <input type="text" id="edit-task-title" class="select-filter" style="width:100%; margin-top:4px;" required>
+                    </div>
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Description</label>
+                        <textarea id="edit-task-description" class="select-filter" style="width:100%; height:80px; margin-top:4px; font-family:inherit; padding:10px;"></textarea>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px;">
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Priority</label>
+                            <select id="edit-task-priority" class="select-filter" style="width:100%; margin-top:4px;">
+                                <option value="Low">Low</option>
+                                <option value="Medium">Medium</option>
+                                <option value="High">High</option>
+                                <option value="Urgent">Urgent</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Status</label>
+                            <select id="edit-task-status" class="select-filter" style="width:100%; margin-top:4px;">
+                                <option value="Open">Open</option>
+                                <option value="In Progress">In Progress</option>
+                                <option value="Completed">Completed</option>
+                                <option value="Cancelled">Cancelled</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Due Date</label>
+                            <input type="date" id="edit-task-due" class="select-filter" style="width:100%; margin-top:4px;">
+                        </div>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Assignee</label>
+                            <select id="edit-task-assignee" class="select-filter" style="width:100%; margin-top:4px;">
+                                <option value="">Unassigned</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Client</label>
+                            <select id="edit-task-client" class="select-filter" style="width:100%; margin-top:4px;" onchange="onTaskAssociationChange('edit')">
+                                <option value="">No client</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Company</label>
+                            <select id="edit-task-company" class="select-filter" style="width:100%; margin-top:4px;" onchange="onTaskCompanyChange('edit')">
+                                <option value="">No company</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Order</label>
+                            <select id="edit-task-order" class="select-filter" style="width:100%; margin-top:4px;">
+                                <option value="">No order</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Internal Notes</label>
+                        <textarea id="edit-task-notes" class="select-filter" style="width:100%; height:80px; margin-top:4px; font-family:inherit; padding:10px;" placeholder="Staff-only notes. Never shown to clients."></textarea>
+                    </div>
+                    <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:10px;">
+                        <button type="button" class="btn-secondary" onclick="closeEditTaskModal()">Close</button>
+                        <button type="button" class="btn-secondary" id="edit-task-complete-btn" onclick="completeTaskFromModal()"><i data-lucide="check"></i> Complete Task</button>
+                        <button type="submit" class="btn-primary" id="edit-task-submit"><i data-lucide="save"></i> Save Changes</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js?v=16.0"></script>
 </body>
 </html>
