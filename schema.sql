@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS users (
     address TEXT,
     avatar_url TEXT,
     role TEXT NOT NULL DEFAULT 'CLIENT' CHECK(role IN ('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF', 'CLIENT')),
+    department TEXT,
     status TEXT NOT NULL DEFAULT 'Active' CHECK(status IN ('Active', 'Suspended', 'Pending')),
     two_factor_enabled INTEGER DEFAULT 0,
     last_synced_at TIMESTAMP,
@@ -84,9 +85,27 @@ CREATE TABLE IF NOT EXISTS companies (
     reg_office TEXT NOT NULL,
     package TEXT DEFAULT 'Standard Corporate',
     account_status TEXT DEFAULT 'Good Standing',
+    utr_number TEXT,
+    authentication_code TEXT,
+    activation_code TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+
+
+-- 3b. Dismissed company cards (staff deleted; block auto-recreation from webhooks)
+CREATE TABLE IF NOT EXISTS dismissed_company_cards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    name_key TEXT NOT NULL DEFAULT '',
+    company_number TEXT,
+    woocommerce_order_id TEXT,
+    deleted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_dismissed_company_cards_lookup
+    ON dismissed_company_cards(user_id, name_key, company_number, woocommerce_order_id);
 
 -- 4. Company Directors
 CREATE TABLE IF NOT EXISTS company_directors (
@@ -132,6 +151,7 @@ CREATE TABLE IF NOT EXISTS services (
     featured INTEGER DEFAULT 0,
     vat_rate REAL DEFAULT 0.20,
     renewal_period TEXT DEFAULT 'Annual',
+    woocommerce_product_id TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -152,12 +172,32 @@ CREATE TABLE IF NOT EXISTS orders (
     assigned_staff_id INTEGER,
     expected_date DATE,
     notes TEXT,
+    woocommerce_order_id TEXT,
+    payment_mode TEXT,
+    portfolio_hidden INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE SET NULL,
     FOREIGN KEY (service_id) REFERENCES services(id) ON DELETE SET NULL,
     FOREIGN KEY (assigned_staff_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- 7b. WooCommerce line items (actual website product data; not invented categories)
+CREATE TABLE IF NOT EXISTS order_line_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER NOT NULL,
+    woocommerce_product_id TEXT,
+    woocommerce_variation_id TEXT,
+    sku TEXT,
+    product_name TEXT NOT NULL,
+    category_name TEXT,
+    category_id TEXT,
+    quantity INTEGER NOT NULL DEFAULT 1,
+    unit_price REAL NOT NULL DEFAULT 0,
+    line_total REAL NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
 );
 
 -- 8. Order Timeline Steps
@@ -202,6 +242,8 @@ CREATE TABLE IF NOT EXISTS documents (
     status TEXT NOT NULL DEFAULT 'Approved' CHECK(status IN ('Pending Review', 'Approved', 'Rejected', 'Requires Update')),
     uploaded_by TEXT NOT NULL,
     review_notes TEXT,
+    client_visible INTEGER NOT NULL DEFAULT 1,
+    shared_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE SET NULL,
@@ -304,6 +346,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     priority TEXT NOT NULL DEFAULT 'Medium' CHECK(priority IN ('Low', 'Medium', 'High', 'Urgent')),
     status TEXT NOT NULL DEFAULT 'Open' CHECK(status IN ('Open', 'In Progress', 'Completed', 'Cancelled')),
     due_date DATE,
+    department TEXT,
     assigned_staff_id INTEGER,
     created_by_id INTEGER,
     client_id INTEGER,

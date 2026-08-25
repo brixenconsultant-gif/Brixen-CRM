@@ -94,6 +94,177 @@ def init_db():
         conn.executescript(f.read())
     conn.commit()
     conn.close()
+    ensure_schema()
+
+
+def ensure_schema():
+    """Additive, non-destructive columns/tables for existing local databases."""
+    conn = get_db()
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS order_line_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER NOT NULL,
+            woocommerce_product_id TEXT,
+            woocommerce_variation_id TEXT,
+            sku TEXT,
+            product_name TEXT NOT NULL,
+            category_name TEXT,
+            category_id TEXT,
+            quantity INTEGER NOT NULL DEFAULT 1,
+            unit_price REAL NOT NULL DEFAULT 0,
+            line_total REAL NOT NULL DEFAULT 0,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
+        );
+    """)
+    doc_cols = {row[1] for row in conn.execute("PRAGMA table_info(documents)").fetchall()}
+    if 'client_visible' not in doc_cols:
+        conn.execute("ALTER TABLE documents ADD COLUMN client_visible INTEGER NOT NULL DEFAULT 1")
+    if 'shared_at' not in doc_cols:
+        conn.execute("ALTER TABLE documents ADD COLUMN shared_at TIMESTAMP")
+    order_cols = {row[1] for row in conn.execute("PRAGMA table_info(orders)").fetchall()}
+    if 'woocommerce_order_id' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN woocommerce_order_id TEXT")
+    if 'payment_mode' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN payment_mode TEXT")
+    if 'portfolio_hidden' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN portfolio_hidden INTEGER NOT NULL DEFAULT 0")
+    service_cols = {row[1] for row in conn.execute("PRAGMA table_info(services)").fetchall()}
+    if 'woocommerce_product_id' not in service_cols:
+        conn.execute("ALTER TABLE services ADD COLUMN woocommerce_product_id TEXT")
+    user_cols = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+    if 'department' not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN department TEXT")
+    if 'date_of_birth' not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN date_of_birth TEXT")
+    if 'checkout_phone' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN checkout_phone TEXT")
+    if 'checkout_dob' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN checkout_dob TEXT")
+    if 'website_checkout_pulled_at' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN website_checkout_pulled_at TEXT")
+        conn.execute("""
+            UPDATE orders
+            SET website_checkout_pulled_at = CURRENT_TIMESTAMP
+            WHERE COALESCE(checkout_dob, '') != '' OR COALESCE(checkout_phone, '') != '';
+        """)
+    if 'website_phone_checked_at' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN website_phone_checked_at TEXT")
+        conn.execute("""
+            UPDATE orders
+            SET website_phone_checked_at = website_checkout_pulled_at
+            WHERE website_checkout_pulled_at IS NOT NULL
+              AND COALESCE(checkout_phone, '') = '';
+        """)
+    if 'checkout_form_json' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN checkout_form_json TEXT")
+    company_cols = {row[1] for row in conn.execute("PRAGMA table_info(companies)").fetchall()}
+    if 'utr_number' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN utr_number TEXT")
+    if 'authentication_code' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN authentication_code TEXT")
+    if 'activation_code' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN activation_code TEXT")
+    task_cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+    if 'department' not in task_cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN department TEXT")
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS dismissed_company_cards (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            name_key TEXT NOT NULL DEFAULT '',
+            company_number TEXT,
+            woocommerce_order_id TEXT,
+            deleted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_dismissed_company_cards_lookup
+            ON dismissed_company_cards(user_id, name_key, company_number, woocommerce_order_id);
+        CREATE TABLE IF NOT EXISTS roles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            description TEXT
+        );
+        CREATE TABLE IF NOT EXISTS permissions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            description TEXT
+        );
+        CREATE TABLE IF NOT EXISTS role_permissions (
+            role_id INTEGER NOT NULL,
+            permission_id INTEGER NOT NULL,
+            PRIMARY KEY (role_id, permission_id),
+            FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE,
+            FOREIGN KEY (permission_id) REFERENCES permissions(id) ON DELETE CASCADE
+        );
+    """)
+    conn.commit()
+    conn.close()
+    ensure_rbac()
+
+
+def ensure_rbac():
+    """Insert missing roles and permission links. Never deletes existing rows."""
+    roles = (
+        ('SUPER_ADMIN', 'Full unrestricted system & technical administration access'),
+        ('ADMIN', 'Manage clients, orders, staff, documents, and financial records'),
+        ('MANAGER', 'Oversee team assignments, assigned clients, and order workflows'),
+        ('STAFF', 'Access assigned clients and orders to process documentation'),
+        ('CLIENT', 'Portal user accessing owned companies, orders, and documents'),
+    )
+    permissions = (
+        ('clients.view', 'View client records'),
+        ('clients.create', 'Create new client profiles'),
+        ('clients.edit', 'Modify client profiles'),
+        ('clients.delete', 'Remove client profiles'),
+        ('orders.view', 'View orders'),
+        ('orders.create', 'Create orders'),
+        ('orders.edit', 'Update order statuses and progress'),
+        ('orders.assign', 'Assign staff to orders'),
+        ('documents.view', 'View documents'),
+        ('documents.upload', 'Upload new documents'),
+        ('documents.send', 'Send document notifications to client'),
+        ('documents.delete', 'Delete documents'),
+        ('invoices.view', 'View invoices'),
+        ('invoices.create', 'Create invoices'),
+        ('notifications.send', 'Send notifications'),
+        ('staff.manage', 'Manage internal staff accounts'),
+        ('settings.manage', 'Modify system & integration settings'),
+        ('tasks.view', 'View staff tasks'),
+        ('tasks.create', 'Create staff tasks'),
+        ('tasks.edit', 'Edit staff tasks'),
+        ('tasks.assign', 'Assign staff to tasks'),
+        ('tasks.complete', 'Mark staff tasks complete'),
+    )
+    for name, desc in roles:
+        execute_db("INSERT OR IGNORE INTO roles (name, description) VALUES (?, ?);", (name, desc))
+    for name, desc in permissions:
+        execute_db("INSERT OR IGNORE INTO permissions (name, description) VALUES (?, ?);", (name, desc))
+
+    role_map = {row['name']: row['id'] for row in query_db("SELECT id, name FROM roles;")}
+    perm_map = {row['name']: row['id'] for row in query_db("SELECT id, name FROM permissions;")}
+    links = []
+    for pname in perm_map:
+        links.append(('SUPER_ADMIN', pname))
+        links.append(('ADMIN', pname))
+    for pname in (
+        'clients.view', 'orders.view', 'orders.edit', 'documents.view',
+        'documents.upload', 'documents.send', 'invoices.view',
+    ):
+        links.append(('MANAGER', pname))
+        links.append(('STAFF', pname))
+    for pname in ('tasks.view', 'tasks.create', 'tasks.edit', 'tasks.assign', 'tasks.complete'):
+        links.append(('MANAGER', pname))
+    for pname in ('tasks.view', 'tasks.edit', 'tasks.complete'):
+        links.append(('STAFF', pname))
+    for role_name, perm_name in links:
+        role_id = role_map.get(role_name)
+        perm_id = perm_map.get(perm_name)
+        if role_id and perm_id:
+            execute_db(
+                "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?);",
+                (role_id, perm_id),
+            )
 
 def query_db(query, args=(), one=False):
     conn = get_db()

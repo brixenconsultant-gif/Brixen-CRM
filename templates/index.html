@@ -1,33 +1,94 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="auth-pending">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#003971">
     <title>Brixen Consultants - Corporate CMS & Client Portal</title>
+    <link rel="icon" type="image/png" href="https://brixenconsultants.com/wp-content/uploads/2025/11/Brixen-Consultants.png">
+    <link rel="canonical" href="https://portal.brixenconsultants.com/">
+    <style>
+        html.auth-pending body { background: #f8fafc; }
+        html.auth-pending #app-container,
+        #app-container[hidden] {
+            display: none !important;
+            visibility: hidden !important;
+            pointer-events: none !important;
+        }
+        html.auth-pending #client-sidebar,
+        html.auth-pending #admin-sidebar,
+        html.auth-pending #header-search-box,
+        html.auth-pending #header-account-wrap,
+        html.auth-pending #notification-bell-wrap,
+        html.auth-pending .view-panel,
+        html.auth-pending .sidebar { display: none !important; }
+        html.auth-pending .main-wrapper { margin-left: 0 !important; width: 100vw !important; }
+        #auth-loading-screen {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 99999;
+            align-items: center;
+            justify-content: center;
+            background: #f8fafc;
+            pointer-events: none;
+        }
+        html.auth-pending #auth-loading-screen,
+        html:not(.auth-ready) #auth-loading-screen { display: flex !important; pointer-events: auto; }
+        html.auth-ready:not(.auth-pending) #auth-loading-screen { display: none !important; }
+        #auth-loading-screen .auth-loading-card {
+            text-align: center;
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 20px;
+            padding: 32px 40px;
+            box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+        }
+        #auth-loading-screen img { height: 38px; margin-bottom: 14px; }
+        #auth-loading-screen p { margin: 0; font-family: Inter, sans-serif; font-size: 0.88rem; font-weight: 600; color: #64748b; }
+    </style>
+    <script>
+        document.documentElement.classList.add('auth-pending');
+        document.documentElement.classList.remove('authenticated', 'auth-ready');
+        window.addEventListener('pageshow', function (event) {
+            if (!event.persisted) return;
+            document.documentElement.classList.add('auth-pending');
+            document.documentElement.classList.remove('authenticated', 'auth-ready');
+            var app = document.getElementById('app-container');
+            if (app) app.setAttribute('hidden', '');
+        });
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Red+Hat+Display:wght@500;700;800&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lucide@latest"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <link rel="stylesheet" href="/static/css/styles.css?v=13.0">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="/static/css/styles.css?v=66.0">
 </head>
 <body>
+    <div id="auth-loading-screen" role="status" aria-live="polite">
+        <div class="auth-loading-card">
+            <img src="/static/img/brixen-logo.png" alt="Brixen Consultants">
+            <p>Checking your session…</p>
+        </div>
+    </div>
 
-    <div id="app-container">
+    <div id="app-container" hidden>
         <!-- ====================================================
              CLIENT PORTAL SIDEBAR
              ==================================================== -->
-        <aside id="client-sidebar" class="sidebar">
+        <aside id="client-sidebar" class="sidebar" hidden style="display: none;">
             <div class="sidebar-logo">
                 <div class="logo-container-glass">
                     <img src="/static/img/brixen-logo.png" alt="Brixen Consultants" class="brixen-brand-logo">
                 </div>
+                <button type="button" class="sidebar-close-btn" onclick="closeMobileNav()" aria-label="Close menu"><i data-lucide="x"></i></button>
             </div>
 
             <nav class="sidebar-nav">
                 <div class="nav-group">
                     <ul class="nav-list">
-                        <li class="nav-item active" data-view="client-dashboard"><a href="#dashboard" onclick="switchView('client-dashboard')"><i data-lucide="layout-dashboard"></i> <span>Dashboard</span></a></li>
+                        <li class="nav-item" data-view="client-dashboard"><a href="#dashboard" onclick="switchView('client-dashboard')"><i data-lucide="layout-dashboard"></i> <span>Dashboard</span></a></li>
                         <li class="nav-item" data-view="client-profile"><a href="#profile" onclick="switchView('client-profile')"><i data-lucide="user"></i> <span>My Profile</span></a></li>
                     </ul>
                 </div>
@@ -35,7 +96,7 @@
                 <div class="nav-group">
                     <div class="nav-group-title">MY PORTFOLIO</div>
                     <ul class="nav-list">
-                        <li class="nav-item" data-view="client-companies"><a href="#companies" onclick="switchView('client-companies')"><i data-lucide="building-2"></i> <span>My Companies</span></a></li>
+                        <li class="nav-item" data-view="client-companies" data-portfolio="Business Portfolio"><a href="#companies" onclick="switchView('client-companies')"><i data-lucide="building-2"></i> <span>Company Registered</span><span style="display:none">Business Portfolio</span></a></li>
                         <li class="nav-item" data-view="client-addresses"><a href="#addresses" onclick="switchView('client-addresses')"><i data-lucide="map-pin"></i> <span>Addresses</span></a></li>
                     </ul>
                 </div>
@@ -78,29 +139,17 @@
                 <p>Speak to your dedicated corporate advisor.</p>
                 <button class="btn-support-card" onclick="switchView('client-support')">Contact Support</button>
             </div>
-
-            <div class="sidebar-user">
-                <div class="user-info-wrapper">
-                    <div class="user-avatar" id="current-user-avatar">JH</div>
-                    <div class="user-details">
-                        <div class="name" id="current-user-name">James Harrington</div>
-                        <div class="role-badge" id="current-user-role">CLIENT • Active</div>
-                    </div>
-                </div>
-                <button class="btn-logout" title="Sign Out" onclick="handleLogout()">
-                    <i data-lucide="log-out"></i>
-                </button>
-            </div>
         </aside>
 
         <!-- ====================================================
              ADMIN CMS SIDEBAR
              ==================================================== -->
-        <aside id="admin-sidebar" class="sidebar" style="display: none;">
+        <aside id="admin-sidebar" class="sidebar" hidden style="display: none;">
             <div class="sidebar-logo">
                 <div class="logo-container-glass">
                     <img src="/static/img/brixen-logo.png" alt="Brixen Consultants Admin" class="brixen-brand-logo">
                 </div>
+                <button type="button" class="sidebar-close-btn" onclick="closeMobileNav()" aria-label="Close menu"><i data-lucide="x"></i></button>
             </div>
 
             <nav class="sidebar-nav">
@@ -108,40 +157,108 @@
                     <div class="nav-group-title">Admin Management</div>
                     <ul class="nav-list">
                         <li class="nav-item" data-view="admin-dashboard"><a href="#admin-dashboard"><i data-lucide="pie-chart"></i> <span>Overview</span></a></li>
-                        <li class="nav-item" data-view="admin-customers"><a href="#admin-customers"><i data-lucide="users"></i> <span>Customers</span></a></li>
+                        <li class="nav-item" data-view="admin-customers"><a href="#admin-customers"><i data-lucide="users"></i> <span>Customers / Signups</span></a></li>
+                        <li class="nav-item" data-view="admin-companies"><a href="#admin-companies" onclick="switchView('admin-companies')"><i data-lucide="building-2"></i> <span>Company Registered</span></a></li>
                         <li class="nav-item" data-view="admin-orders"><a href="#admin-orders"><i data-lucide="package-check"></i> <span>Orders Manager</span></a></li>
-                        <li class="nav-item" data-view="admin-tasks"><a href="#admin-tasks"><i data-lucide="list-checks"></i> <span>Tasks</span></a></li>
+                        <li class="nav-item" data-view="admin-tasks"><a href="#admin-tasks"><i data-lucide="list-checks"></i> <span>Tasks &amp; Team</span></a></li>
                         <li class="nav-item" data-view="admin-services"><a href="#admin-services"><i data-lucide="layers"></i> <span>Services Catalog</span></a></li>
                         <li class="nav-item" data-view="admin-invoices"><a href="#admin-invoices"><i data-lucide="receipt"></i> <span>Invoices Manager</span></a></li>
                         <li class="nav-item" data-view="admin-documents"><a href="#admin-documents"><i data-lucide="file-check"></i> <span>Documents Review</span></a></li>
                         <li class="nav-item" data-view="admin-logs"><a href="#admin-logs"><i data-lucide="history"></i> <span>Audit Logs</span></a></li>
                         <li class="nav-item" data-view="admin-settings"><a href="#admin-settings"><i data-lucide="settings"></i> <span>System Settings</span></a></li>
+                        <li class="nav-item" data-view="client-profile"><a href="#profile"><i data-lucide="user-cog"></i> <span>Profile &amp; Password</span></a></li>
                     </ul>
                 </div>
             </nav>
 
             <div class="sidebar-user">
                 <div class="user-info-wrapper">
-                    <div class="user-avatar" id="admin-user-avatar" style="background: #ef4444;">AV</div>
+                    <div class="user-avatar" id="admin-user-avatar" style="background: #ef4444;"></div>
                     <div class="user-details">
-                        <div class="name" id="admin-user-name">Alexander Vance</div>
-                        <div class="role-badge" id="admin-user-role">ADMINISTRATOR</div>
+                        <div class="name" id="admin-user-name"></div>
+                        <div class="role-badge" id="admin-user-role"></div>
                     </div>
                 </div>
-                <button class="btn-logout" title="Sign Out" onclick="handleLogout()">
-                    <i data-lucide="log-out"></i>
+                <button type="button" class="btn-logout" title="Sign Out" onclick="handleLogout()">
+                    <i data-lucide="log-out" style="pointer-events:none;"></i>
                 </button>
             </div>
         </aside>
+
+        <div id="mobile-nav-backdrop" class="mobile-nav-backdrop" hidden onclick="closeMobileNav()"></div>
 
         <!-- ====================================================
              MAIN WRAPPER & TOP HEADER
              ==================================================== -->
         <main class="main-wrapper">
             <header class="top-header">
-                <div class="search-box">
+                <button type="button" id="mobile-nav-toggle" class="mobile-nav-toggle" onclick="toggleMobileNav()" aria-label="Open menu" aria-expanded="false">
+                    <i data-lucide="menu"></i>
+                </button>
+                <div class="search-box" id="header-search-box" style="display: none;">
                     <i data-lucide="search" style="width:16px; height:16px; color:#94a3b8;"></i>
                     <input type="text" id="global-search-input" placeholder="Search orders, companies, invoices..." oninput="handleGlobalSearch(this.value)">
+                </div>
+
+                <!-- ====================================================
+                     TOP HORIZONTAL MENU SECTION (INSIDE TOP HEADER BAR)
+                     ==================================================== -->
+                <div id="top-horizontal-menu-bar" class="top-menu-bar" style="display: none;">
+                    <nav class="top-menu-nav" aria-label="Portal Navigation Section">
+                        <ul class="top-menu-list" id="top-menu-list-client" style="display: none;">
+                            <li class="top-menu-item" data-view="client-dashboard">
+                                <a href="#dashboard" onclick="switchView('client-dashboard')"><i data-lucide="layout-dashboard"></i> <span>Dashboard</span></a>
+                            </li>
+                            <li class="top-menu-item" data-view="client-orders">
+                                <a href="#orders" onclick="switchView('client-orders')"><i data-lucide="shopping-bag"></i> <span>Orders</span></a>
+                            </li>
+                            <li class="top-menu-item" data-view="client-companies">
+                                <a href="#companies" onclick="switchView('client-companies')"><i data-lucide="building-2"></i> <span>Company Registered</span></a>
+                            </li>
+                            <li class="top-menu-item" data-view="client-invoices">
+                                <a href="#invoices" onclick="switchView('client-invoices')"><i data-lucide="file-text"></i> <span>Invoices</span></a>
+                            </li>
+                            <li class="top-menu-item" data-view="client-documents">
+                                <a href="#documents" onclick="switchView('client-documents')"><i data-lucide="folder-lock"></i> <span>Documents</span></a>
+                            </li>
+                            <li class="top-menu-item" data-view="client-support">
+                                <a href="#support" onclick="switchView('client-support')"><i data-lucide="headphones"></i> <span>Support</span></a>
+                            </li>
+                            <li class="top-menu-item" data-view="client-profile">
+                                <a href="#profile" onclick="switchView('client-profile')"><i data-lucide="user"></i> <span>My Profile</span></a>
+                            </li>
+                        </ul>
+
+                        <ul class="top-menu-list" id="top-menu-list-admin" style="display: none;">
+                            <li class="top-menu-item" data-view="admin-dashboard">
+                                <a href="#admin-dashboard" onclick="switchView('admin-dashboard')"><i data-lucide="layout-dashboard"></i> <span>Dashboard</span></a>
+                            </li>
+                            <li class="top-menu-item" data-view="admin-orders">
+                                <a href="#admin-orders" onclick="switchView('admin-orders')"><i data-lucide="shopping-bag"></i> <span>Orders</span></a>
+                            </li>
+                            <li class="top-menu-item" data-view="admin-tasks">
+                                <a href="#admin-tasks" onclick="switchView('admin-tasks')"><i data-lucide="check-square"></i> <span>Tasks &amp; Team</span></a>
+                            </li>
+                            <li class="top-menu-item" data-view="admin-customers">
+                                <a href="#admin-customers" onclick="switchView('admin-customers')"><i data-lucide="users"></i> <span>Customers / Signups</span></a>
+                            </li>
+                            <li class="top-menu-item" data-view="admin-companies">
+                                <a href="#admin-companies" onclick="switchView('admin-companies')"><i data-lucide="building-2"></i> <span>Company Registered</span></a>
+                            </li>
+                            <li class="top-menu-item" data-view="admin-documents">
+                                <a href="#admin-documents" onclick="switchView('admin-documents')"><i data-lucide="folder-lock"></i> <span>Documents</span></a>
+                            </li>
+                            <li class="top-menu-item" data-view="admin-logs">
+                                <a href="#admin-logs" onclick="switchView('admin-logs')"><i data-lucide="activity"></i> <span>Logs</span></a>
+                            </li>
+                            <li class="top-menu-item" data-view="admin-settings">
+                                <a href="#admin-settings" onclick="switchView('admin-settings')"><i data-lucide="settings"></i> <span>Settings</span></a>
+                            </li>
+                            <li class="top-menu-item" data-view="client-profile">
+                                <a href="#profile" onclick="switchView('client-profile')"><i data-lucide="user-cog"></i> <span>Profile</span></a>
+                            </li>
+                        </ul>
+                    </nav>
                 </div>
 
                 <div class="header-right">
@@ -154,15 +271,15 @@
                 <div style="display:flex; align-items:center; gap:12px;">
                     <div id="crm-modal-avatar" class="user-avatar" style="width:44px; height:44px; font-size:1.1rem;">JH</div>
                     <div>
-                        <h3 id="crm-modal-name">James Harrington</h3>
-                        <p style="font-size:0.78rem; color:#64748b;" id="crm-modal-meta">WP User ID: wp_user_101 | client1@acmecorp.co.uk</p>
+                        <h3 id="crm-modal-name">Customer</h3>
+                        <p style="font-size:0.78rem; color:#64748b;" id="crm-modal-meta"></p>
                     </div>
                 </div>
                 <button class="btn-close" onclick="closeCrmClientModal()"><i data-lucide="x"></i></button>
             </div>
 
             <!-- CRM Tabs -->
-            <div style="display:flex; gap:8px; border-bottom:1px solid #e2e8f0; padding-bottom:8px;">
+            <div class="crm-tabs" style="display:flex; gap:8px; border-bottom:1px solid #e2e8f0; padding-bottom:8px;">
                 <button class="btn-secondary active" onclick="switchCrmTab('overview')" id="crm-tab-overview" style="padding:6px 12px; font-size:0.78rem;">Overview</button>
                 <button class="btn-secondary" onclick="switchCrmTab('companies')" id="crm-tab-companies" style="padding:6px 12px; font-size:0.78rem;">Companies</button>
                 <button class="btn-secondary" onclick="switchCrmTab('orders')" id="crm-tab-orders" style="padding:6px 12px; font-size:0.78rem;">Orders</button>
@@ -174,8 +291,8 @@
 
             <!-- Tab Contents -->
             <div id="crm-tab-content-overview" class="crm-tab-pane">
-                <div style="display:grid; grid-template-columns:repeat(2, 1fr); gap:14px; font-size:0.85rem;">
-                    <div><strong>Email:</strong> <span id="crm-ov-email">client1@acmecorp.co.uk</span></div>
+                <div class="crm-overview-grid" style="display:grid; grid-template-columns:repeat(2, 1fr); gap:14px; font-size:0.85rem;">
+                    <div><strong>Email:</strong> <span id="crm-ov-email"></span></div>
                     <div><strong>Phone:</strong> <span id="crm-ov-phone">+44 7700 900001</span></div>
                     <div><strong>Country:</strong> <span id="crm-ov-country">United Kingdom</span></div>
                     <div><strong>Status:</strong> <span id="crm-ov-status" class="status-badge completed">Active</span></div>
@@ -197,6 +314,11 @@
             </div>
 
             <div id="crm-tab-content-documents" class="crm-tab-pane" style="display:none;">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:12px;">
+                    <div style="font-size:0.8rem; color:#64748b;">Documents stored for this customer only.</div>
+                    <button type="button" class="btn-primary staff-deliver-doc-btn" id="crm-upload-document-btn" onclick="openDeliverDocumentModal()" style="display:none;"><i data-lucide="upload"></i> Upload Document</button>
+                </div>
+                <div id="crm-deliver-doc-status" style="display:none; padding:10px; border-radius:8px; background:#ecfdf5; color:#047857; font-size:0.8rem; font-weight:600; margin-bottom:10px;" role="status"></div>
                 <div id="crm-documents-list"></div>
             </div>
 
@@ -214,15 +336,27 @@
         </div>
     </div>
                     <!-- Glass Client View / Account Control -->
-                    <div class="glass-account-control" title="Signed-in account">
-                        <div class="account-avatar" id="header-user-avatar">JH</div>
-                        <div class="account-details">
-                            <span class="account-name" id="header-user-name">James Harrington</span>
-                            <span class="account-role" id="header-user-role">Client Account</span>
+                    <div id="header-account-wrap" style="position:relative; display:none;">
+                        <button type="button" class="glass-account-control" id="header-account-control" title="Account menu" onclick="toggleAccountMenu(event)" style="border: none; font: inherit; text-align: left;">
+                            <div class="account-avatar" id="header-user-avatar"></div>
+                            <div class="account-details">
+                                <span class="account-name" id="header-user-name"></span>
+                                <span class="account-role" id="header-user-role"></span>
+                            </div>
+                            <i data-lucide="chevron-down" class="account-menu-chevron"></i>
+                        </button>
+                        <div id="account-dropdown" class="account-dropdown">
+                            <button type="button" id="account-menu-return" class="account-dropdown-item" style="display:none;" onclick="stopImpersonation(event)">Return to original account</button>
+                            <div id="account-user-switcher" style="display:none;">
+                                <div class="account-dropdown-label">Switch user</div>
+                                <div id="account-user-switch-list"></div>
+                            </div>
+                            <button type="button" id="account-menu-profile" class="account-dropdown-item" style="display:none;" onclick="openAccountProfile(event)">Profile &amp; Password</button>
+                            <button type="button" class="account-dropdown-item" onclick="handleLogout()">Sign out</button>
                         </div>
                     </div>
 
-                    <div id="notification-bell-wrap" style="position:relative;">
+                    <div id="notification-bell-wrap" style="position:relative; display:none;">
                         <button class="btn-icon-relative" title="Notifications" onclick="toggleNotificationsModal(event)">
                             <i data-lucide="bell"></i>
                             <span class="notification-badge" id="header-unread-count" style="display:none;">0</span>
@@ -242,19 +376,20 @@
                  PAGES / VIEWS CONTAINER
                  ==================================================== -->
             <div class="page-container">
+                <div id="app-flash-notice" style="display:none; padding:10px 14px; border-radius:8px; background:#ecfdf5; color:#047857; font-size:0.82rem; font-weight:600; margin-bottom:12px;" role="status"></div>
 
                 <!-- 0. LOGIN VIEW -->
-                <div id="view-login" class="view-panel" style="display:none; max-width: 440px; margin: 40px auto;">
+                <div id="view-login" class="view-panel login-panel is-active" style="display:none; max-width: 440px; margin: 40px auto;">
                     <div style="background: #ffffff; border: 1px solid var(--border-color); border-radius: var(--radius-xl); padding: 32px; box-shadow: var(--shadow-card);">
                         <div style="text-align: center; margin-bottom: 24px;">
                             <img src="/static/img/brixen-logo.png" alt="Brixen Consultants" style="height: 38px; margin-bottom: 12px;">
-                            <h2 style="font-size: 1.4rem; font-weight: 800; color: var(--text-primary);">Sign in to Client Portal</h2>
-                            <p style="font-size: 0.82rem; color: var(--text-muted); margin-top: 4px;">Enter your email and password to access your corporate dashboard.</p>
+                            <h2 style="font-size: 1.4rem; font-weight: 800; color: var(--text-primary);">Sign in</h2>
+                            <p style="font-size: 0.82rem; color: var(--text-muted); margin-top: 4px;">Use the email and password for your account. Team accounts are created by an administrator — there is no public signup.</p>
                         </div>
                         <form id="login-form" onsubmit="handleFormLogin(event)">
                             <div style="margin-bottom: 16px;">
                                 <label style="display: block; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px;">Email Address</label>
-                                <input type="email" id="login-email" required placeholder="client@company.com" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: var(--radius-md); font-size: 0.9rem;">
+                                <input type="email" id="login-email" required placeholder="you@company.com" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: var(--radius-md); font-size: 0.9rem;">
                             </div>
                             <div style="margin-bottom: 20px;">
                                 <label style="display: block; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px;">Password</label>
@@ -267,10 +402,11 @@
                 </div>
 
                 <!-- 1. CLIENT ORDERS VIEW (Matching Reference Screenshot) -->
-                <div id="view-client-orders" class="view-panel">
+                <div id="view-client-orders" class="view-panel" style="display: none;">
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>Orders</h1>
+                            <div class="page-kicker">Client Portal</div>
                             <p>Track your orders and view purchase history.</p>
                         </div>
                         <button class="btn-secondary" onclick="loadClientOrders()">
@@ -278,12 +414,14 @@
                         </button>
                     </div>
 
-                    <!-- 4 Top Dynamic Stat Cards -->
-                    <div class="stats-grid">
+                    <div id="client-orders-error" class="dash-banner-error" style="display:none;" role="alert"></div>
+
+                    <div class="stats-grid client-orders-stats">
                         <div class="stat-card">
                             <div class="stat-info">
                                 <div class="label">Total Orders</div>
-                                <div class="value" id="stat-total-orders">115</div>
+                                <div class="value" id="stat-total-orders">0</div>
+                                <span class="stat-chip">All orders</span>
                             </div>
                             <div class="stat-icon navy">
                                 <i data-lucide="shopping-bag"></i>
@@ -293,7 +431,8 @@
                         <div class="stat-card">
                             <div class="stat-info">
                                 <div class="label">Completed</div>
-                                <div class="value" id="stat-completed-orders">97</div>
+                                <div class="value" id="stat-completed-orders">0</div>
+                                <span class="stat-chip success">Delivered</span>
                             </div>
                             <div class="stat-icon green">
                                 <i data-lucide="check-circle-2"></i>
@@ -303,92 +442,101 @@
                         <div class="stat-card">
                             <div class="stat-info">
                                 <div class="label">In Progress</div>
-                                <div class="value" id="stat-in-progress-orders">9</div>
+                                <div class="value" id="stat-in-progress-orders">0</div>
+                                <span class="stat-chip info">Active</span>
                             </div>
-                            <div class="stat-icon blue">
-                                <i data-lucide="clock"></i>
+                            <div class="stat-icon purple">
+                                <i data-lucide="loader"></i>
                             </div>
                         </div>
 
                         <div class="stat-card">
                             <div class="stat-info">
                                 <div class="label">Total Spent</div>
-                                <div class="value" id="stat-total-spent">£2,608.00</div>
+                                <div class="value" id="stat-total-spent">£0.00</div>
+                                <span class="stat-chip">GBP</span>
                             </div>
                             <div class="stat-icon orange">
-                                <i data-lucide="credit-card"></i>
+                                <i data-lucide="wallet"></i>
                             </div>
                         </div>
                     </div>
 
-                    <!-- Filter & Search Controls Bar -->
+                    <div class="tracker-section-header">
+                        <div>
+                            <h2>Order History</h2>
+                            <p>Click any order to view details and services.</p>
+                        </div>
+                        <div class="active-orders-pill" id="orders-count-label">0 Orders</div>
+                    </div>
+
                     <div class="orders-filter-row">
                         <div class="filter-group">
-                            <select class="select-filter" id="filter-order-status" onchange="loadClientOrders()">
+                            <select class="select-filter" id="filter-order-status" onchange="resetClientOrdersPage(); loadClientOrders()">
                                 <option value="">All Statuses</option>
                                 <option value="Processing">Processing</option>
                                 <option value="In Progress">In Progress</option>
                                 <option value="Completed">Completed</option>
                                 <option value="Pending">Pending</option>
+                                <option value="Pending Verification">Pending Verification</option>
                                 <option value="Cancelled">Cancelled</option>
                             </select>
 
-                            <select class="select-filter" id="filter-order-sort" onchange="loadClientOrders()">
+                            <select class="select-filter" id="filter-order-sort" onchange="resetClientOrdersPage(); loadClientOrders()">
                                 <option value="date_desc">Newest First</option>
                                 <option value="date_asc">Oldest First</option>
                                 <option value="price_desc">Highest Price</option>
                                 <option value="price_asc">Lowest Price</option>
                             </select>
                         </div>
-
-                        <div class="filter-group">
-                            <span id="orders-count-label" style="font-size:0.8rem; color:#64748b; font-weight:600;">Showing orders</span>
-                        </div>
                     </div>
 
-                    <!-- 3-Column Order Cards Grid -->
-                    <div id="orders-cards-container" class="orders-grid">
-                        <!-- Order Cards dynamically inserted by app.js -->
-                    </div>
+                    <div id="orders-cards-container" class="orders-grid history-orders-grid"></div>
+                    <div id="client-orders-pagination" class="orders-pagination" style="display:none;"></div>
                 </div>
 
                 <!-- 2. CLIENT DASHBOARD VIEW (Brixen Corporate UI/UX Layout) -->
                 <div id="view-client-dashboard" class="view-panel" style="display: none;">
-                    
-                    <!-- Welcome Hero Banner -->
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>Dashboard</h1>
+                            <div class="page-kicker">Client Portal</div>
+                            <p>Your companies, compliance, and active orders in one place.</p>
+                        </div>
+                    </div>
+
+                    <div id="dash-error" class="dash-banner-error" style="display:none;" role="alert"></div>
+
                     <div class="welcome-hero">
                         <div class="hero-left">
-                            <div class="hero-date" id="hero-current-date">12 August 2026</div>
-                            <h2>Welcome back, <span id="hero-user-name">James Harrington</span>! <span class="wave-emoji">👋</span></h2>
-                            <p>Manage your companies and stay on top of compliance deadlines.</p>
+                            <div class="hero-date" id="hero-current-date">Today</div>
+                            <h2>Welcome back, <span id="hero-user-name">—</span>! <span class="wave-emoji">🔥</span></h2>
+                            <p>Here’s what’s happening with your companies and orders today.</p>
                         </div>
                         <div class="hero-right">
-                            <div class="hero-stat-number" id="hero-companies-count">3</div>
+                            <div class="hero-stat-number" id="hero-companies-count">0</div>
                             <div class="hero-stat-label">Companies</div>
                         </div>
                     </div>
 
-                    <!-- 3 Horizontal Statistic Cards -->
                     <div class="stats-grid-3">
-                        <!-- Card 1: PORTFOLIO -->
                         <div class="stat-card-brixen">
                             <div class="card-head">
                                 <div>
                                     <div class="card-title">PORTFOLIO</div>
-                                    <div class="card-subtitle">All registered entities</div>
+                                    <div class="card-subtitle">Total registered companies</div>
                                 </div>
                                 <div class="stat-icon purple"><i data-lucide="building-2"></i></div>
                             </div>
                             <div class="card-body">
-                                <div class="card-big-value" id="dash-card-portfolio-count">3</div>
+                                <div class="card-big-value" id="dash-card-portfolio-count">0</div>
                                 <div class="country-badges-row">
-                                    <span class="country-tag" id="dash-uk-count">3 UK</span>
-                                    <span class="country-tag" id="dash-usa-count">0 USA</span>
+                                    <span class="country-tag" id="dash-uk-count">0 UK</span>
+                                    <span class="country-tag" id="dash-intl-count">0 International</span>
                                 </div>
                             </div>
                         </div>
 
-                        <!-- Card 2: OVERDUE -->
                         <div class="stat-card-brixen">
                             <div class="card-head">
                                 <div>
@@ -407,12 +555,11 @@
                             </div>
                         </div>
 
-                        <!-- Card 3: UPCOMING -->
                         <div class="stat-card-brixen">
                             <div class="card-head">
                                 <div>
                                     <div class="card-title">UPCOMING</div>
-                                    <div class="card-subtitle">Next 30 days</div>
+                                    <div class="card-subtitle">Upcoming deadlines / events</div>
                                 </div>
                                 <div class="stat-icon blue"><i data-lucide="calendar"></i></div>
                             </div>
@@ -427,48 +574,63 @@
                         </div>
                     </div>
 
-                    <!-- Order Status Tracker Section Header -->
                     <div class="tracker-section-header">
                         <div>
                             <h2>Order Status Tracker</h2>
                             <p>Active orders — delivered orders are hidden</p>
                         </div>
                         <div class="active-orders-pill">
-                            <span id="dash-active-orders-num">9</span> Active Orders
+                            <span id="dash-active-orders-num">0</span> Active Orders
                         </div>
                     </div>
 
-                    <!-- Active Orders 3-Column Responsive Grid -->
-                    <div id="dash-active-orders-grid" class="orders-grid">
-                        <!-- Dynamic active order cards with timeline & sub-table inserted by app.js -->
-                    </div>
+                    <div id="dash-active-orders-grid" class="orders-grid"></div>
 
+                    <div class="tracker-section-header">
+                        <div>
+                            <h2>Your Companies</h2>
+                            <p>Registered entities linked to your client account.</p>
+                        </div>
+                        <div class="active-orders-pill" id="dash-companies-count-pill">0 Companies</div>
+                    </div>
+                    <div id="dash-companies-grid" class="companies-grid"></div>
                 </div>
 
-                <!-- 3. MY COMPANIES VIEW -->
+                <!-- 3. COMPANY REGISTERED VIEW (CLIENT) -->
                 <div id="view-client-companies" class="view-panel" style="display: none;">
-                    <div class="page-title-row">
-                        <div class="page-title-text">
-                            <h1>My Companies</h1>
-                            <p>Manage your registered UK corporate entities and services.</p>
+                    <div class="portfolio-page-head">
+                        <div class="portfolio-title-wrap">
+                            <div class="portfolio-title-icon" aria-hidden="true"><i data-lucide="building-2"></i></div>
+                            <div>
+                                <h1>Company Registered<span style="display:none">Business Portfolio</span></h1>
+                                <p>Your full company portfolio — click any company to view details. Website registrations appear after the company name is confirmed.</p>
+                            </div>
+                        </div>
+                        <div class="portfolio-count-pill" id="portfolio-company-count">0 UK</div>
+                    </div>
+                    <div id="portfolio-companies-grid" class="portfolio-grid"></div>
+                </div>
+
+                <!-- 3B. COMPANY REGISTERED VIEW (ADMIN) -->
+                <div id="view-admin-companies" class="view-panel" style="display: none;">
+                    <div class="portfolio-page-head">
+                        <div class="portfolio-title-wrap">
+                            <div class="portfolio-title-icon" aria-hidden="true"><i data-lucide="building-2"></i></div>
+                            <div>
+                                <h1>Company Registered</h1>
+                                <p>Website formation orders wait here until you confirm the company name. Named companies become cards. Add older companies that were registered before the portal.</p>
+                            </div>
+                        </div>
+                        <div class="portfolio-page-actions">
+                            <button type="button" class="btn-secondary" id="btn-import-webfiling" onclick="openImportWebfilingModal()">Import WebFiling</button>
+                            <button type="button" class="btn-primary" id="btn-add-company" onclick="openCreateCompanyModal()">Add company</button>
+                            <div class="portfolio-count-pill" id="admin-portfolio-company-count">0 UK</div>
                         </div>
                     </div>
-                    <div class="data-table-container">
-                        <table class="data-table">
-                            <thead>
-                                <tr>
-                                    <th>Company Name</th>
-                                    <th>Company Number</th>
-                                    <th>Inc. Date</th>
-                                    <th>Director</th>
-                                    <th>Package</th>
-                                    <th>Status</th>
-                                    <th>Action</th>
-                                </tr>
-                            </thead>
-                            <tbody id="companies-table-body"></tbody>
-                        </table>
+                    <div id="admin-ch-banner" class="portfolio-ch-banner" hidden>
+                        Add a Companies House API key in System Settings to search live company names and numbers.
                     </div>
+                    <div id="admin-portfolio-companies-grid" class="portfolio-grid"></div>
                 </div>
 
                 <!-- 4. ADDRESSES VIEW -->
@@ -561,8 +723,8 @@
                             <thead>
                                 <tr>
                                     <th>Document Name</th>
-                                    <th>Category</th>
-                                    <th>Size</th>
+                                    <th>Type</th>
+                                    <th>Uploaded</th>
                                     <th>Uploaded By</th>
                                     <th>Review Status</th>
                                     <th>Action</th>
@@ -620,7 +782,7 @@
                             <p>Direct communication thread with your assigned Brixen corporate advisor.</p>
                         </div>
                     </div>
-                    <div id="messages-container" style="display:grid; grid-template-columns: 300px 1fr; gap:20px; min-height:450px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:16px;">
+                    <div id="messages-container" class="messages-layout" style="display:grid; grid-template-columns: 300px 1fr; gap:20px; min-height:450px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:16px;">
                         <div id="conversations-sidebar" style="border-right:1fr solid #e2e8f0; padding-right:12px;">
                             <h4 style="font-size:0.85rem; color:#64748b; text-transform:uppercase; margin-bottom:12px;">Active Threads</h4>
                             <div id="threads-list"></div>
@@ -637,13 +799,23 @@
                 <div id="view-client-profile" class="view-panel" style="display: none;">
                     <div class="page-title-row">
                         <div class="page-title-text">
-                            <h1>My Profile & Security</h1>
-                            <p>Manage contact information, password, and security preferences.</p>
+                            <h1>My Profile &amp; Password</h1>
+                            <p>Update your contact details or change the password you use to sign in.</p>
                         </div>
                     </div>
                     <div class="modal-card" style="max-width:800px; margin:0;">
                         <form id="profile-form" onsubmit="saveProfile(event)">
+                            <div id="profile-error" style="display:none; padding:10px; border-radius:8px; background:#fef2f2; color:#dc2626; font-size:0.8rem; font-weight:600; margin-bottom:12px;" role="alert"></div>
+                            <div id="profile-success" style="display:none; padding:10px; border-radius:8px; background:#ecfdf5; color:#047857; font-size:0.8rem; font-weight:600; margin-bottom:12px;" role="status"></div>
                             <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+                                <div>
+                                    <label style="font-size:0.8rem; font-weight:700;">Email</label>
+                                    <input type="email" id="prof-email" class="select-filter" style="width:100%; margin-top:4px; background:#f8fafc;" readonly>
+                                </div>
+                                <div>
+                                    <label style="font-size:0.8rem; font-weight:700;">Role</label>
+                                    <input type="text" id="prof-role" class="select-filter" style="width:100%; margin-top:4px; background:#f8fafc;" readonly>
+                                </div>
                                 <div>
                                     <label style="font-size:0.8rem; font-weight:700;">Full Name</label>
                                     <input type="text" id="prof-fullname" class="select-filter" style="width:100%; margin-top:4px;" required>
@@ -661,8 +833,26 @@
                                     <input type="text" id="prof-address" class="select-filter" style="width:100%; margin-top:4px;">
                                 </div>
                             </div>
+                            <div id="profile-password-block" style="margin-top:24px; padding-top:18px; border-top:1px solid #e2e8f0;">
+                                <h3 style="font-size:0.95rem; font-weight:800; margin-bottom:6px;">Change password</h3>
+                                <p style="font-size:0.8rem; color:#64748b; margin-bottom:12px;">Leave these blank to keep your current password. New password must be at least 10 characters.</p>
+                                <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+                                    <div style="grid-column:1 / -1;">
+                                        <label style="font-size:0.8rem; font-weight:700;">Current password</label>
+                                        <input type="password" id="prof-current-password" class="select-filter" style="width:100%; margin-top:4px;" autocomplete="current-password">
+                                    </div>
+                                    <div>
+                                        <label style="font-size:0.8rem; font-weight:700;">New password</label>
+                                        <input type="password" id="prof-new-password" class="select-filter" style="width:100%; margin-top:4px;" minlength="10" autocomplete="new-password">
+                                    </div>
+                                    <div>
+                                        <label style="font-size:0.8rem; font-weight:700;">Confirm new password</label>
+                                        <input type="password" id="prof-confirm-password" class="select-filter" style="width:100%; margin-top:4px;" minlength="10" autocomplete="new-password">
+                                    </div>
+                                </div>
+                            </div>
                             <div style="margin-top:20px;">
-                                <button type="submit" class="btn-primary">Save Changes</button>
+                                <button type="submit" class="btn-primary" id="profile-save-btn">Save Changes</button>
                             </div>
                         </form>
                     </div>
@@ -681,36 +871,42 @@
                         <div class="stat-card">
                             <div class="stat-info">
                                 <div class="label">Total Customers</div>
-                                <div class="value" id="adm-tot-cust">20</div>
+                                <div class="value" id="adm-tot-cust">—</div>
                             </div>
                             <div class="stat-icon purple"><i data-lucide="users"></i></div>
                         </div>
                         <div class="stat-card">
                             <div class="stat-info">
                                 <div class="label">Total Orders</div>
-                                <div class="value" id="adm-tot-ord">115</div>
+                                <div class="value" id="adm-tot-ord">—</div>
                             </div>
                             <div class="stat-icon blue"><i data-lucide="shopping-bag"></i></div>
                         </div>
                         <div class="stat-card">
                             <div class="stat-info">
                                 <div class="label">Total Revenue</div>
-                                <div class="value" id="adm-tot-rev">£12,450.00</div>
+                                <div class="value" id="adm-tot-rev">—</div>
                             </div>
                             <div class="stat-icon green"><i data-lucide="dollar-sign"></i></div>
                         </div>
                         <div class="stat-card">
                             <div class="stat-info">
                                 <div class="label">Open Tickets</div>
-                                <div class="value" id="adm-tot-tix">4</div>
+                                <div class="value" id="adm-tot-tix">—</div>
                             </div>
                             <div class="stat-icon orange"><i data-lucide="message-square"></i></div>
                         </div>
                     </div>
 
-                    <div style="background:#ffffff; border-radius:16px; padding:24px; border:1px solid #e2e8f0;">
-                        <h3 style="font-size:1rem; font-weight:700; margin-bottom:16px;">Revenue Trend</h3>
-                        <canvas id="admin-chart-canvas" height="80"></canvas>
+                    <div class="revenue-chart-card">
+                        <div class="revenue-chart-head">
+                            <h3>Revenue Trend</h3>
+                            <p id="admin-chart-caption">Last 6 months of paid order totals</p>
+                        </div>
+                        <div id="admin-chart-empty" class="revenue-chart-empty" hidden>No order revenue in the last 6 months.</div>
+                        <div class="revenue-chart-wrap">
+                            <canvas id="admin-chart-canvas" aria-label="Monthly revenue trend"></canvas>
+                        </div>
                     </div>
                 </div>
 
@@ -719,18 +915,104 @@
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>Admin Orders Manager</h1>
-                            <p>Update order progress %, change status, and dispatch client notifications.</p>
+                            <p>Filter, open, and process website and CRM orders from the live database.</p>
                         </div>
                     </div>
-                    <div class="data-table-container">
+
+                    <div class="stats-grid orders-stats" id="adm-orders-stats">
+                        <div class="stat-card"><div class="stat-info"><div class="label">Total Orders</div><div class="value" id="adm-ord-stat-total">—</div></div></div>
+                        <div class="stat-card"><div class="stat-info"><div class="label">Pending</div><div class="value" id="adm-ord-stat-pending">—</div></div></div>
+                        <div class="stat-card"><div class="stat-info"><div class="label">In Progress</div><div class="value" id="adm-ord-stat-progress">—</div></div></div>
+                        <div class="stat-card"><div class="stat-info"><div class="label">Completed</div><div class="value" id="adm-ord-stat-completed">—</div></div></div>
+                        <div class="stat-card" data-admin-revenue hidden><div class="stat-info"><div class="label">Total Revenue</div><div class="value" id="adm-ord-stat-revenue">—</div></div></div>
+                        <div class="stat-card"><div class="stat-info"><div class="label">This Month</div><div class="value" id="adm-ord-stat-month">—</div></div></div>
+                    </div>
+
+                    <div class="orders-filter-row orders-filter-toolbar">
+                        <div class="filter-group orders-filter-grid">
+                            <input type="search" class="select-filter filter-search" id="filter-admin-order-search" placeholder="Search order #, customer, email, product…" oninput="scheduleLoadAdminOrders()">
+                            <select class="select-filter" id="filter-admin-order-product" onchange="resetAdminOrdersPage(); loadAdminOrders()"><option value="">All products</option></select>
+                            <select class="select-filter" id="filter-admin-order-category" onchange="resetAdminOrdersPage(); loadAdminOrders()"><option value="">All categories</option></select>
+                            <select class="select-filter" id="filter-admin-order-status-group" onchange="resetAdminOrdersPage(); loadAdminOrders()">
+                                <option value="">All work states</option>
+                                <option value="pending">Pending</option>
+                                <option value="in_progress">In progress</option>
+                                <option value="completed">Completed</option>
+                            </select>
+                            <select class="select-filter" id="filter-admin-order-status" onchange="resetAdminOrdersPage(); loadAdminOrders()">
+                                <option value="">All statuses</option>
+                                <option value="Pending Verification">Pending Verification</option>
+                                <option value="Pending">Pending</option>
+                                <option value="Processing">Processing</option>
+                                <option value="In Progress">In Progress</option>
+                                <option value="Completed">Completed</option>
+                                <option value="Cancelled">Cancelled</option>
+                                <option value="Refunded">Refunded</option>
+                            </select>
+                            <select class="select-filter" id="filter-admin-order-payment" onchange="resetAdminOrdersPage(); loadAdminOrders()">
+                                <option value="">All payments</option>
+                                <option value="Paid">Paid</option>
+                                <option value="Pending">Payment pending</option>
+                                <option value="Overdue">Overdue</option>
+                                <option value="Unpaid">Unpaid</option>
+                            </select>
+                            <select class="select-filter" id="filter-admin-order-customer" onchange="resetAdminOrdersPage(); loadAdminOrders()"><option value="">All customers</option></select>
+                            <select class="select-filter" id="filter-admin-order-progress" onchange="resetAdminOrdersPage(); loadAdminOrders()">
+                                <option value="">All progress</option>
+                                <option value="0-25">0–25%</option>
+                                <option value="26-50">26–50%</option>
+                                <option value="51-75">51–75%</option>
+                                <option value="76-99">76–99%</option>
+                                <option value="100-100">100%</option>
+                            </select>
+                            <select class="select-filter" id="filter-admin-order-preset" onchange="onAdminOrderDatePresetChange(); resetAdminOrdersPage(); loadAdminOrders()">
+                                <option value="">All dates</option>
+                                <option value="today">Today</option>
+                                <option value="yesterday">Yesterday</option>
+                                <option value="this_week">This week</option>
+                                <option value="this_month">This month</option>
+                                <option value="last_month">Last month</option>
+                                <option value="this_year">This year</option>
+                                <option value="custom">Custom range</option>
+                            </select>
+                            <select class="select-filter" id="filter-admin-order-month" onchange="resetAdminOrdersPage(); loadAdminOrders()">
+                                <option value="">Month</option>
+                                <option value="1">January</option><option value="2">February</option><option value="3">March</option>
+                                <option value="4">April</option><option value="5">May</option><option value="6">June</option>
+                                <option value="7">July</option><option value="8">August</option><option value="9">September</option>
+                                <option value="10">October</option><option value="11">November</option><option value="12">December</option>
+                            </select>
+                            <select class="select-filter" id="filter-admin-order-year" onchange="resetAdminOrdersPage(); loadAdminOrders()"><option value="">Year</option></select>
+                            <input type="date" class="select-filter filter-date" id="filter-admin-order-from" onchange="resetAdminOrdersPage(); loadAdminOrders()" hidden aria-label="From date">
+                            <input type="date" class="select-filter filter-date" id="filter-admin-order-to" onchange="resetAdminOrdersPage(); loadAdminOrders()" hidden aria-label="To date">
+                            <button type="button" class="btn-secondary filter-clear" onclick="clearAdminOrderFilters()">Clear filters</button>
+                        </div>
+                    </div>
+                    <div id="adm-orders-error" style="display:none; padding:10px 14px; border-radius:8px; background:#fef2f2; color:#dc2626; font-size:0.82rem; font-weight:600; margin:12px 0;" role="alert"></div>
+                    <div id="adm-orders-selection-bar" style="display:none; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:10px 14px; margin:0 0 12px; border:1px solid #dbeafe; border-radius:10px; background:#eff6ff;">
+                        <div style="font-size:0.85rem; font-weight:700; color:#0f172a;">
+                            <span id="adm-orders-selected-count">0</span> selected
+                        </div>
+                        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                            <button type="button" class="btn-primary" id="adm-orders-edit-selected" onclick="editSelectedAdminOrders()"><i data-lucide="pencil"></i> Edit</button>
+                            <button type="button" class="portfolio-delete-btn" id="adm-orders-delete-selected" onclick="deleteSelectedAdminOrders()" style="display:none;" title="Delete selected" aria-label="Delete selected orders"><i data-lucide="trash-2"></i></button>
+                            <button type="button" class="btn-secondary" onclick="clearSelectedAdminOrders()">Clear</button>
+                        </div>
+                    </div>
+                    <div class="data-table-container orders-table-wrap">
                         <table class="data-table">
                             <thead>
                                 <tr>
+                                    <th style="width:40px;">
+                                        <input type="checkbox" id="adm-orders-select-all" title="Select all on this page" aria-label="Select all orders on this page" onchange="toggleSelectAllAdminOrders(this.checked)">
+                                    </th>
                                     <th>Order #</th>
+                                    <th>Date</th>
                                     <th>Client</th>
-                                    <th>Service</th>
+                                    <th>Company</th>
+                                    <th>Category / Product</th>
                                     <th>Price</th>
-                                    <th>Progress</th>
+                                    <th>Payment Mode</th>
                                     <th>Status</th>
                                     <th>Action</th>
                                 </tr>
@@ -738,63 +1020,72 @@
                             <tbody id="adm-orders-table-body"></tbody>
                         </table>
                     </div>
+                    <div id="adm-orders-pagination" class="orders-pagination"></div>
                 </div>
 
-                <!-- 12b. ADMIN TASKS VIEW -->
+                <!-- 12b. ADMIN TASKS & TEAM VIEW -->
                 <div id="view-admin-tasks" class="view-panel" style="display: none;">
                     <div class="page-title-row">
                         <div class="page-title-text">
-                            <h1>Staff Tasks</h1>
-                            <p>Create, assign, and complete internal work items linked to clients and orders.</p>
+                            <h1>Tasks &amp; Team</h1>
+                            <p>One-click workflows and team access.</p>
                         </div>
-                        <button class="btn-primary" id="btn-new-task" onclick="openNewTaskModal()"><i data-lucide="plus-circle"></i> New Task</button>
-                    </div>
-
-                    <div id="adm-tasks-error" style="display:none; padding:10px 14px; border-radius:8px; background:#fef2f2; color:#dc2626; font-size:0.82rem; font-weight:600; margin-bottom:12px;" role="alert"></div>
-
-                    <div class="orders-filter-row">
-                        <div class="filter-group">
-                            <select class="select-filter" id="filter-task-status" onchange="loadAdminTasks()">
-                                <option value="">All Statuses</option>
-                                <option value="Open">Open</option>
-                                <option value="In Progress">In Progress</option>
-                                <option value="Completed">Completed</option>
-                                <option value="Cancelled">Cancelled</option>
-                            </select>
-                            <select class="select-filter" id="filter-task-priority" onchange="loadAdminTasks()">
-                                <option value="">All Priorities</option>
-                                <option value="Low">Low</option>
-                                <option value="Medium">Medium</option>
-                                <option value="High">High</option>
-                                <option value="Urgent">Urgent</option>
-                            </select>
-                            <select class="select-filter" id="filter-task-assignee" onchange="loadAdminTasks()">
-                                <option value="">All Assignees</option>
-                            </select>
-                            <select class="select-filter" id="filter-task-due" onchange="loadAdminTasks()">
-                                <option value="">All Due Dates</option>
-                                <option value="overdue">Overdue</option>
-                                <option value="today">Due Today</option>
-                            </select>
+                        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                            <button type="button" class="btn-primary" id="btn-create-user" onclick="openCreateUserModal()" style="display:none;"><i data-lucide="user-plus"></i> Create User</button>
                         </div>
                     </div>
 
-                    <div class="data-table-container">
-                        <table class="data-table">
-                            <thead>
-                                <tr>
-                                    <th>Task</th>
-                                    <th>Assignee</th>
-                                    <th>Client</th>
-                                    <th>Order</th>
-                                    <th>Priority</th>
-                                    <th>Due Date</th>
-                                    <th>Status</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody id="adm-tasks-table-body"></tbody>
-                        </table>
+                    <div class="portfolio-tabs tasks-team-tabs" role="tablist" aria-label="Tasks and team">
+                        <button type="button" class="portfolio-tab active" id="tab-tasks-team-tasks" data-tab="tasks" onclick="switchTasksTeamTab('tasks')">Tasks</button>
+                        <button type="button" class="portfolio-tab" id="tab-tasks-team-team" data-tab="team" onclick="switchTasksTeamTab('team')" style="display:none;">Team</button>
+                    </div>
+
+                    <div class="tasks-team-panel" data-panel="tasks" id="panel-tasks-team-tasks">
+                        <div id="adm-tasks-error" style="display:none; padding:10px 14px; border-radius:8px; background:#fef2f2; color:#dc2626; font-size:0.82rem; font-weight:600; margin-bottom:12px;" role="alert"></div>
+
+                        <div class="data-table-container" id="quick-tasks-page">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Form</th>
+                                        <th>Type</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>
+                                            <strong>AD01 Form</strong>
+                                            <div style="font-size:0.75rem; color:#64748b; margin-top:2px;">Change of registered office address.</div>
+                                        </td>
+                                        <td><span class="status-badge in-progress">UK Formfill</span></td>
+                                        <td>
+                                            <button type="button" class="btn-primary btn-table" onclick="launchQuickTask('uk-formfill-ad01', event)">Start task</button>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="tasks-team-panel" data-panel="team" id="panel-tasks-team-team" hidden>
+                        <div id="adm-team-error" style="display:none; padding:10px 14px; border-radius:8px; background:#fef2f2; color:#dc2626; font-size:0.82rem; font-weight:600; margin-bottom:12px;" role="alert"></div>
+                        <div id="adm-team-success" style="display:none; padding:10px 14px; border-radius:8px; background:#ecfdf5; color:#047857; font-size:0.82rem; font-weight:600; margin-bottom:12px;" role="status"></div>
+
+                        <div class="data-table-container team-table-wrap">
+                            <table class="data-table team-table">
+                                <thead>
+                                    <tr>
+                                        <th>Name</th>
+                                        <th>Email</th>
+                                        <th>Role</th>
+                                        <th>Access</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="adm-team-table-body"></tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
 
@@ -802,8 +1093,25 @@
                 <div id="view-admin-customers" class="view-panel" style="display: none;">
                     <div class="page-title-row">
                         <div class="page-title-text">
-                            <h1>Customer Accounts</h1>
-                            <p>Manage registered accounts and company portfolios.</p>
+                            <h1>Customers &amp; New Signups</h1>
+                            <p>Website registrations appear here automatically. Newest accounts are listed first. Use Create User for a CRM-only account.</p>
+                        </div>
+                        <button type="button" class="btn-primary btn-create-user" onclick="openCreateUserModal()" style="display:none;"><i data-lucide="user-plus"></i> Create User</button>
+                    </div>
+                    <div class="orders-filter-row orders-filter-toolbar">
+                        <div class="filter-group" style="flex-wrap:wrap; width:100%;">
+                            <input type="search" class="select-filter" id="filter-admin-customer-search" placeholder="Search name or email…" oninput="filterAdminCustomers()" style="min-width:220px; flex:1;">
+                            <select class="select-filter" id="filter-admin-customer-source" onchange="filterAdminCustomers()">
+                                <option value="">All sources</option>
+                                <option value="website">Website signup</option>
+                                <option value="crm">Created in CRM</option>
+                            </select>
+                            <select class="select-filter" id="filter-admin-customer-age" onchange="filterAdminCustomers()">
+                                <option value="">All dates</option>
+                                <option value="7">New — last 7 days</option>
+                                <option value="30">Last 30 days</option>
+                            </select>
+                            <span id="adm-customers-count" style="font-size:0.8rem; color:#64748b; font-weight:600;"></span>
                         </div>
                     </div>
                     <div class="data-table-container">
@@ -812,6 +1120,8 @@
                                 <tr>
                                     <th>Customer Name</th>
                                     <th>Email</th>
+                                    <th>Signed up</th>
+                                    <th>Source</th>
                                     <th>Companies</th>
                                     <th>Orders</th>
                                     <th>Status</th>
@@ -823,19 +1133,73 @@
                     </div>
                 </div>
 
+                <div id="view-admin-services" class="view-panel" style="display: none;">
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>Services Catalog</h1>
+                            <p>Edit prices and product details for the CRM catalog. Website WooCommerce prices are separate unless you sync products again.</p>
+                        </div>
+                        <button type="button" class="btn-primary" id="btn-admin-add-service" onclick="openCreateServiceModal()" style="display:none;"><i data-lucide="plus-circle"></i> Add Service</button>
+                    </div>
+                    <div id="adm-services-error" class="dash-banner-error" style="display:none;" role="alert"></div>
+                    <div class="data-table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Service</th>
+                                    <th>Category</th>
+                                    <th>Price</th>
+                                    <th>Duration</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="adm-services-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div id="view-admin-invoices" class="view-panel" style="display: none;">
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>Invoices Manager</h1>
+                            <p>Invoices created from website and CRM orders.</p>
+                        </div>
+                    </div>
+                    <div id="adm-invoices-error" class="dash-banner-error" style="display:none;" role="alert"></div>
+                    <div class="data-table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Invoice #</th>
+                                    <th>Client</th>
+                                    <th>Order</th>
+                                    <th>Total</th>
+                                    <th>Status</th>
+                                    <th>Date</th>
+                                </tr>
+                            </thead>
+                            <tbody id="adm-invoices-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
                 <!-- 14. ADMIN DOCUMENTS VIEW -->
                 <div id="view-admin-documents" class="view-panel" style="display: none;">
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>Documents Review Center</h1>
-                            <p>Approve or reject customer compliance documents.</p>
+                            <p>Files uploaded in the CRM. Website order products are not documents.</p>
                         </div>
+                        <button type="button" class="btn-primary" id="btn-admin-upload-document" onclick="openDeliverDocumentModalFromReview()"><i data-lucide="upload"></i> Upload Document</button>
                     </div>
+                    <div id="adm-documents-error" class="dash-banner-error" style="display:none;" role="alert"></div>
                     <div class="data-table-container">
                         <table class="data-table">
                             <thead>
                                 <tr>
                                     <th>Client</th>
+                                    <th>Order</th>
                                     <th>Document</th>
                                     <th>Category</th>
                                     <th>Status</th>
@@ -887,7 +1251,7 @@
                                 </div>
                                 <div>
                                     <label style="font-size:0.8rem; font-weight:700;">Support Email</label>
-                                    <input type="text" id="set-support-email" class="select-filter" style="width:100%; margin-top:4px;" value="support@brixenconsultant.co.uk">
+                                    <input type="text" id="set-support-email" class="select-filter" style="width:100%; margin-top:4px;" value="contact@brixenconsultants.com">
                                 </div>
                                 <div>
                                     <label style="font-size:0.8rem; font-weight:700;">Currency Symbol</label>
@@ -896,6 +1260,46 @@
                                 <div>
                                     <label style="font-size:0.8rem; font-weight:700;">Order Prefix</label>
                                     <input type="text" id="set-order-prefix" class="select-filter" style="width:100%; margin-top:4px;" value="#GB">
+                                </div>
+                                <div style="grid-column:1 / -1;">
+                                    <label style="font-size:0.8rem; font-weight:700;">Companies House API key</label>
+                                    <input type="password" id="set-companies-house-api-key" class="select-filter" style="width:100%; margin-top:4px;" placeholder="Paste REST API key" autocomplete="off">
+                                    <p id="set-companies-house-status" style="margin:6px 0 0; font-size:0.78rem; color:#64748b;">Create a free key at developer.company-information.service.gov.uk, then paste it here.</p>
+                                </div>
+                                <div style="grid-column:1 / -1;">
+                                    <label style="font-size:0.8rem; font-weight:700;">UK FormFill Pro URL</label>
+                                    <input type="url" id="set-uk-formfill-url" class="select-filter" style="width:100%; margin-top:4px;" placeholder="https://portal.brixenconsultants.com/formfill" autocomplete="off">
+                                    <p style="margin:6px 0 0; font-size:0.78rem; color:#64748b;">Quick Tasks → AD01 opens this UK FormFill Pro wizard on the server.</p>
+                                </div>
+                                <div style="grid-column:1 / -1; border-top:1px solid #e2e8f0; padding-top:16px; margin-top:4px;">
+                                    <label style="font-size:0.8rem; font-weight:700;">Customer email (SMTP)</label>
+                                    <p id="set-smtp-status" style="margin:6px 0 12px; font-size:0.78rem; color:#64748b;">Configure SMTP so customers receive email when you upload posted documents.</p>
+                                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+                                        <div>
+                                            <label style="font-size:0.78rem; font-weight:700;">SMTP host</label>
+                                            <input type="text" id="set-smtp-host" class="select-filter" style="width:100%; margin-top:4px;" placeholder="smtp.hostinger.com" autocomplete="off">
+                                        </div>
+                                        <div>
+                                            <label style="font-size:0.78rem; font-weight:700;">SMTP port</label>
+                                            <input type="text" id="set-smtp-port" class="select-filter" style="width:100%; margin-top:4px;" placeholder="587" autocomplete="off">
+                                        </div>
+                                        <div>
+                                            <label style="font-size:0.78rem; font-weight:700;">SMTP username</label>
+                                            <input type="text" id="set-smtp-user" class="select-filter" style="width:100%; margin-top:4px;" placeholder="notifications@brixenconsultants.com" autocomplete="off">
+                                        </div>
+                                        <div>
+                                            <label style="font-size:0.78rem; font-weight:700;">SMTP password</label>
+                                            <input type="password" id="set-smtp-pass" class="select-filter" style="width:100%; margin-top:4px;" placeholder="Leave blank to keep current password" autocomplete="new-password">
+                                        </div>
+                                        <div style="grid-column:1 / -1;">
+                                            <label style="font-size:0.78rem; font-weight:700;">Send from address</label>
+                                            <input type="text" id="set-smtp-from" class="select-filter" style="width:100%; margin-top:4px;" placeholder="notifications@brixenconsultants.com" autocomplete="off">
+                                        </div>
+                                    </div>
+                                    <div style="display:flex; flex-wrap:wrap; gap:10px; margin-top:14px;">
+                                        <button type="button" class="btn-secondary" id="set-smtp-test-btn" onclick="sendAdminSettingsTestEmail()">Send test email to contact@brixenconsultants.com</button>
+                                        <span id="set-smtp-test-status" style="font-size:0.78rem; color:#64748b; align-self:center;"></span>
+                                    </div>
                                 </div>
                             </div>
                             <div style="margin-top:20px;">
@@ -912,30 +1316,93 @@
     <!-- ====================================================
          ORDER DETAILS MODAL (HIDDEN UNTIL CLICKED)
          ==================================================== -->
-    <div id="order-details-modal" class="modal-overlay">
-        <div class="modal-card">
+    <div id="order-details-modal" class="modal-overlay" onclick="onOrderModalBackdrop(event)">
+        <div class="modal-card order-detail-modal-card" style="max-width: 720px; max-height: 90vh; overflow-y: auto;">
             <div class="modal-header">
                 <div>
-                    <h3 id="modal-order-number">#GB103449JUL26</h3>
-                    <p id="modal-order-date" style="font-size:0.8rem; color:#64748b;">28 July 2026</p>
+                    <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                        <h3 id="modal-order-number" style="margin:0; font-size: 1.3rem; font-weight: 800; color: #0f172a;">Order</h3>
+                        <span id="modal-order-status-badge" class="status-badge processing">Processing</span>
+                    </div>
+                    <p id="modal-order-date" style="font-size:0.8rem; color:#64748b; margin-top: 4px; margin-bottom: 0;">Placed on 28 July 2026</p>
                 </div>
                 <button class="btn-close" onclick="closeOrderModal()"><i data-lucide="x"></i></button>
             </div>
 
-            <div style="display:flex; justify-content:space-between; align-items:center; background:#faf5ff; padding:14px; border-radius:12px; border:1px solid #f3e8ff;">
-                <div>
-                    <div style="font-size:0.75rem; color:#64748b; font-weight:700;">SERVICE NAME</div>
-                    <div id="modal-service-name" style="font-size:1rem; font-weight:700; color:#7c3aed;">Registered Office Address</div>
-                </div>
-                <div style="text-align:right;">
-                    <div style="font-size:0.75rem; color:#64748b; font-weight:700;">TOTAL PRICE</div>
-                    <div id="modal-order-total" style="font-size:1.2rem; font-weight:800; color:#0f172a;">£24.00</div>
+            <div style="margin-bottom: 20px;">
+                <h4 style="font-size:0.82rem; font-weight:800; text-transform:uppercase; letter-spacing:0.06em; color:#475569; margin-bottom:10px;">Order Summary</h4>
+                <div class="modal-summary-grid">
+                    <div><span>Order number</span><strong id="modal-summary-number">—</strong></div>
+                    <div><span>Order date</span><strong id="modal-summary-date">—</strong></div>
+                    <div><span>Current status</span><strong id="modal-summary-status">—</strong></div>
+                    <div><span>Progress</span><strong id="modal-summary-progress">—</strong></div>
+                    <div><span>Payment status</span><strong id="modal-summary-payment">—</strong></div>
+                    <div><span>Total price</span><strong id="modal-summary-total">—</strong></div>
                 </div>
             </div>
 
-            <div>
-                <h4 style="font-size:0.85rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:#64748b; margin-bottom:12px;">Order Progress Timeline</h4>
+            <div style="display:grid; grid-template-columns: 2fr 1fr 1fr; gap:12px; background:linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%); padding:16px; border-radius:12px; border:1px solid #e2e8f0; margin-bottom: 20px;" class="modal-package-banner">
+                <div>
+                    <div style="font-size:0.72rem; color:#64748b; font-weight:700; text-transform: uppercase;">Service Package</div>
+                    <div id="modal-service-name" style="font-size:1.05rem; font-weight:800; color:var(--brand-primary); margin-top:2px;">Registered Office Address</div>
+                </div>
+                <div>
+                    <div style="font-size:0.72rem; color:#64748b; font-weight:700; text-transform: uppercase;">Payment Status</div>
+                    <div id="modal-payment-status" style="font-size:0.9rem; font-weight:700; color:#059669; margin-top:2px;">Paid</div>
+                </div>
+                <div style="text-align:right;">
+                    <div style="font-size:0.72rem; color:#64748b; font-weight:700; text-transform: uppercase;">Total Amount</div>
+                    <div id="modal-order-total" style="font-size:1.25rem; font-weight:800; color:#0f172a; margin-top:2px;">£24.00</div>
+                    <div id="modal-order-currency" style="font-size:0.72rem; color:#64748b; font-weight:700;">GBP</div>
+                </div>
+            </div>
+
+            <div id="modal-company-client-box" style="display:grid; grid-template-columns: 1fr 1fr; gap: 16px; background:#ffffff; border:1px solid #e2e8f0; border-radius:12px; padding:16px; margin-bottom: 20px;">
+                <div>
+                    <div style="font-size:0.72rem; font-weight:800; text-transform:uppercase; letter-spacing:0.05em; color:var(--brand-primary); margin-bottom:6px;"><i data-lucide="user" style="width:14px; height:14px; vertical-align:middle; display:inline-block;"></i> Client</div>
+                    <div id="modal-client-name" style="font-weight:700; font-size:0.9rem; color:#0f172a;"></div>
+                    <div id="modal-client-email" style="font-size:0.8rem; color:#64748b; margin-top:2px;"></div>
+                    <div id="modal-client-phone" style="font-size:0.8rem; color:#64748b; margin-top:2px;"></div>
+                </div>
+                <div>
+                    <div style="font-size:0.72rem; font-weight:800; text-transform:uppercase; letter-spacing:0.05em; color:var(--brand-primary); margin-bottom:6px;"><i data-lucide="building-2" style="width:14px; height:14px; vertical-align:middle; display:inline-block;"></i> Company</div>
+                    <div id="modal-company-name" style="font-weight:700; font-size:0.9rem; color:#0f172a;">Acme Corp UK Ltd</div>
+                    <div id="modal-company-meta" style="font-size:0.8rem; color:#64748b; margin-top:2px;">Reg #12345678 · 15 Regent Street, London</div>
+                </div>
+            </div>
+
+            <div style="margin-bottom: 24px;">
+                <h4 style="font-size:0.82rem; font-weight:800; text-transform:uppercase; letter-spacing:0.06em; color:#475569; margin-bottom:10px; display:flex; align-items:center; gap:6px;">
+                    <i data-lucide="shopping-bag" style="width:16px; height:16px; color:var(--brand-primary);"></i> Services / Products
+                </h4>
+                <div id="modal-order-line-items" style="background:#ffffff; border:1px solid #e2e8f0; border-radius:12px; padding:12px 16px; font-size:0.85rem; color:#334155;"></div>
+            </div>
+
+            <div style="margin-bottom: 12px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                    <h4 style="font-size:0.82rem; font-weight:800; text-transform:uppercase; letter-spacing:0.06em; color:#475569; margin:0; display:flex; align-items:center; gap:6px;">
+                        <i data-lucide="activity" style="width:16px; height:16px; color:var(--brand-primary);"></i> Order Progress
+                    </h4>
+                    <span id="modal-order-progress-text" style="font-size:0.8rem; font-weight:800; color:var(--brand-primary);">50% Complete</span>
+                </div>
+                <div class="progress-track" style="margin-bottom:16px; height:8px;">
+                    <div id="modal-order-progress-bar" class="progress-bar" style="width:50%;"></div>
+                </div>
                 <div class="timeline" id="modal-order-timeline"></div>
+            </div>
+
+            <div style="margin-bottom: 24px;">
+                <h4 style="font-size:0.82rem; font-weight:800; text-transform:uppercase; letter-spacing:0.06em; color:#475569; margin-bottom:10px; display:flex; align-items:center; gap:6px;">
+                    <i data-lucide="folder-lock" style="width:16px; height:16px; color:var(--brand-primary);"></i> Documents
+                </h4>
+                <div id="modal-order-documents" style="background:#ffffff; border:1px solid #e2e8f0; border-radius:12px; padding:12px 16px; font-size:0.85rem; color:#334155;"></div>
+            </div>
+
+            <div style="margin-bottom: 8px;">
+                <h4 style="font-size:0.82rem; font-weight:800; text-transform:uppercase; letter-spacing:0.06em; color:#475569; margin-bottom:10px; display:flex; align-items:center; gap:6px;">
+                    <i data-lucide="headphones" style="width:16px; height:16px; color:var(--brand-primary);"></i> Support
+                </h4>
+                <div id="modal-order-support" style="background:#ffffff; border:1px solid #e2e8f0; border-radius:12px; padding:12px 16px; font-size:0.85rem; color:#334155;"></div>
             </div>
         </div>
     </div>
@@ -1019,6 +1486,24 @@
     </div>
 
     <!-- ====================================================
+         AD01 FORM MODAL (embedded FormFill)
+         ==================================================== -->
+    <div id="modal-ad01-form" class="modal-overlay" style="z-index:1100;" onclick="onAd01FormModalBackdrop(event)">
+        <div class="modal-card formfill-modal-card" onclick="event.stopPropagation()">
+            <div class="modal-header" style="margin-bottom:0;">
+                <div>
+                    <h3>AD01 Form</h3>
+                    <p style="font-size:0.8rem; color:#64748b;">Change of registered office address</p>
+                </div>
+                <button type="button" class="btn-close" onclick="closeAd01FormModal()"><i data-lucide="x"></i></button>
+            </div>
+            <div class="formfill-modal-body">
+                <iframe id="ad01-form-frame" title="AD01 Form" src="about:blank" loading="lazy"></iframe>
+            </div>
+        </div>
+    </div>
+
+    <!-- ====================================================
          NEW STAFF TASK MODAL
          ==================================================== -->
     <div id="modal-new-task" class="modal-overlay">
@@ -1026,7 +1511,7 @@
             <div class="modal-header">
                 <div>
                     <h3>Create New Task</h3>
-                    <p style="font-size:0.8rem; color:#64748b;">Assign internal work to staff. Clients will not see this task.</p>
+                    <p style="font-size:0.8rem; color:#64748b;">Choose the department first. Then pick the staff who do that work. Clients never see this.</p>
                 </div>
                 <button class="btn-close" onclick="closeNewTaskModal()"><i data-lucide="x"></i></button>
             </div>
@@ -1041,6 +1526,13 @@
                     <div>
                         <label style="font-size:0.8rem; font-weight:700;">Description</label>
                         <textarea id="new-task-description" class="select-filter" style="width:100%; height:80px; margin-top:4px; font-family:inherit; padding:10px;" placeholder="What needs to be done?"></textarea>
+                    </div>
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Department</label>
+                        <select id="new-task-department" class="select-filter" style="width:100%; margin-top:4px;" onchange="onTaskDepartmentChange('new')">
+                            <option value="">Select department</option>
+                        </select>
+                        <p class="field-hint">New Signups = website registrations. Leave assignee empty to put it on that department’s list.</p>
                     </div>
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
                         <div>
@@ -1123,6 +1615,12 @@
                         <label style="font-size:0.8rem; font-weight:700;">Description</label>
                         <textarea id="edit-task-description" class="select-filter" style="width:100%; height:80px; margin-top:4px; font-family:inherit; padding:10px;"></textarea>
                     </div>
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Department</label>
+                        <select id="edit-task-department" class="select-filter" style="width:100%; margin-top:4px;" onchange="onTaskDepartmentChange('edit')">
+                            <option value="">Select department</option>
+                        </select>
+                    </div>
                     <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px;">
                         <div>
                             <label style="font-size:0.8rem; font-weight:700;">Priority</label>
@@ -1189,6 +1687,479 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=16.0"></script>
+    <!-- ====================================================
+         CREATE USER MODAL
+         ==================================================== -->
+    <div id="modal-create-user" class="modal-overlay">
+        <div class="modal-card" style="max-width:640px;">
+            <div class="modal-header">
+                <div>
+                    <h3>Create User</h3>
+                    <p style="font-size:0.8rem; color:#64748b;">Issue an account. The person signs in with this email and password. Role options are limited to what you are allowed to assign.</p>
+                </div>
+                <button type="button" class="btn-close" onclick="closeCreateUserModal()"><i data-lucide="x"></i></button>
+            </div>
+            <form id="create-user-form" onsubmit="submitCreateUserForm(event)" autocomplete="off">
+                <div id="create-user-error" style="display:none; padding:10px; border-radius:8px; background:#fef2f2; color:#dc2626; font-size:0.8rem; font-weight:600;" role="alert"></div>
+                <div style="display:flex; flex-direction:column; gap:14px; margin-top:10px;">
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Full Name *</label>
+                            <input type="text" id="create-user-name" class="select-filter" style="width:100%; margin-top:4px;" required>
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Email *</label>
+                            <input type="email" id="create-user-email" class="select-filter" style="width:100%; margin-top:4px;" required>
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Phone</label>
+                            <input type="text" id="create-user-phone" class="select-filter" style="width:100%; margin-top:4px;">
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Country</label>
+                            <input type="text" id="create-user-country" class="select-filter" style="width:100%; margin-top:4px;" value="United Kingdom">
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Role *</label>
+                            <select id="create-user-role" class="select-filter" style="width:100%; margin-top:4px;" required onchange="syncCreateUserDepartmentField()"></select>
+                        </div>
+                        <div id="create-user-department-wrap">
+                            <label style="font-size:0.8rem; font-weight:700;">Access</label>
+                            <p class="field-hint">Tick the areas this staff user may open. They can have more than one.</p>
+                            <div id="create-user-departments" class="dept-check-grid"></div>
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Status *</label>
+                            <select id="create-user-status" class="select-filter" style="width:100%; margin-top:4px;" required>
+                                <option value="Active">Active</option>
+                                <option value="Pending">Pending</option>
+                                <option value="Suspended">Suspended</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Password *</label>
+                            <input type="password" id="create-user-password" class="select-filter" style="width:100%; margin-top:4px;" minlength="10" required autocomplete="new-password">
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Confirm Password *</label>
+                            <input type="password" id="create-user-password-confirm" class="select-filter" style="width:100%; margin-top:4px;" minlength="10" required autocomplete="new-password">
+                        </div>
+                    </div>
+                    <p style="font-size:0.75rem; color:#64748b;">Minimum 10 characters. Give this password to the user. It is not stored in the page source.</p>
+                    <div style="display:flex; justify-content:flex-end; gap:10px;">
+                        <button type="button" class="btn-secondary" onclick="closeCreateUserModal()">Cancel</button>
+                        <button type="submit" class="btn-primary" id="create-user-submit"><i data-lucide="user-plus"></i> Create User</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="modal-staff-order" class="modal-overlay">
+        <div class="modal-card" style="max-width:820px;">
+            <div class="modal-header">
+                <div>
+                    <h3 id="staff-order-number">Order</h3>
+                    <p id="staff-order-meta" style="font-size:0.8rem; color:#64748b;"></p>
+                </div>
+                <button type="button" class="btn-close" onclick="closeStaffOrderModal()"><i data-lucide="x"></i></button>
+            </div>
+            <div id="staff-order-error" style="display:none; padding:10px; border-radius:8px; background:#fef2f2; color:#dc2626; font-size:0.8rem; font-weight:600;" role="alert"></div>
+            <div id="staff-order-success" style="display:none; padding:10px; border-radius:8px; background:#ecfdf5; color:#047857; font-size:0.8rem; font-weight:600;" role="status"></div>
+            <h4 class="staff-order-section-title">Order information</h4>
+            <div class="staff-order-book-grid">
+                <div><span class="staff-order-field-label">Date</span><strong id="staff-order-date">—</strong></div>
+                <div><span class="staff-order-field-label">Company</span><strong id="staff-order-company">—</strong></div>
+                <div class="full"><span class="staff-order-field-label">Category / Product</span><strong id="staff-order-product">—</strong></div>
+                <div><span class="staff-order-field-label">Price</span><strong id="staff-order-price">—</strong></div>
+                <div><span class="staff-order-field-label">Payment mode</span><select id="staff-order-payment-mode" class="select-filter staff-order-field-control" onchange="updateAdminOrderPaymentMode(staffOrderId, this.value)"></select></div>
+                <div><span class="staff-order-field-label">Status</span><select id="staff-order-status-select" class="select-filter staff-order-field-control" onchange="updateAdminOrderStatus(staffOrderId, this.value)"></select></div>
+            </div>
+            <div id="staff-order-manage" style="display:none; gap:8px; margin:12px 0 16px; align-items:center; flex-wrap:wrap;">
+                <button type="button" class="btn-primary" id="staff-order-progress-btn" onclick="advanceStaffOrderProgress()"><i data-lucide="plus"></i> Advance Progress</button>
+                <button type="button" class="portfolio-delete-btn" id="staff-order-delete-btn" style="display:none;" onclick="openDeleteOrderModal(staffOrderId)" title="Delete order" aria-label="Delete order"><i data-lucide="trash-2"></i></button>
+            </div>
+            <h4 class="staff-order-section-title">Checkout form details</h4>
+            <p class="staff-order-section-copy">Information the customer submitted on the website at checkout (not their Brixen account profile).</p>
+            <div id="staff-order-checkout-form" class="staff-order-book-grid" style="margin-bottom:16px;"></div>
+            <h4 class="staff-order-section-title">Products</h4>
+            <div id="staff-order-products" style="margin-bottom:16px;"></div>
+            <h4 class="staff-order-section-title">Documents</h4>
+            <p class="staff-order-section-copy">Files uploaded by the customer at website checkout.</p>
+            <div id="staff-order-documents" style="margin-bottom:16px;"></div>
+            <details class="staff-order-staff-only">
+                <summary>Internal notes (staff only)</summary>
+                <div id="staff-order-notes-wrap" style="margin-top:10px;">
+                    <textarea id="staff-order-notes" class="select-filter" style="width:100%; height:70px; font-family:inherit; padding:8px;" placeholder="Internal notes are never shown to the customer."></textarea>
+                    <button type="button" class="btn-secondary" style="margin-top:8px;" onclick="saveStaffOrderNotes()">Save notes</button>
+                </div>
+            </details>
+        </div>
+    </div>
+
+    <div id="modal-delete-order" class="modal-overlay" style="z-index:1100;">
+        <div class="modal-card" style="max-width:480px;">
+            <div class="modal-header">
+                <div>
+                    <h3>Delete order</h3>
+                    <p style="font-size:0.8rem; color:#64748b;">This permanently removes the order from the CMS. Related invoices and order documents are also removed. This cannot be undone.</p>
+                </div>
+                <button type="button" class="btn-close" onclick="closeDeleteOrderModal()"><i data-lucide="x"></i></button>
+            </div>
+            <div id="delete-order-error" style="display:none; padding:10px; border-radius:8px; background:#fef2f2; color:#dc2626; font-size:0.8rem; font-weight:600;" role="alert"></div>
+            <p style="font-size:0.88rem; color:#334155; margin:12px 0;">Type the order number to confirm:</p>
+            <p id="delete-order-number" style="font-weight:800; color:#0f172a; margin-bottom:8px;"></p>
+            <input type="text" id="delete-order-confirm" class="select-filter" style="width:100%;" placeholder="Order number" autocomplete="off">
+            <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:16px;">
+                <button type="button" class="btn-secondary" onclick="closeDeleteOrderModal()">Cancel</button>
+                <button type="button" class="portfolio-delete-btn" id="delete-order-submit" onclick="confirmDeleteOrder()" title="Delete order" aria-label="Delete order"><i data-lucide="trash-2"></i></button>
+            </div>
+        </div>
+    </div>
+
+    <div id="modal-deliver-document" class="modal-overlay" style="z-index:1100;">
+        <div class="modal-card" style="max-width:640px;">
+            <div class="modal-header">
+                <div>
+                    <h3>Upload Document</h3>
+                    <p style="font-size:0.8rem; color:#64748b;">This saves the file in the CRM, shows it in Documents Review, and can notify the customer.</p>
+                </div>
+                <button type="button" class="btn-close" onclick="closeDeliverDocumentModal()"><i data-lucide="x"></i></button>
+            </div>
+            <form id="deliver-document-form" onsubmit="submitDeliverDocumentForm(event)">
+                <div id="deliver-document-error" style="display:none; padding:10px; border-radius:8px; background:#fef2f2; color:#dc2626; font-size:0.8rem; font-weight:600;" role="alert"></div>
+                <div style="display:flex; flex-direction:column; gap:14px; margin-top:10px;">
+                    <div id="deliver-document-client-locked">
+                        <label style="font-size:0.8rem; font-weight:700;">Customer</label>
+                        <input type="text" id="deliver-document-client" class="select-filter" style="width:100%; margin-top:4px; background:#f8fafc;" readonly>
+                    </div>
+                    <div id="deliver-document-client-pick" style="display:none;">
+                        <label style="font-size:0.8rem; font-weight:700;">Customer *</label>
+                        <select id="deliver-document-client-select" class="select-filter" style="width:100%; margin-top:4px;" onchange="onDeliverDocumentClientChange()">
+                            <option value="">Select a customer</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Document name *</label>
+                        <input type="text" id="deliver-document-name" class="select-filter" style="width:100%; margin-top:4px;" placeholder="e.g. Certificate of Incorporation" required>
+                    </div>
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Document type / category *</label>
+                        <select id="deliver-document-category" class="select-filter" style="width:100%; margin-top:4px;" required>
+                            <option value="Order Documents">Order Documents</option>
+                            <option value="Certificate of Incorporation">Certificate of Incorporation</option>
+                            <option value="Company Documents">Company Documents</option>
+                            <option value="Proof of Address">Proof of Address</option>
+                            <option value="ID Document">ID Document</option>
+                            <option value="Compliance">Compliance</option>
+                            <option value="Legal">Legal</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">File *</label>
+                        <input type="file" id="deliver-document-file" accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.zip" style="width:100%; margin-top:4px; font-size:0.8rem;" required onchange="onDeliverDocumentFileChange()">
+                    </div>
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Description / message to client</label>
+                        <textarea id="deliver-document-message" class="select-filter" style="width:100%; height:80px; margin-top:4px; font-family:inherit; padding:10px;" placeholder="Optional short message shown in the client notification and email. Internal notes are never sent."></textarea>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Related company</label>
+                            <select id="deliver-document-company" class="select-filter" style="width:100%; margin-top:4px;" onchange="onDeliverDocumentCompanyChange()">
+                                <option value="">No company</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Related order</label>
+                            <select id="deliver-document-order" class="select-filter" style="width:100%; margin-top:4px;">
+                                <option value="">No order</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div style="display:flex; justify-content:flex-end; gap:10px;">
+                        <button type="button" class="btn-secondary" onclick="closeDeliverDocumentModal()">Cancel</button>
+                        <button type="submit" class="btn-primary" id="deliver-document-submit"><i data-lucide="upload"></i> Upload Document</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="modal-import-webfiling" class="modal-overlay" style="z-index:1100;">
+        <div class="modal-card" style="max-width:720px;">
+            <div class="modal-header">
+                <div>
+                    <h3>Import WebFiling companies</h3>
+                    <p style="font-size:0.8rem; color:#64748b;">Copy company numbers from your Companies House WebFiling saved companies list. The portal pulls live official records and creates registered company cards.</p>
+                </div>
+                <button type="button" class="btn-close" onclick="closeImportWebfilingModal()"><i data-lucide="x"></i></button>
+            </div>
+            <form id="import-webfiling-form" onsubmit="submitImportWebfilingForm(event)">
+                <div id="import-webfiling-error" style="display:none; padding:10px; border-radius:8px; background:#fef2f2; color:#dc2626; font-size:0.8rem; font-weight:600;" role="alert"></div>
+                <div id="import-webfiling-success" style="display:none; padding:10px; border-radius:8px; background:#ecfdf5; color:#047857; font-size:0.8rem; font-weight:600;" role="status"></div>
+                <div style="display:flex; flex-direction:column; gap:12px; margin-top:10px;">
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Company numbers *</label>
+                        <textarea id="import-webfiling-numbers" class="select-filter" style="width:100%; height:140px; margin-top:4px; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; padding:10px;" placeholder="12345678&#10;87654321&#10;SC123456" required></textarea>
+                        <p style="margin:6px 0 0; font-size:0.78rem; color:#64748b;">Paste one number per line (or comma-separated). Open <a href="https://ewf.companieshouse.gov.uk/runpage?page=savedCompanies" target="_blank" rel="noopener noreferrer">WebFiling saved companies</a>, copy the numbers, and paste them here.</p>
+                    </div>
+                    <div class="create-company-client-section">
+                        <label style="font-size:0.8rem; font-weight:700;">Client account *</label>
+                        <div class="create-company-client-mode" style="display:flex; gap:16px; margin-top:6px; flex-wrap:wrap;">
+                            <label style="display:flex; align-items:center; gap:6px; font-size:0.78rem; font-weight:600; color:#334155; cursor:pointer;">
+                                <input type="radio" name="import-webfiling-client-mode" value="existing" checked onchange="syncImportWebfilingClientMode()">
+                                Existing client
+                            </label>
+                            <label style="display:flex; align-items:center; gap:6px; font-size:0.78rem; font-weight:600; color:#334155; cursor:pointer;">
+                                <input type="radio" name="import-webfiling-client-mode" value="new" onchange="syncImportWebfilingClientMode()">
+                                New client (no portal account yet)
+                            </label>
+                        </div>
+                        <div id="import-webfiling-existing-client" style="margin-top:8px;">
+                            <select id="import-webfiling-client" class="select-filter" style="width:100%;">
+                                <option value="">Select client</option>
+                            </select>
+                        </div>
+                        <div id="import-webfiling-new-client" hidden style="margin-top:8px; display:flex; flex-direction:column; gap:10px;">
+                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                                <div>
+                                    <label style="font-size:0.8rem; font-weight:700;">Full name *</label>
+                                    <input type="text" id="import-webfiling-new-name" class="select-filter" style="width:100%; margin-top:4px;" autocomplete="off">
+                                </div>
+                                <div>
+                                    <label style="font-size:0.8rem; font-weight:700;">Email *</label>
+                                    <input type="email" id="import-webfiling-new-email" class="select-filter" style="width:100%; margin-top:4px;" autocomplete="off">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <label style="display:flex; align-items:center; gap:8px; font-size:0.78rem; font-weight:600; color:#334155; cursor:pointer;">
+                        <input type="checkbox" id="import-webfiling-update-existing">
+                        Update existing portal cards from Companies House (name, status, address, director)
+                    </label>
+                    <div id="import-webfiling-results" hidden style="margin-top:4px;">
+                        <h4 class="staff-order-section-title">Import results</h4>
+                        <div id="import-webfiling-results-body" class="import-webfiling-results"></div>
+                    </div>
+                    <div style="display:flex; justify-content:flex-end; gap:10px;">
+                        <button type="button" class="btn-secondary" onclick="closeImportWebfilingModal()">Close</button>
+                        <button type="submit" class="btn-primary" id="import-webfiling-submit">Import companies</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="modal-create-company" class="modal-overlay" style="z-index:1100;">
+        <div class="modal-card" style="max-width:640px;">
+            <div class="modal-header">
+                <div>
+                    <h3>Add company</h3>
+                    <p style="font-size:0.8rem; color:#64748b;">Add a company registered before the CRM, or any company that is not on a website order yet.</p>
+                </div>
+                <button type="button" class="btn-close" onclick="closeCreateCompanyModal()"><i data-lucide="x"></i></button>
+            </div>
+            <form id="create-company-form" onsubmit="submitCreateCompanyForm(event)">
+                <div id="create-company-error" style="display:none; padding:10px; border-radius:8px; background:#fef2f2; color:#dc2626; font-size:0.8rem; font-weight:600;" role="alert"></div>
+                <div style="display:flex; flex-direction:column; gap:12px; margin-top:10px;">
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Search Companies House</label>
+                        <div class="ch-search-wrap" style="margin-top:4px;">
+                            <input type="text" id="create-company-ch-search" class="select-filter" style="width:100%;" placeholder="Type name or number" autocomplete="off" oninput="searchCreateCompanyHouse(this)">
+                            <div class="ch-search-results" hidden></div>
+                        </div>
+                    </div>
+                    <div class="create-company-client-section">
+                        <label style="font-size:0.8rem; font-weight:700;">Client account *</label>
+                        <div class="create-company-client-mode" style="display:flex; gap:16px; margin-top:6px; flex-wrap:wrap;">
+                            <label style="display:flex; align-items:center; gap:6px; font-size:0.78rem; font-weight:600; color:#334155; cursor:pointer;">
+                                <input type="radio" name="create-company-client-mode" value="existing" checked onchange="syncCreateCompanyClientMode()">
+                                Existing client
+                            </label>
+                            <label style="display:flex; align-items:center; gap:6px; font-size:0.78rem; font-weight:600; color:#334155; cursor:pointer;">
+                                <input type="radio" name="create-company-client-mode" value="new" onchange="syncCreateCompanyClientMode()">
+                                New client (no portal account yet)
+                            </label>
+                        </div>
+                        <div id="create-company-existing-client" style="margin-top:8px;">
+                            <select id="create-company-client" class="select-filter" style="width:100%;">
+                                <option value="">Select client</option>
+                            </select>
+                        </div>
+                        <div id="create-company-new-client" hidden style="margin-top:8px; display:flex; flex-direction:column; gap:10px;">
+                            <p style="font-size:0.75rem; color:#64748b; margin:0;">We create the client record now. They can sign in later when you invite them or when they register on the website with the same email.</p>
+                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                                <div>
+                                    <label style="font-size:0.8rem; font-weight:700;">Full name *</label>
+                                    <input type="text" id="create-company-new-name" class="select-filter" style="width:100%; margin-top:4px;" autocomplete="off">
+                                </div>
+                                <div>
+                                    <label style="font-size:0.8rem; font-weight:700;">Email *</label>
+                                    <input type="email" id="create-company-new-email" class="select-filter" style="width:100%; margin-top:4px;" autocomplete="off">
+                                </div>
+                            </div>
+                            <div>
+                                <label style="font-size:0.8rem; font-weight:700;">Phone</label>
+                                <input type="text" id="create-company-new-phone" class="select-filter" style="width:100%; margin-top:4px;" placeholder="Optional" autocomplete="off">
+                            </div>
+                        </div>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Company name *</label>
+                            <input type="text" id="create-company-name" class="select-filter" style="width:100%; margin-top:4px;" required>
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Company number</label>
+                            <input type="text" id="create-company-number" class="select-filter" style="width:100%; margin-top:4px;" placeholder="Optional">
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Incorporation date</label>
+                            <input type="date" id="create-company-inc" class="select-filter" style="width:100%; margin-top:4px;">
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Status</label>
+                            <select id="create-company-status" class="select-filter" style="width:100%; margin-top:4px;">
+                                <option value="Active">Active</option>
+                                <option value="Dissolved">Dissolved</option>
+                                <option value="Liquidation">Liquidation</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Director</label>
+                            <input type="text" id="create-company-director" class="select-filter" style="width:100%; margin-top:4px;">
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Package</label>
+                            <input type="text" id="create-company-package" class="select-filter" style="width:100%; margin-top:4px;" value="Historical Registration">
+                        </div>
+                    </div>
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Registered office</label>
+                        <input type="text" id="create-company-office" class="select-filter" style="width:100%; margin-top:4px;" placeholder="United Kingdom">
+                    </div>
+                    <div style="display:flex; justify-content:flex-end; gap:10px;">
+                        <button type="button" class="btn-secondary" onclick="closeCreateCompanyModal()">Cancel</button>
+                        <button type="submit" class="btn-primary" id="create-company-submit">Save company</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="modal-create-service" class="modal-overlay" style="z-index:1100;">
+        <div class="modal-card" style="max-width:560px;">
+            <div class="modal-header">
+                <div>
+                    <h3 id="service-modal-title">Add Service</h3>
+                    <p id="service-modal-subtitle" style="font-size:0.8rem; color:#64748b;">This adds a service to the CRM catalog. It does not create a website product.</p>
+                </div>
+                <button type="button" class="btn-close" onclick="closeCreateServiceModal()"><i data-lucide="x"></i></button>
+            </div>
+            <form id="create-service-form" onsubmit="submitCreateServiceForm(event)">
+                <input type="hidden" id="create-service-id" value="">
+                <div id="create-service-error" style="display:none; padding:10px; border-radius:8px; background:#fef2f2; color:#dc2626; font-size:0.8rem; font-weight:600;" role="alert"></div>
+                <div style="display:flex; flex-direction:column; gap:12px; margin-top:10px;">
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Name *</label>
+                        <input type="text" id="create-service-name" class="select-filter" style="width:100%; margin-top:4px;" required>
+                    </div>
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Category *</label>
+                        <input type="text" id="create-service-category" class="select-filter" style="width:100%; margin-top:4px;" value="Corporate" required>
+                    </div>
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Description</label>
+                        <textarea id="create-service-description" class="select-filter" style="width:100%; height:70px; margin-top:4px; font-family:inherit; padding:10px;"></textarea>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Price (£) *</label>
+                            <input type="number" id="create-service-price" class="select-filter" style="width:100%; margin-top:4px;" min="0" step="0.01" required>
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Duration</label>
+                            <input type="text" id="create-service-duration" class="select-filter" style="width:100%; margin-top:4px;" value="12 Months">
+                        </div>
+                    </div>
+                    <div id="create-service-status-wrap" style="display:none;">
+                        <label style="font-size:0.8rem; font-weight:700;">Status</label>
+                        <select id="create-service-status" class="select-filter" style="width:100%; margin-top:4px;">
+                            <option value="Active">Active</option>
+                            <option value="Inactive">Inactive</option>
+                        </select>
+                    </div>
+                    <div style="display:flex; justify-content:flex-end; gap:10px;">
+                        <button type="button" class="btn-secondary" onclick="closeCreateServiceModal()">Cancel</button>
+                        <button type="submit" class="btn-primary" id="create-service-submit">Save Service</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="modal-company-portfolio" class="modal-overlay">
+        <div class="modal-card portfolio-modal-card">
+            <div class="modal-header">
+                <div>
+                    <h3 id="portfolio-detail-name">Company</h3>
+                    <p id="portfolio-detail-number"></p>
+                    <p id="portfolio-detail-address" class="portfolio-detail-address"></p>
+                    <div class="portfolio-detail-header-badges">
+                        <span class="portfolio-badge-uk" id="portfolio-detail-country-badge">UK</span>
+                        <span class="portfolio-badge-status" id="portfolio-detail-status-badge">active</span>
+                    </div>
+                </div>
+                <button type="button" class="btn-close" onclick="closeCompanyPortfolioDetail()"><i data-lucide="x"></i></button>
+            </div>
+            <div class="portfolio-tabs" role="tablist" aria-label="Company details">
+                <button type="button" class="portfolio-tab active" data-tab="overview" onclick="switchPortfolioDetailTab('overview')">Overview</button>
+                <button type="button" class="portfolio-tab" data-tab="office" onclick="switchPortfolioDetailTab('office')">Registered Office</button>
+                <button type="button" class="portfolio-tab" data-tab="activity" onclick="switchPortfolioDetailTab('activity')">Business Activity</button>
+                <button type="button" class="portfolio-tab" data-tab="compliance" onclick="switchPortfolioDetailTab('compliance')">Compliance</button>
+                <button type="button" class="portfolio-tab" data-tab="orders" onclick="switchPortfolioDetailTab('orders')">Orders / Services</button>
+                <button type="button" class="portfolio-tab" data-tab="documents" onclick="switchPortfolioDetailTab('documents')">Documents</button>
+                <button type="button" class="portfolio-tab" data-tab="support" onclick="switchPortfolioDetailTab('support')">Support</button>
+            </div>
+            <div class="portfolio-tab-panel" data-panel="overview">
+                <div class="portfolio-detail-grid">
+                    <div><span>Company name</span><strong id="portfolio-detail-name-field">—</strong></div>
+                    <div><span>Company number</span><strong id="portfolio-detail-number-field">—</strong></div>
+                    <div><span>Status</span><strong id="portfolio-detail-status">—</strong></div>
+                    <div><span>Country</span><strong id="portfolio-detail-country">—</strong></div>
+                    <div><span>Incorporation date</span><strong id="portfolio-detail-inc">—</strong></div>
+                    <div><span>Director</span><strong id="portfolio-detail-director">—</strong></div>
+                </div>
+            </div>
+            <div class="portfolio-tab-panel" data-panel="office" hidden>
+                <div class="portfolio-detail-grid">
+                    <div class="full"><span>Address</span><strong id="portfolio-detail-office">—</strong></div>
+                    <div><span>Postcode</span><strong id="portfolio-detail-postcode">—</strong></div>
+                </div>
+            </div>
+            <div class="portfolio-tab-panel" data-panel="activity" hidden>
+                <p class="portfolio-empty-copy" id="portfolio-detail-activity">No SIC or business activity details on file.</p>
+            </div>
+            <div class="portfolio-tab-panel" data-panel="compliance" hidden>
+                <div id="portfolio-detail-compliance"></div>
+            </div>
+            <div class="portfolio-tab-panel" data-panel="orders" hidden>
+                <div id="portfolio-detail-orders"></div>
+            </div>
+            <div class="portfolio-tab-panel" data-panel="documents" hidden>
+                <div id="portfolio-detail-documents"></div>
+            </div>
+            <div class="portfolio-tab-panel" data-panel="support" hidden>
+                <div id="portfolio-detail-support"></div>
+            </div>
+            <div class="portfolio-modal-actions">
+                <button type="button" class="portfolio-delete-btn" id="portfolio-delete-company-btn" style="display:none;" onclick="deleteCompanyFromDetail()" title="Delete company" aria-label="Delete company"><i data-lucide="trash-2"></i></button>
+                <button type="button" class="btn-secondary" onclick="closeCompanyPortfolioDetail()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js?v=114.0"></script>
 </body>
 </html>
