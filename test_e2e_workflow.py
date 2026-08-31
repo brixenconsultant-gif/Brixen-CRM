@@ -148,7 +148,16 @@ def run_e2e_test():
             'service_name': service_name,
             'price': order_price,
             'total': order_total,
-            'status': 'Processing'
+            'status': 'Processing',
+            'line_items': [{
+                'product_id': 'e2e-1',
+                'sku': 'FORM-UK',
+                'product_name': service_name,
+                'quantity': 1,
+                'unit_price': order_price,
+                'line_total': order_price,
+                'category': 'Incorporation'
+            }]
         }
     }
     ord_payload_bytes = json.dumps(order_created_payload).encode('utf-8')
@@ -176,6 +185,12 @@ def run_e2e_test():
     assert order_db['user_id'] == created_client_id, f"Error: Order user_id linkage mismatch ({order_db['user_id']} vs {created_client_id})"
     assert order_db['order_number'] == order_number, f"Error: Order number mismatch."
     assert order_db['total'] == order_total, f"Error: Order total mismatch."
+    e2e_lines = query_db("SELECT * FROM order_line_items WHERE order_id = ?;", (created_order_id,))
+    assert len(e2e_lines) == 1, "Error: Expected WooCommerce line item to be stored."
+    assert e2e_lines[0]['sku'] == 'FORM-UK'
+    assert e2e_lines[0]['category_name'] == 'Incorporation'
+    e2e_timeline = query_db("SELECT * FROM order_timeline WHERE order_id = ?;", (created_order_id,))
+    assert len(e2e_timeline) >= 5, "Error: Website order should have processing history."
     print(f"  ✓ Order Linked Correctly:")
     print(f"    - Order ID: {order_db['id']}")
     print(f"    - Order Number: {order_db['order_number']}")

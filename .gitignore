@@ -20,9 +20,15 @@ __pycache__/
 .pytest_cache/
 .coverage
 
+# Virtualenv
+.venv/
+venv/
+
 # IDE & OS Files
 .DS_Store
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.tmp
+crm.log

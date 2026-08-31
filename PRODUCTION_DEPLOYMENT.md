@@ -19,6 +19,7 @@ This document provides complete instructions for deploying the **Brixen Consulta
 # Web & Server Configuration
 WORDPRESS_BASE_URL="https://brixenconsultants.com"
 CRM_BASE_URL="https://portal.brixenconsultants.com"
+PORTAL_PAGE_URL="https://portal.brixenconsultants.com"
 PORT=5050
 HOST="127.0.0.1"
 
@@ -54,19 +55,27 @@ Generate a free TLS/SSL certificate using Certbot:
 
 ```bash
 sudo apt update && sudo apt install -y nginx certbot python3-certbot-nginx
-sudo certbot --nginx -d portal.brixenconsultants.com
+# Public portal: https://portal.brixenconsultants.com
 ```
 
 ---
 
-## 5. Database Setup (SQLite Hardening)
+## 5. Database Setup (SQLite on Hostinger VPS)
+
+The live portal runs on **Hostinger VPS** (`portal.brixenconsultants.com` → `187.52.116.13`). The CRM database is a **SQLite file on that VPS**, not on the public website. It is stored outside the web root and is not downloadable from the browser.
+
+**Current hardening (production):**
+- File path: `/var/www/brixen-crm/hypetex.db`
+- Permissions: `600` owned by `brixen:brixen`
+- SQLite WAL mode + 5s busy timeout
+- Nginx blocks direct access to `.db` files
 
 ```bash
-# Create directory outside web root
-sudo mkdir -p /var/www/brixen-crm/backups
-sudo chown -R www-data:www-data /var/www/brixen-crm
+# Create backup directories outside web root
+sudo mkdir -p /var/www/brixen-crm/backups/db
+sudo chown -R brixen:brixen /var/www/brixen-crm/backups
 
-# Initialize Schema
+# Initialize Schema (first deploy only)
 cd /var/www/brixen-crm
 python3 db.py
 
@@ -74,6 +83,19 @@ python3 db.py
 sqlite3 /var/www/brixen-crm/hypetex.db "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;"
 sudo chmod 600 /var/www/brixen-crm/hypetex.db
 ```
+
+**Daily automated backups** (recommended on Hostinger VPS):
+
+```bash
+sudo install -m 750 scripts/backup_db.sh /var/www/brixen-crm/scripts/backup_db.sh
+sudo chown brixen:brixen /var/www/brixen-crm/scripts/backup_db.sh
+# Run at 02:00 daily; keeps 14 days of snapshots
+(crontab -l 2>/dev/null; echo '0 2 * * * DATABASE_URL=/var/www/brixen-crm/hypetex.db /var/www/brixen-crm/scripts/backup_db.sh >> /var/www/brixen-crm/backups/db/backup.log 2>&1') | crontab -
+```
+
+Also enable **Hostinger VPS snapshots/backups** in hPanel for full-server recovery.
+
+**Note:** Hostinger **managed MySQL** is a separate product. This app is built for SQLite; moving to MySQL would require a full database-layer rewrite, not just a file copy.
 
 ---
 
@@ -123,7 +145,7 @@ Create `/etc/nginx/sites-available/brixen-crm`:
 
 ```nginx
 server {
-    server_name portal.brixenconsultants.com;
+    server_name 127.0.0.1;
 
     client_max_body_size 25M;
 
@@ -166,6 +188,7 @@ sudo systemctl reload nginx
 1. In WP Admin, navigate to **WP Admin → Brixen CRM**.
 2. Enter:
    - **CRM Base URL**: `https://portal.brixenconsultants.com`
+   - **Portal page**: `https://portal.brixenconsultants.com`
    - **Webhook Secret**: `CHANGE_ME_IN_LOCAL_ENV` (set a unique secret in the local/production environment; never commit the real value)
 3. Click **Save Changes**.
 

@@ -87,23 +87,7 @@ class Brixen_CRM_Bulk_Sync {
         $order_payloads = array();
 
         foreach ($orders as $order) {
-            $items = array();
-            foreach ($order->get_items() as $item) {
-                $items[] = $item->get_name();
-            }
-            $service_name = !empty($items) ? implode(', ', $items) : 'Corporate Formation Service';
-
-            $order_payloads[] = array(
-                'woocommerce_order_id' => (string) $order->get_id(),
-                'order_number'         => '#' . $order->get_order_number(),
-                'wordpress_user_id'   => (string) $order->get_customer_id(),
-                'email'                => $order->get_billing_email(),
-                'full_name'            => $order->get_billing_first_name() . ' ' . $order->get_billing_last_name(),
-                'service_name'         => $service_name,
-                'price'                => (float) $order->get_subtotal(),
-                'total'                => (float) $order->get_total(),
-                'status'               => ucfirst($order->get_status()),
-            );
+            $order_payloads[] = Brixen_CRM_Sync_Plugin::build_order_payload($order);
         }
 
         $crm_url = rtrim(Brixen_CRM_Webhook_Sender::get_crm_url(), '/') . '/api/v1/wordpress/sync-orders';
@@ -123,6 +107,80 @@ class Brixen_CRM_Bulk_Sync {
             ),
             'body'      => $json_payload,
             'timeout'   => 30,
+            'sslverify' => false,
+        ));
+
+        if (is_wp_error($response)) {
+            return array('success' => false, 'error' => $response->get_error_message());
+        }
+
+        $body = wp_remote_retrieve_body($response);
+        return json_decode($body, true);
+    }
+
+    /**
+     * Synchronize WooCommerce products into the CRM services catalog / order filters.
+     *
+     * @param int $limit Batch limit
+     * @return array Results summary
+     */
+    public static function sync_all_products($limit = 500) {
+        if (!function_exists('wc_get_products')) {
+            return array('success' => false, 'error' => 'WooCommerce is not active');
+        }
+
+        $products = wc_get_products(array(
+            'limit'  => $limit,
+            'status' => array('publish', 'private', 'draft'),
+            'orderby' => 'title',
+            'order'   => 'ASC',
+            'return'  => 'objects',
+        ));
+
+        $product_payloads = array();
+        foreach ($products as $product) {
+            if (!$product || !is_object($product)) {
+                continue;
+            }
+            $product_id = $product->get_id();
+            $cats = array();
+            if (function_exists('get_the_terms')) {
+                $terms = get_the_terms($product_id, 'product_cat');
+                if ($terms && !is_wp_error($terms)) {
+                    foreach ($terms as $term) {
+                        $cats[] = $term->name;
+                    }
+                }
+            }
+            $status = method_exists($product, 'get_status') ? $product->get_status() : 'publish';
+            $product_payloads[] = array(
+                'woocommerce_product_id' => (string) $product_id,
+                'name'                   => $product->get_name(),
+                'description'            => wp_strip_all_tags($product->get_short_description() ?: $product->get_description() ?: $product->get_name()),
+                'category'               => !empty($cats) ? $cats[0] : 'General',
+                'price'                  => (float) $product->get_regular_price() ?: (float) $product->get_price(),
+                'status'                 => $status,
+                'sku'                    => $product->get_sku(),
+            );
+        }
+
+        $crm_url = rtrim(Brixen_CRM_Webhook_Sender::get_crm_url(), '/') . '/api/v1/wordpress/sync-products';
+        $secret  = Brixen_CRM_Webhook_Sender::get_webhook_secret();
+
+        $payload = array(
+            'products' => $product_payloads,
+        );
+
+        $json_payload = wp_json_encode($payload);
+        $signature    = 'sha256=' . hash_hmac('sha256', $json_payload, $secret);
+
+        $response = wp_remote_post($crm_url, array(
+            'headers' => array(
+                'Content-Type'       => 'application/json',
+                'X-Brixen-Signature' => $signature,
+            ),
+            'body'      => $json_payload,
+            'timeout'   => 60,
             'sslverify' => false,
         ));
 

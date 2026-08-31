@@ -88,6 +88,12 @@ CREATE TABLE IF NOT EXISTS companies (
     utr_number TEXT,
     authentication_code TEXT,
     activation_code TEXT,
+    identity_verified TEXT NOT NULL DEFAULT 'Not started',
+    identity_verified_at TIMESTAMP,
+    psc_verified TEXT NOT NULL DEFAULT 'Not started',
+    psc_verified_at TIMESTAMP,
+    ch_checked_at TIMESTAMP,
+    registration_notified_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
@@ -117,6 +123,28 @@ CREATE TABLE IF NOT EXISTS company_directors (
     appointed_date DATE NOT NULL,
     FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
 );
+
+-- 4b. Real company owners (formation-form person and form email; not portal or checkout login)
+CREATE TABLE IF NOT EXISTS company_owners (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER NOT NULL UNIQUE,
+    company_id INTEGER,
+    full_name TEXT NOT NULL DEFAULT '',
+    form_email TEXT NOT NULL DEFAULT '',
+    phone TEXT,
+    date_of_birth TEXT,
+    nationality TEXT,
+    passport_cnic TEXT,
+    address TEXT,
+    source TEXT NOT NULL DEFAULT 'formation_form',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
+    FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_company_owners_email ON company_owners(form_email);
+CREATE INDEX IF NOT EXISTS idx_company_owners_company ON company_owners(company_id);
 
 -- 5. Addresses
 CREATE TABLE IF NOT EXISTS addresses (
@@ -175,6 +203,8 @@ CREATE TABLE IF NOT EXISTS orders (
     woocommerce_order_id TEXT,
     payment_mode TEXT,
     portfolio_hidden INTEGER NOT NULL DEFAULT 0,
+    owner_name TEXT,
+    owner_form_email TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -362,3 +392,57 @@ CREATE TABLE IF NOT EXISTS tasks (
     FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE SET NULL,
     FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE SET NULL
 );
+
+-- 17b. Company yearly accounts filings
+CREATE TABLE IF NOT EXISTS company_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    period_start DATE NOT NULL,
+    period_end DATE NOT NULL,
+    due_date DATE,
+    accounts_type TEXT NOT NULL DEFAULT 'Micro-entity',
+    status TEXT NOT NULL DEFAULT 'Not started',
+    confirmation_number TEXT,
+    notes TEXT,
+    filed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_company_accounts_period
+    ON company_accounts(company_id, period_end);
+
+-- 17c. Cash book lines posted from bank statements (FRS 105 headings)
+CREATE TABLE IF NOT EXISTS company_book_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL,
+    period_end DATE NOT NULL,
+    entry_date DATE NOT NULL,
+    description TEXT NOT NULL,
+    amount REAL NOT NULL,
+    category TEXT NOT NULL DEFAULT 'Other',
+    source TEXT NOT NULL DEFAULT 'manual',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_company_book_entries_company_period
+    ON company_book_entries(company_id, period_end);
+
+-- 18. Outbound customer emails (retry until SMTP accepts)
+CREATE TABLE IF NOT EXISTS email_outbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipient TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    body_text TEXT,
+    body_html TEXT,
+    status TEXT NOT NULL DEFAULT 'queued',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    message_id TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    sent_at TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_email_outbox_status
+    ON email_outbox(status, created_at);

@@ -10,6 +10,11 @@ let lastNotifications = [];
 let notificationsOpen = false;
 let accountMenuOpen = false;
 
+const APPLE_UI_FONT = '"SF Pro Text", "SF Pro Display", "SF Pro", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif';
+if (typeof Chart === 'function' && Chart.defaults && Chart.defaults.font) {
+    Chart.defaults.font.family = APPLE_UI_FONT;
+}
+
 const ALL_USER_ROLES = ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF', 'CLIENT'];
 const ROLE_RANK = { CLIENT: 0, STAFF: 1, MANAGER: 2, ADMIN: 3, SUPER_ADMIN: 4 };
 const STAFF_DEPARTMENTS = [
@@ -19,6 +24,7 @@ const STAFF_DEPARTMENTS = [
     'Support',
     'Compliance',
     'Accounts',
+    'Accountancy',
     'General'
 ];
 
@@ -28,7 +34,7 @@ function isAdminShellUser(user) {
 }
 
 function canViewAdminDashboard() {
-    return currentUser && ['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(currentUser.role);
+    return currentUser && ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF'].includes(currentUser.role);
 }
 
 function canViewRevenue() {
@@ -36,7 +42,7 @@ function canViewRevenue() {
 }
 
 function hasFullModuleAccess() {
-    return currentUser && ['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(currentUser.role);
+    return currentUser && ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF'].includes(currentUser.role);
 }
 
 const VIEW_ACCESS = {
@@ -44,7 +50,8 @@ const VIEW_ACCESS = {
     'admin-orders': ['Orders', 'Support'],
     'admin-services': ['Orders'],
     'admin-documents': ['Documents', 'Compliance'],
-    'admin-invoices': ['Accounts']
+    'admin-invoices': ['Accounts'],
+    'admin-accountancy': ['Accountancy', 'Accounts', 'Compliance']
 };
 
 function hasModuleAccess(areas) {
@@ -57,6 +64,7 @@ function hasModuleAccess(areas) {
 function canOpenView(viewName) {
     if (!viewName || viewName === 'login' || viewName === 'client-profile') return true;
     if (viewName === 'admin-dashboard') return canViewAdminDashboard();
+    if (viewName === 'admin-invoices' && currentUser && currentUser.role === 'STAFF') return false;
     if (viewName === 'admin-logs' || viewName === 'admin-settings') {
         return canManageUsers();
     }
@@ -76,8 +84,62 @@ function canOpenView(viewName) {
 function defaultPortalView() {
     if (!isAdminShellUser(currentUser)) return 'client-dashboard';
     if (canViewAdminDashboard()) return 'admin-dashboard';
-    const preferred = ['admin-orders', 'admin-customers', 'admin-documents', 'admin-invoices', 'admin-tasks', 'client-profile'];
+    const preferred = ['admin-orders', 'admin-customers', 'admin-documents', 'admin-invoices', 'admin-accountancy', 'admin-tasks', 'client-profile'];
     return preferred.find(canOpenView) || 'client-profile';
+}
+
+const VIEW_HASH = {
+    'client-dashboard': 'dashboard',
+    'client-profile': 'profile',
+    'client-companies': 'companies',
+    'client-accountancy': 'accountancy',
+    'client-addresses': 'addresses',
+    'client-orders': 'orders',
+    'client-invoices': 'invoices',
+    'client-payments': 'payments',
+    'client-documents': 'documents',
+    'client-services': 'services',
+    'client-support': 'support',
+    'client-messages': 'messages',
+    'admin-dashboard': 'admin-dashboard',
+    'admin-customers': 'admin-customers',
+    'admin-companies': 'admin-companies',
+    'admin-accountancy': 'admin-accountancy',
+    'admin-orders': 'admin-orders',
+    'admin-tasks': 'admin-tasks',
+    'admin-services': 'admin-services',
+    'admin-invoices': 'admin-invoices',
+    'admin-documents': 'admin-documents',
+    'admin-logs': 'admin-logs',
+    'admin-settings': 'admin-settings',
+};
+
+const HASH_VIEW = {
+    'admin-team': 'admin-tasks',
+    'admin-quick-tasks': 'admin-tasks',
+};
+Object.keys(VIEW_HASH).forEach((view) => {
+    HASH_VIEW[VIEW_HASH[view]] = view;
+    HASH_VIEW[view] = view;
+});
+
+function viewFromHash(raw) {
+    const hash = String(raw || '').replace(/^#/, '').split(/[/?]/)[0].trim();
+    if (!hash || hash === 'login') return null;
+    return HASH_VIEW[hash] || null;
+}
+
+function syncViewHash(viewName) {
+    if (!viewName || viewName === 'login') return;
+    const next = '#' + (VIEW_HASH[viewName] || viewName);
+    if (location.hash === next) return;
+    history.replaceState(null, '', location.pathname + location.search + next);
+}
+
+function initialPortalView() {
+    const fromHash = viewFromHash(location.hash);
+    if (fromHash && canOpenView(fromHash)) return fromHash;
+    return defaultPortalView();
 }
 
 function applyPortalAccessNav() {
@@ -86,6 +148,11 @@ function applyPortalAccessNav() {
         el.style.display = canOpenView(view) ? '' : 'none';
     });
     applyAdminRevenueCards();
+    applyAdminOrderFinanceVisibility();
+    const crmInvoices = document.getElementById('crm-tab-invoices');
+    if (crmInvoices) {
+        crmInvoices.style.display = (currentUser && currentUser.role === 'STAFF') ? 'none' : '';
+    }
 }
 
 let detachedRevenueCards = [];
@@ -116,6 +183,18 @@ function applyAdminRevenueCards() {
         });
         el.remove();
     });
+}
+
+function applyAdminOrderFinanceVisibility() {
+    const hide = !canViewRevenue();
+    document.querySelectorAll('.orders-table-wrap, .invoices-table-wrap, #modal-staff-order').forEach((el) => {
+        el.classList.toggle('hide-order-finance', hide);
+    });
+    const paymentFilter = document.getElementById('filter-admin-order-payment');
+    if (paymentFilter) {
+        paymentFilter.hidden = hide;
+        if (hide) paymentFilter.value = '';
+    }
 }
 
 function creatableRolesFor(user) {
@@ -258,6 +337,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         showLoginView();
     }
     setupEventListeners();
+    window.addEventListener('hashchange', () => {
+        if (!currentUser) return;
+        const view = viewFromHash(location.hash);
+        if (view && view !== activeView && canOpenView(view)) switchView(view);
+    });
     window.addEventListener('resize', () => {
         if (!isMobileNav()) closeMobileNav();
     });
@@ -291,18 +375,44 @@ function setupEventListeners() {
         const orderAction = e.target.closest('[data-order-action]');
         if (orderAction) {
             const action = orderAction.getAttribute('data-order-action');
-            if (action === 'status' || action === 'payment_mode') return;
+            if (action === 'status' || action === 'payment_mode' || action === 'total') return;
             e.preventDefault();
             e.stopPropagation();
             const orderId = Number(orderAction.getAttribute('data-order-id'));
             if (!orderId) return;
             if (action === 'open') openStaffOrderWorkspace(orderId);
+            if (action === 'change-details') openStaffOrderWorkspace(orderId, { editCheckout: true });
             if (action === 'progress') advanceOrderProgress(orderId, Number(orderAction.getAttribute('data-progress') || 0));
             if (action === 'delete') openDeleteOrderModal(orderId, orderAction.getAttribute('data-order-number'));
+            if (action === 'edit-price') beginAdminOrderPriceEdit(orderId, orderAction.closest('.table-price-wrap'));
+            return;
+        }
+        const customerAction = e.target.closest('[data-customer-action]');
+        if (customerAction) {
+            e.preventDefault();
+            e.stopPropagation();
+            const customerId = Number(customerAction.getAttribute('data-customer-id'));
+            if (!customerId) return;
+            const action = customerAction.getAttribute('data-customer-action');
+            if (action === 'profile') openCrmClientModal(customerId);
+            if (action === 'password') {
+                setClientPortalPassword(customerId, customerAction.getAttribute('data-customer-email') || '');
+            }
+            return;
+        }
+        const accountancyAction = e.target.closest('[data-accountancy-action]');
+        if (accountancyAction) {
+            e.preventDefault();
+            e.stopPropagation();
+            const companyId = Number(accountancyAction.getAttribute('data-accountancy-id'));
+            if (!companyId) return;
+            const action = accountancyAction.getAttribute('data-accountancy-action');
+            if (action === 'books') openAccountancyBooks(companyId);
+            if (action === 'file') openFileAccountsModal(companyId);
             return;
         }
         const orderRow = e.target.closest('#adm-orders-table-body tr[data-order-id]');
-        if (orderRow && !e.target.closest('select, a, button, input, textarea')) {
+        if (orderRow && !e.target.closest('select, a, button, input, textarea, .icon-edit-btn, .table-price-wrap')) {
             const orderId = Number(orderRow.getAttribute('data-order-id'));
             if (orderId) openStaffOrderWorkspace(orderId);
         }
@@ -325,6 +435,24 @@ function setupEventListeners() {
             if (modeSel) {
                 const orderId = Number(modeSel.getAttribute('data-order-id'));
                 if (orderId) updateAdminOrderPaymentMode(orderId, modeSel.value);
+                return;
+            }
+            const priceInput = e.target.closest('input[data-order-action="total"]');
+            if (priceInput) {
+                const orderId = Number(priceInput.getAttribute('data-order-id'));
+                if (orderId) updateAdminOrderTotal(orderId, priceInput.value, priceInput);
+            }
+        });
+        ordersBody.addEventListener('keydown', (e) => {
+            const priceInput = e.target.closest('input[data-order-action="total"]');
+            if (!priceInput) return;
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                priceInput.blur();
+            }
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                loadAdminOrders();
             }
         });
     }
@@ -341,7 +469,7 @@ async function checkAuth() {
         if (data.status === 'success' && data.user) {
             currentUser = data.user;
             updateUserUI();
-            switchView(defaultPortalView());
+            switchView(initialPortalView());
             setAuthShellState(false, true);
         } else {
             currentUser = null;
@@ -397,6 +525,7 @@ function showLoginView() {
 
     setOpenSidebar(null);
     setHeaderAuthVisible(false);
+    if (typeof hideGlobalSearchResults === 'function') hideGlobalSearchResults();
     clearLoggedInChrome();
     syncCreateUserButtons();
     const topMenuBar = document.getElementById('top-horizontal-menu-bar');
@@ -431,7 +560,7 @@ async function handleFormLogin(e) {
         if (data.status === 'success') {
             currentUser = data.user;
             updateUserUI();
-            switchView(defaultPortalView());
+            switchView(initialPortalView());
             setAuthShellState(false, true);
         } else {
             if (errDiv) {
@@ -738,21 +867,9 @@ function updateUserUI() {
     applyPortalAccessNav();
     syncCreateUserButtons();
     
-    // Sync top horizontal menu bar
     const topMenuBar = document.getElementById('top-horizontal-menu-bar');
-    const topClientList = document.getElementById('top-menu-list-client');
-    const topAdminList = document.getElementById('top-menu-list-admin');
-    if (topMenuBar) {
-        topMenuBar.style.display = currentUser ? 'block' : 'none';
-    }
-    if (topClientList) {
-        topClientList.style.display = (currentUser && !isAdminShellUser(currentUser)) ? 'flex' : 'none';
-    }
-    if (topAdminList) {
-        topAdminList.style.display = (currentUser && isAdminShellUser(currentUser)) ? 'flex' : 'none';
-    }
+    if (topMenuBar) topMenuBar.style.display = 'none';
 
-    // Refresh notifications count
     loadNotificationsCount();
 }
 
@@ -782,6 +899,7 @@ function switchView(viewName) {
     }
     activeView = viewName;
     setActiveViewPanel(viewName);
+    syncViewHash(viewName);
     
     // Deactivate nav items
     document.querySelectorAll('.nav-item').forEach(item => {
@@ -804,6 +922,7 @@ function switchView(viewName) {
         case 'client-orders': loadClientOrders(); break;
         case 'client-dashboard': loadClientDashboard(); break;
         case 'client-companies': loadClientCompanies(); break;
+        case 'client-accountancy': loadClientAccountancy(); break;
         case 'client-addresses': loadClientAddresses(); break;
         case 'client-invoices': loadClientInvoices(); break;
         case 'client-payments': loadClientPayments(); break;
@@ -825,6 +944,7 @@ function switchView(viewName) {
             break;
         case 'admin-customers': loadAdminCustomers(); break;
         case 'admin-companies': loadAdminCompanies(); break;
+        case 'admin-accountancy': loadAdminAccountancy(); break;
         case 'admin-services': loadAdminServices(); break;
         case 'admin-invoices': loadAdminInvoices(); break;
         case 'admin-documents': loadAdminDocuments(); break;
@@ -947,7 +1067,7 @@ function renderClientOrdersPagination(pagination) {
 
 async function loadClientOrders(page) {
     if (page) clientOrdersPage = page;
-    const search = document.getElementById('global-search-input')?.value || '';
+    const search = '';
     const status = document.getElementById('filter-order-status')?.value || '';
     const sort = document.getElementById('filter-order-sort')?.value || 'date_desc';
 
@@ -1193,7 +1313,9 @@ async function openOrderDetailsModal(orderId) {
                             <strong>${escapeHtml(doc.name)}</strong>
                             <div style="font-size:0.75rem; color:#64748b;">${escapeHtml(doc.category || doc.file_type || 'Document')} · ${escapeHtml(formatDate(doc.created_at))} · ${escapeHtml(doc.status || '')}</div>
                         </div>
-                        <a href="/api/documents/${doc.id}/download" class="btn-secondary" style="padding:4px 10px; font-size:0.75rem; text-decoration:none;" onclick="event.stopPropagation();">Download</a>
+                        <div class="doc-file-actions">
+                            ${documentActionButtons(doc)}
+                        </div>
                     </div>
                 `).join('') : '<p style="color:#64748b; margin:0;">No documents are available for this order yet.</p>';
             }
@@ -1245,6 +1367,46 @@ function onOrderModalBackdrop(event) {
 }
 
 document.addEventListener('keydown', (event) => {
+    const previewModal = document.getElementById('modal-document-preview');
+    const previewOpen = previewModal && previewModal.classList.contains('active');
+    if (previewOpen) {
+        const typing = event.target && (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA' || event.target.isContentEditable);
+        if (!typing) {
+            if (event.key === '+' || event.key === '=' || event.code === 'NumpadAdd') {
+                const previewBody = document.getElementById('document-preview-body');
+                if (!previewBody || !previewBody.classList.contains('is-image')) return;
+                event.preventDefault();
+                zoomDocumentPreview(1);
+                return;
+            }
+            if (event.key === '-' || event.key === '_' || event.code === 'NumpadSubtract') {
+                const previewBody = document.getElementById('document-preview-body');
+                if (!previewBody || !previewBody.classList.contains('is-image')) return;
+                event.preventDefault();
+                zoomDocumentPreview(-1);
+                return;
+            }
+            if (event.key === '0' || event.code === 'Numpad0') {
+                const previewBody = document.getElementById('document-preview-body');
+                if (!previewBody || !previewBody.classList.contains('is-image')) return;
+                event.preventDefault();
+                const origin = documentPreviewZoomOrigin(previewBody, previewBody.getBoundingClientRect().left + previewBody.clientWidth / 2, previewBody.getBoundingClientRect().top + previewBody.clientHeight / 2);
+                setDocumentPreviewZoom(1, origin);
+                return;
+            }
+            if (event.key === 'r' || event.key === 'R') {
+                const previewBody = document.getElementById('document-preview-body');
+                if (!previewBody || !previewBody.classList.contains('is-image')) return;
+                event.preventDefault();
+                rotateDocumentPreview();
+                return;
+            }
+        }
+        if (event.key === 'Escape') {
+            closeDocumentPreview();
+            return;
+        }
+    }
     if (event.key !== 'Escape') return;
     const deleteModal = document.getElementById('modal-delete-order');
     if (deleteModal && deleteModal.classList.contains('active')) {
@@ -1457,11 +1619,27 @@ function renderActiveOrdersGrid(orders) {
 }
 
 function companyCountryLabel(company) {
-    if (company && company.country) return company.country;
-    const office = String(company && company.reg_office ? company.reg_office : '');
-    if (/united kingdom|london|uk\b/i.test(office)) return 'United Kingdom';
-    if (office) return office.split(',').pop().trim() || '—';
-    return '—';
+    const number = String((company && company.company_number) || '').trim().toUpperCase();
+    if (!number || number.startsWith('REG-') || looksLikeUkCompanyNumber(number)) {
+        return 'United Kingdom';
+    }
+    const raw = String((company && company.country) || '').trim();
+    const office = String((company && company.reg_office) || '');
+    const last = office.split(',').pop().trim();
+    const ukNames = /^(uk|gb|gbr|united kingdom|great britain|britain|england|scotland|wales|northern ireland|n\.? ireland|eng|pk|pakistan)$/i;
+    const ukPostcode = /^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/i;
+    if (ukNames.test(raw) || ukPostcode.test(raw) || ukNames.test(last) || ukPostcode.test(last)) {
+        return 'United Kingdom';
+    }
+    if (/united kingdom|\bgreat britain\b|\benland\b|\bscotland\b|\bwales\b|\bnorthern ireland\b|\buk\b|\bgb\b|\blondon\b/i.test(office)) {
+        return 'United Kingdom';
+    }
+    return 'United Kingdom';
+}
+
+function looksLikeUkCompanyNumber(companyNumber) {
+    const num = String(companyNumber || '').trim().toUpperCase().replace(/\s+/g, '');
+    return /^(\d{6,8}|[A-Z]{2}\d{5,6})$/.test(num);
 }
 
 function isUkCompany(company) {
@@ -1515,18 +1693,17 @@ function isCustomerUploadedDocument(doc) {
 }
 
 function countryBadgeHtml(company) {
-    if (isUkCompany(company)) {
-        return `<span class="portfolio-badge-uk"><span aria-hidden="true">🇬🇧</span> UK</span>`;
-    }
-    const label = companyCountryLabel(company);
-    return `<span class="portfolio-badge-intl">${escapeHtml(label === '—' ? 'INTL' : label)}</span>`;
+    return `<span class="portfolio-badge-uk"><span aria-hidden="true">🇬🇧</span> UK</span>`;
 }
 
 let clientCompaniesCache = [];
+let clientPendingCache = [];
 let adminCompaniesCache = [];
+let adminPendingCache = [];
 let portfolioDetailCache = null;
 let activePortfolioDocumentsTab = 'customer';
 let adminCompanyClientsCache = [];
+const companyRegFilter = { client: 'all', admin: 'all' };
 
 function portfolioSkeletonHtml() {
     return Array.from({ length: 3 }).map(() => `
@@ -1591,13 +1768,74 @@ function renderPendingRegistrationCards(pending, isAdmin) {
     }).join('');
 }
 
+function portfolioGridHeading(title, copy) {
+    return `<div class="portfolio-grid-heading"><h2>${escapeHtml(title)}</h2>${copy ? `<p>${escapeHtml(copy)}</p>` : ''}</div>`;
+}
+
+function renderRegisteredCompanyCard(company, isAdmin) {
+    const active = isCompanyActive(company);
+    const companyId = Number(company.id);
+    return `
+        <article class="portfolio-card" data-company-id="${companyId}" role="button" tabindex="0" onclick="openCompanyPortfolioDetail(${companyId})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openCompanyPortfolioDetail(${companyId});}">
+            <div class="portfolio-card-head">
+                <div class="portfolio-card-icon" aria-hidden="true"><i data-lucide="building-2"></i></div>
+                <div class="portfolio-card-titles">
+                    <h3>${escapeHtml(company.name || 'Company')}</h3>
+                    <p>${escapeHtml(company.company_number || '—')}</p>
+                    <p class="portfolio-card-address">${escapeHtml(portfolioRegisteredAddressText(company))}</p>
+                    ${isAdmin && !isRegisteredCompany(company) ? '<p class="portfolio-card-rename-hint">Open to change the name before application.</p>' : ''}
+                </div>
+                <div class="portfolio-card-badges">
+                    ${countryBadgeHtml(company)}
+                    <span class="portfolio-badge-status${active ? '' : ' is-pending'}">${escapeHtml(companyStatusLabel(company))}</span>
+                </div>
+            </div>
+            <div class="portfolio-card-body">${escapeHtml(portfolioDeadlineText(company))}</div>
+            <div class="portfolio-card-foot">
+                <span onclick="event.stopPropagation(); openCompanyPortfolioDetail(${companyId})">View details</span>
+                ${isAdmin && canDeleteCompanies()
+                    ? `<button type="button" class="portfolio-delete-btn" title="Delete" aria-label="Delete company" onclick="event.stopPropagation(); deleteCompanyFromPortfolio(${companyId})"><i data-lucide="trash-2"></i></button>`
+                    : '<i data-lucide="arrow-right"></i>'}
+            </div>
+        </article>
+    `;
+}
+
+function updateCompanyRegFilterButtons(scope, filter, chCount, pendingCount) {
+    document.querySelectorAll(`[data-company-reg-scope="${scope}"]`).forEach((btn) => {
+        const value = btn.getAttribute('data-company-reg-filter');
+        btn.classList.toggle('is-active', value === filter);
+        const countEl = btn.querySelector('[data-count]');
+        if (!countEl) return;
+        if (value === 'all') countEl.textContent = String(chCount + pendingCount);
+        if (value === 'ch') countEl.textContent = String(chCount);
+        if (value === 'pending') countEl.textContent = String(pendingCount);
+    });
+}
+
+function setCompanyRegFilter(scope, value) {
+    companyRegFilter[scope] = value || 'all';
+    if (scope === 'admin') {
+        renderPortfolioCompanies(adminCompaniesCache, 'admin-portfolio-companies-grid', 'admin-portfolio-company-count', adminPendingCache);
+    } else {
+        renderPortfolioCompanies(clientCompaniesCache, 'portfolio-companies-grid', 'portfolio-company-count', clientPendingCache);
+    }
+}
+
 function renderPortfolioCompanies(companies, targetGridId = 'portfolio-companies-grid', targetCountId = 'portfolio-company-count', pending = []) {
     const grid = document.getElementById(targetGridId);
     const countPill = document.getElementById(targetCountId);
     const list = Array.isArray(companies) ? companies : [];
     const waiting = Array.isArray(pending) ? pending : [];
     const isAdmin = targetGridId === 'admin-portfolio-companies-grid';
+    const scope = isAdmin ? 'admin' : 'client';
+    const filter = companyRegFilter[scope] || 'all';
+    const onCompaniesHouse = list.filter((company) => isRegisteredCompany(company));
+    const notRegistered = list.filter((company) => !isRegisteredCompany(company));
+    const pendingCount = waiting.length + notRegistered.length;
+    const chCount = onCompaniesHouse.length;
     if (countPill) countPill.textContent = `${list.length} UK`;
+    updateCompanyRegFilterButtons(scope, filter, chCount, pendingCount);
     if (!grid) return;
     if (!list.length && !waiting.length) {
         grid.innerHTML = `
@@ -1610,34 +1848,20 @@ function renderPortfolioCompanies(companies, targetGridId = 'portfolio-companies
         if (window.lucide) lucide.createIcons();
         return;
     }
-    const registeredHtml = list.map((company) => {
-        const active = isCompanyActive(company);
-        const companyId = Number(company.id);
-        return `
-            <article class="portfolio-card" data-company-id="${companyId}" role="button" tabindex="0" onclick="openCompanyPortfolioDetail(${companyId})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openCompanyPortfolioDetail(${companyId});}">
-                <div class="portfolio-card-head">
-                    <div class="portfolio-card-icon" aria-hidden="true"><i data-lucide="building-2"></i></div>
-                    <div class="portfolio-card-titles">
-                        <h3>${escapeHtml(company.name || 'Company')}</h3>
-                        <p>${escapeHtml(company.company_number || '—')}</p>
-                        <p class="portfolio-card-address">${escapeHtml(portfolioRegisteredAddressText(company))}</p>
-                    </div>
-                    <div class="portfolio-card-badges">
-                        ${countryBadgeHtml(company)}
-                        <span class="portfolio-badge-status${active ? '' : ' is-pending'}">${escapeHtml(companyStatusLabel(company))}</span>
-                    </div>
-                </div>
-                <div class="portfolio-card-body">${escapeHtml(portfolioDeadlineText(company))}</div>
-                <div class="portfolio-card-foot">
-                    <span onclick="event.stopPropagation(); openCompanyPortfolioDetail(${companyId})">View details</span>
-                    ${isAdmin && canDeleteCompanies()
-                        ? `<button type="button" class="portfolio-delete-btn" title="Delete" aria-label="Delete company" onclick="event.stopPropagation(); deleteCompanyFromPortfolio(${companyId})"><i data-lucide="trash-2"></i></button>`
-                        : '<i data-lucide="arrow-right"></i>'}
-                </div>
-            </article>
-        `;
-    }).join('');
-    grid.innerHTML = `${renderPendingRegistrationCards(waiting, isAdmin)}${registeredHtml}`;
+    const showPending = filter === 'all' || filter === 'pending';
+    const showCh = filter === 'all' || filter === 'ch';
+    const pendingHtml = showPending ? `${renderPendingRegistrationCards(waiting, isAdmin)}${notRegistered.map((company) => renderRegisteredCompanyCard(company, isAdmin)).join('')}` : '';
+    const chHtml = showCh ? onCompaniesHouse.map((company) => renderRegisteredCompanyCard(company, isAdmin)).join('') : '';
+    const parts = [];
+    if (showPending) {
+        parts.push(portfolioGridHeading('Not registered yet', 'Waiting on a Companies House number. Live records are checked when you open this page.'));
+        parts.push(pendingHtml || `<div class="portfolio-empty portfolio-empty-inline" role="status"><p>Every named company already has a Companies House number.</p></div>`);
+    }
+    if (showCh) {
+        parts.push(portfolioGridHeading('Companies House', 'Official UK company numbers.'));
+        parts.push(chHtml || `<div class="portfolio-empty portfolio-empty-inline" role="status"><p>No Companies House companies in this list yet.</p></div>`);
+    }
+    grid.innerHTML = parts.join('');
     if (window.lucide) lucide.createIcons();
 }
 
@@ -1760,10 +1984,353 @@ function switchPortfolioDocumentsTab(tabName) {
     });
 }
 
-function previewPortfolioDocument(docId) {
+function documentPreviewKind(doc) {
+    const blob = `${(doc && doc.name) || ''} ${(doc && doc.file_type) || ''}`.toLowerCase();
+    if (/\.pdf\b/.test(blob) || blob.includes('pdf')) return 'pdf';
+    if (/\.(png|jpe?g|gif|webp|svg|heic|heif|bmp)\b/.test(blob) || blob.includes('image') || blob.includes('png') || blob.includes('jpeg')) return 'image';
+    if (/\.txt\b/.test(blob) || blob.includes('text/plain')) return 'text';
+    return 'other';
+}
+
+function documentActionButtons(doc) {
+    const id = Number(doc && doc.id);
+    if (!id) return '';
+    const nameJs = JSON.stringify(String((doc && doc.name) || 'Document'));
+    const typeJs = JSON.stringify(String((doc && doc.file_type) || ''));
+    return `
+        <div class="table-action-btns">
+            <button type="button" class="btn-secondary btn-table" onclick='event.stopPropagation(); openDocumentPreview(${id}, ${nameJs}, ${typeJs})'>View</button>
+            <a class="btn-primary btn-table" href="/api/documents/${id}/download" onclick="event.stopPropagation();">Download</a>
+        </div>
+    `;
+}
+
+function documentPreviewMeta(name, fileType) {
+    const typed = String(fileType || '').trim();
+    if (typed) return typed;
+    const kind = documentPreviewKind({ name, file_type: fileType });
+    if (kind === 'pdf') return 'PDF Document';
+    if (kind === 'image') return 'Image';
+    if (kind === 'text') return 'Text file';
+    return 'Document';
+}
+
+const DOCUMENT_PREVIEW_ZOOM_MIN = 0.5;
+const DOCUMENT_PREVIEW_ZOOM_MAX = 4;
+const DOCUMENT_PREVIEW_ZOOM_STEP = 0.25;
+let documentPreviewZoom = 1;
+let documentPreviewRotation = 0;
+let documentPreviewZoomCtl = null;
+
+function documentPreviewZoomOrigin(body, clientX, clientY) {
+    const rect = body.getBoundingClientRect();
+    const viewX = clientX - rect.left;
+    const viewY = clientY - rect.top;
+    return {
+        viewX,
+        viewY,
+        contentX: (body.scrollLeft + viewX) / documentPreviewZoom,
+        contentY: (body.scrollTop + viewY) / documentPreviewZoom
+    };
+}
+
+function measureDocumentPreviewFit(body, inner, kind) {
+    const availW = Math.max(1, body.clientWidth);
+    const availH = Math.max(1, body.clientHeight);
+    if (kind === 'image' && inner && inner.naturalWidth) {
+        const nw = inner.naturalWidth;
+        const nh = inner.naturalHeight;
+        const swapped = documentPreviewRotation % 180 === 90;
+        const fitW = swapped ? nh : nw;
+        const fitH = swapped ? nw : nh;
+        const scale = Math.min(availW / fitW, availH / fitH, 1);
+        return {
+            w: Math.max(1, nw * scale),
+            h: Math.max(1, nh * scale)
+        };
+    }
+    return { w: availW, h: availH };
+}
+
+function applyDocumentPreviewZoom(origin) {
+    const body = document.getElementById('document-preview-body');
+    const stage = body && body.querySelector('.document-preview-zoom-stage');
+    const label = document.getElementById('document-preview-zoom-label');
+    const outBtn = document.getElementById('document-preview-zoom-out');
+    const inBtn = document.getElementById('document-preview-zoom-in');
+    if (label) label.textContent = `${Math.round(documentPreviewZoom * 100)}%`;
+    if (outBtn) outBtn.disabled = documentPreviewZoom <= DOCUMENT_PREVIEW_ZOOM_MIN + 0.001;
+    if (inBtn) inBtn.disabled = documentPreviewZoom >= DOCUMENT_PREVIEW_ZOOM_MAX - 0.001;
+    if (!body || !stage) return;
+    const z = documentPreviewZoom;
+    const rot = ((documentPreviewRotation % 360) + 360) % 360;
+    const swapped = rot % 180 === 90;
+    const baseW = Number(stage.dataset.baseW) || body.clientWidth;
+    const baseH = Number(stage.dataset.baseH) || body.clientHeight;
+    const displayW = swapped ? baseH : baseW;
+    const displayH = swapped ? baseW : baseH;
+    stage.style.width = `${displayW * z}px`;
+    stage.style.height = `${displayH * z}px`;
+    const inner = stage.firstElementChild;
+    if (inner) {
+        inner.style.position = 'absolute';
+        inner.style.left = `${(displayW * z - baseW) / 2}px`;
+        inner.style.top = `${(displayH * z - baseH) / 2}px`;
+        inner.style.width = `${baseW}px`;
+        inner.style.height = `${baseH}px`;
+        inner.style.maxWidth = 'none';
+        inner.style.maxHeight = 'none';
+        inner.style.transformOrigin = 'center center';
+        inner.style.transform = `rotate(${rot}deg) scale(${z})`;
+    }
+    body.classList.toggle('is-zoomed', z > 1.01);
+    if (origin) {
+        body.scrollLeft = origin.contentX * z - origin.viewX;
+        body.scrollTop = origin.contentY * z - origin.viewY;
+    }
+}
+
+function setDocumentPreviewZoom(next, origin) {
+    const clamped = Math.min(DOCUMENT_PREVIEW_ZOOM_MAX, Math.max(DOCUMENT_PREVIEW_ZOOM_MIN, next));
+    documentPreviewZoom = Math.round(clamped * 100) / 100;
+    applyDocumentPreviewZoom(origin);
+}
+
+function zoomDocumentPreview(direction) {
+    const modal = document.getElementById('modal-document-preview');
+    const body = document.getElementById('document-preview-body');
+    if (!modal || !modal.classList.contains('active') || !body) return;
+    const origin = documentPreviewZoomOrigin(body, body.getBoundingClientRect().left + body.clientWidth / 2, body.getBoundingClientRect().top + body.clientHeight / 2);
+    setDocumentPreviewZoom(documentPreviewZoom + (direction > 0 ? DOCUMENT_PREVIEW_ZOOM_STEP : -DOCUMENT_PREVIEW_ZOOM_STEP), origin);
+}
+
+function rotateDocumentPreview() {
+    const modal = document.getElementById('modal-document-preview');
+    const body = document.getElementById('document-preview-body');
+    if (!modal || !modal.classList.contains('active') || !body || !body.classList.contains('is-image')) return;
+    documentPreviewRotation = (documentPreviewRotation + 90) % 360;
+    const stage = body.querySelector('.document-preview-zoom-stage');
+    const inner = stage && stage.firstElementChild;
+    if (stage && inner) {
+        const fit = measureDocumentPreviewFit(body, inner, 'image');
+        stage.dataset.baseW = String(fit.w);
+        stage.dataset.baseH = String(fit.h);
+    }
+    applyDocumentPreviewZoom();
+    safeCreateIcons();
+}
+
+function teardownDocumentPreviewZoom() {
+    if (documentPreviewZoomCtl) {
+        documentPreviewZoomCtl.abort();
+        documentPreviewZoomCtl = null;
+    }
+    documentPreviewZoom = 1;
+    documentPreviewRotation = 0;
+    const zoomBar = document.getElementById('document-preview-zoom');
+    if (zoomBar) zoomBar.hidden = true;
+    const label = document.getElementById('document-preview-zoom-label');
+    if (label) label.textContent = '100%';
+}
+
+function mountDocumentPreviewZoom(body, kind) {
+    teardownDocumentPreviewZoom();
+    const zoomBar = document.getElementById('document-preview-zoom');
+    if (!body || kind !== 'image') {
+        if (zoomBar) zoomBar.hidden = true;
+        return;
+    }
+    if (zoomBar) zoomBar.hidden = false;
+    documentPreviewZoom = 1;
+    const inner = body.firstElementChild;
+    if (!inner) return;
+    const stage = document.createElement('div');
+    stage.className = 'document-preview-zoom-stage';
+    inner.replaceWith(stage);
+    stage.appendChild(inner);
+
+    const captureFit = () => {
+        const fit = measureDocumentPreviewFit(body, inner, kind);
+        stage.dataset.baseW = String(fit.w);
+        stage.dataset.baseH = String(fit.h);
+        applyDocumentPreviewZoom();
+    };
+    if (kind === 'image') {
+        if (inner.complete && inner.naturalWidth) captureFit();
+        else inner.addEventListener('load', captureFit, { once: true });
+    }
+
+    const ctl = new AbortController();
+    documentPreviewZoomCtl = ctl;
+    const { signal } = ctl;
+    let pinch = null;
+    let pan = null;
+    let lastTap = 0;
+    let ignoreTap = false;
+
+    const touchPoint = (touches, index) => touches.item(index) || touches[index];
+    const touchDistance = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+    const touchMid = (a, b) => ({ x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 });
+
+    body.addEventListener('touchstart', (event) => {
+        if (event.touches.length === 2) {
+            const a = touchPoint(event.touches, 0);
+            const b = touchPoint(event.touches, 1);
+            pinch = { dist: touchDistance(a, b), zoom: documentPreviewZoom };
+            pan = null;
+            ignoreTap = true;
+            event.preventDefault();
+        } else if (event.touches.length === 1) {
+            const t = touchPoint(event.touches, 0);
+            pan = { x: t.clientX, y: t.clientY, sl: body.scrollLeft, st: body.scrollTop };
+            pinch = null;
+        }
+    }, { signal, passive: false });
+
+    body.addEventListener('touchmove', (event) => {
+        if (pinch && event.touches.length === 2) {
+            const a = touchPoint(event.touches, 0);
+            const b = touchPoint(event.touches, 1);
+            const mid = touchMid(a, b);
+            const dist = touchDistance(a, b);
+            if (pinch.dist > 0) {
+                setDocumentPreviewZoom(pinch.zoom * (dist / pinch.dist), documentPreviewZoomOrigin(body, mid.x, mid.y));
+            }
+            event.preventDefault();
+            return;
+        }
+        if (pan && event.touches.length === 1) {
+            const t = touchPoint(event.touches, 0);
+            body.scrollLeft = pan.sl - (t.clientX - pan.x);
+            body.scrollTop = pan.st - (t.clientY - pan.y);
+            event.preventDefault();
+        }
+    }, { signal, passive: false });
+
+    body.addEventListener('touchend', (event) => {
+        if (event.touches.length < 2) pinch = null;
+        if (event.touches.length === 0) {
+            const ended = event.changedTouches && event.changedTouches[0];
+            const now = Date.now();
+            if (!ignoreTap && ended && now - lastTap < 280) {
+                const origin = documentPreviewZoomOrigin(body, ended.clientX, ended.clientY);
+                setDocumentPreviewZoom(documentPreviewZoom > 1.2 ? 1 : 2, origin);
+            }
+            lastTap = ignoreTap ? 0 : now;
+            ignoreTap = false;
+            pan = null;
+        }
+    }, { signal });
+
+    body.addEventListener('wheel', (event) => {
+        if (!event.ctrlKey && !event.metaKey) return;
+        event.preventDefault();
+        const origin = documentPreviewZoomOrigin(body, event.clientX, event.clientY);
+        const delta = event.deltaY > 0 ? -0.1 : 0.1;
+        setDocumentPreviewZoom(documentPreviewZoom + delta, origin);
+    }, { signal, passive: false });
+
+    body.addEventListener('pointerdown', (event) => {
+        if (event.pointerType === 'touch' || event.button !== 0) return;
+        pan = { x: event.clientX, y: event.clientY, sl: body.scrollLeft, st: body.scrollTop, id: event.pointerId };
+        body.classList.add('is-panning');
+        try { body.setPointerCapture(event.pointerId); } catch (err) { /* ignore */ }
+    }, { signal });
+
+    body.addEventListener('pointermove', (event) => {
+        if (!pan || pan.id !== event.pointerId || event.pointerType === 'touch') return;
+        body.scrollLeft = pan.sl - (event.clientX - pan.x);
+        body.scrollTop = pan.st - (event.clientY - pan.y);
+    }, { signal });
+
+    const endPan = (event) => {
+        if (pan && pan.id === event.pointerId) {
+            pan = null;
+            body.classList.remove('is-panning');
+        }
+    };
+    body.addEventListener('pointerup', endPan, { signal });
+    body.addEventListener('pointercancel', endPan, { signal });
+    safeCreateIcons();
+}
+
+async function sniffDocumentPreviewKind(viewUrl, fallbackKind) {
+    try {
+        const res = await fetch(viewUrl, {
+            credentials: 'same-origin',
+            headers: { Range: 'bytes=0-15' }
+        });
+        if (!res.ok && res.status !== 206) return fallbackKind;
+        const buf = new Uint8Array(await res.arrayBuffer());
+        const ascii = Array.from(buf.slice(0, 5), (b) => String.fromCharCode(b)).join('');
+        if (ascii.startsWith('%PDF')) return 'pdf';
+        if (buf[0] === 0xFF && buf[1] === 0xD8) return 'image';
+        if (buf[0] === 0x89 && buf[1] === 0x50) return 'image';
+        if (ascii.startsWith('GIF8')) return 'image';
+        if (ascii.startsWith('RIFF')) return 'image';
+    } catch (err) {
+        /* keep filename-based kind */
+    }
+    return fallbackKind;
+}
+
+function renderDocumentPreviewBody(body, kind, viewUrl, label) {
+    teardownDocumentPreviewZoom();
+    body.className = `document-preview-body is-${kind}`;
+    if (kind === 'image') {
+        body.innerHTML = `<img class="document-preview-image" src="${viewUrl}" alt="${escapeHtml(label)}">`;
+        mountDocumentPreviewZoom(body, 'image');
+        return;
+    }
+    if (kind === 'pdf') {
+        body.innerHTML = `<iframe class="document-preview-frame" title="${escapeHtml(label)}" src="${viewUrl}#view=FitH" allow="fullscreen"></iframe>`;
+        return;
+    }
+    if (kind === 'text') {
+        body.innerHTML = `<iframe class="document-preview-frame" title="${escapeHtml(label)}" src="${viewUrl}"></iframe>`;
+        return;
+    }
+    body.innerHTML = `<div class="document-preview-fallback"><p>This file type can’t be previewed in the portal.</p></div>`;
+}
+
+function openDocumentPreview(docId, name, fileType) {
     const id = Number(docId);
     if (!id) return;
-    window.open(`/api/documents/${id}/download`, '_blank', 'noopener,noreferrer');
+    const modal = document.getElementById('modal-document-preview');
+    const title = document.getElementById('document-preview-title');
+    const body = document.getElementById('document-preview-body');
+    const download = document.getElementById('document-preview-download');
+    if (!modal || !body) return;
+    const label = String(name || 'Document');
+    if (title) title.textContent = label;
+    if (download) download.href = `/api/documents/${id}/download`;
+    const viewUrl = `/api/documents/${id}/view`;
+    const guessed = documentPreviewKind({ name: label, file_type: fileType });
+    teardownDocumentPreviewZoom();
+    body.className = `document-preview-body is-${guessed}`;
+    body.innerHTML = '';
+    modal.classList.add('active');
+    sniffDocumentPreviewKind(viewUrl, guessed).then((kind) => {
+        if (!modal.classList.contains('active')) return;
+        renderDocumentPreviewBody(body, kind, viewUrl, label);
+        safeCreateIcons();
+    });
+}
+
+function closeDocumentPreview() {
+    const modal = document.getElementById('modal-document-preview');
+    const body = document.getElementById('document-preview-body');
+    teardownDocumentPreviewZoom();
+    if (body) {
+        body.innerHTML = '';
+        body.className = 'document-preview-body';
+        body.classList.remove('is-panning', 'is-zoomed');
+    }
+    if (modal) modal.classList.remove('active');
+}
+
+function previewPortfolioDocument(docId, name, fileType) {
+    openDocumentPreview(docId, name, fileType);
 }
 
 function renderPortfolioDocumentButtons(documents, emptyMessage) {
@@ -1784,7 +2351,9 @@ function renderPortfolioDocumentButtons(documents, emptyMessage) {
                             <strong>${escapeHtml(doc.name || 'Document')}</strong>
                             <span>${meta}</span>
                         </div>
-                        <button type="button" class="portfolio-tab portfolio-doc-preview-btn" onclick="previewPortfolioDocument(${Number(doc.id)})">View</button>
+                        <div class="doc-file-actions">
+                            ${documentActionButtons(doc)}
+                        </div>
                     </div>
                 `;
             }).join('')}
@@ -1801,11 +2370,24 @@ function fillCompanyPortfolioModal(payload) {
     portfolioDetailCache = payload || {};
     const company = payload.company || {};
     const office = payload.registered_office || {};
-    const uk = isUkCompany(company);
     setPortfolioText('portfolio-detail-name', company.name || 'Company');
     setPortfolioText('portfolio-detail-number', company.company_number || '');
     setPortfolioText('portfolio-detail-address', portfolioRegisteredAddressText(company));
     setPortfolioText('portfolio-detail-name-field', company.name || '—');
+    const renameForm = document.getElementById('portfolio-rename-form');
+    const renameHint = document.getElementById('portfolio-rename-hint');
+    const renameInput = document.getElementById('portfolio-rename-input');
+    const renameStatus = document.getElementById('portfolio-rename-status');
+    const nameField = document.getElementById('portfolio-detail-name-field');
+    const canRename = isAdminShellUser(currentUser) && !isRegisteredCompany(company);
+    if (renameForm) renameForm.hidden = !canRename;
+    if (renameHint) renameHint.hidden = !canRename;
+    if (nameField) nameField.hidden = canRename;
+    if (renameInput) renameInput.value = company.name || '';
+    if (renameStatus) {
+        renameStatus.textContent = '';
+        renameStatus.style.color = '';
+    }
     setPortfolioText('portfolio-detail-number-field', company.company_number || '—');
     setPortfolioText('portfolio-detail-status', companyStatusLabel(company));
     setPortfolioText('portfolio-detail-country', companyCountryLabel(company));
@@ -1816,8 +2398,8 @@ function fillCompanyPortfolioModal(payload) {
     setPortfolioText('portfolio-detail-postcode', office.postcode || '—');
     const countryBadge = document.getElementById('portfolio-detail-country-badge');
     if (countryBadge) {
-        countryBadge.className = uk ? 'portfolio-badge-uk' : 'portfolio-badge-intl';
-        countryBadge.textContent = uk ? '🇬🇧 UK' : (companyCountryLabel(company) || 'INTL');
+        countryBadge.className = 'portfolio-badge-uk';
+        countryBadge.innerHTML = '<span aria-hidden="true">🇬🇧</span> UK';
     }
     const statusBadge = document.getElementById('portfolio-detail-status-badge');
     if (statusBadge) {
@@ -1834,6 +2416,8 @@ function fillCompanyPortfolioModal(payload) {
         const utrValue = company.utr_number || '';
         const authValue = company.authentication_code || '';
         const activationValue = company.activation_code || '';
+        const identityValue = company.identity_verified || 'Not started';
+        const pscValue = company.psc_verified || 'Not started';
         const fieldHtml = canEditCompliance ? `
             <form class="portfolio-compliance-form" onsubmit="saveCompanyCompliance(event)">
                 <p class="portfolio-empty-copy">Stored on this company card for filings and HMRC / Companies House work.</p>
@@ -1847,8 +2431,20 @@ function fillCompanyPortfolioModal(payload) {
                         <input type="text" id="portfolio-compliance-auth" name="authentication_code" class="select-filter" maxlength="12" autocomplete="off" value="${escapeHtml(authValue)}" placeholder="Companies House auth code">
                     </div>
                     <div class="full">
-                        <label for="portfolio-compliance-activation">Activation code</label>
-                        <input type="text" id="portfolio-compliance-activation" name="activation_code" class="select-filter" maxlength="40" autocomplete="off" value="${escapeHtml(activationValue)}" placeholder="WebFiling activation code">
+                        <label for="portfolio-compliance-activation">Personal 11 dijits Code</label>
+                        <input type="text" id="portfolio-compliance-activation" name="activation_code" class="select-filter" maxlength="40" autocomplete="off" value="${escapeHtml(activationValue)}" placeholder="11-digit personal code">
+                    </div>
+                    <div>
+                        <label for="portfolio-compliance-identity">Identity verification</label>
+                        <select id="portfolio-compliance-identity" name="identity_verified" class="select-filter">
+                            ${['Not started', 'In progress', 'Verified', 'Failed'].map((status) => `<option value="${status}"${status === identityValue ? ' selected' : ''}>${status}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div>
+                        <label for="portfolio-compliance-psc">PSC verification</label>
+                        <select id="portfolio-compliance-psc" name="psc_verified" class="select-filter">
+                            ${['Not started', 'In progress', 'Verified', 'Update required'].map((status) => `<option value="${status}"${status === pscValue ? ' selected' : ''}>${status}</option>`).join('')}
+                        </select>
                     </div>
                 </div>
                 <div class="portfolio-compliance-actions">
@@ -1859,6 +2455,8 @@ function fillCompanyPortfolioModal(payload) {
         ` : `
             <div class="portfolio-detail-grid">
                 <div><span>UTR number</span><strong>${escapeHtml(utrValue || '—')}</strong></div>
+                <div><span>Identity verification</span><strong>${escapeHtml(identityValue)}</strong></div>
+                <div><span>PSC verification</span><strong>${escapeHtml(pscValue)}</strong></div>
             </div>
         `;
         const rows = [];
@@ -1908,6 +2506,7 @@ function fillCompanyPortfolioModal(payload) {
                         <option value="Certificate of Incorporation">Certificate of Incorporation</option>
                         <option value="Memorandum & Articles">Memorandum &amp; Articles</option>
                         <option value="Share Certificate">Share Certificate</option>
+                        <option value="Bank statement">Bank statement</option>
                         <option value="Company Documents">Company Documents</option>
                     </select>
                 </div>
@@ -1989,6 +2588,52 @@ async function openCompanyPortfolioDetail(companyId, options) {
     }
 }
 
+async function savePendingCompanyName(event) {
+    event.preventDefault();
+    if (!isAdminShellUser(currentUser)) return;
+    const company = (portfolioDetailCache && portfolioDetailCache.company) || {};
+    const companyId = Number(company.id);
+    if (!companyId || isRegisteredCompany(company)) return;
+    const input = document.getElementById('portfolio-rename-input');
+    const statusEl = document.getElementById('portfolio-rename-status');
+    const saveBtn = document.getElementById('portfolio-rename-save');
+    const name = ((input && input.value) || '').trim();
+    if (statusEl) {
+        statusEl.textContent = 'Saving…';
+        statusEl.style.color = '';
+    }
+    if (saveBtn) saveBtn.disabled = true;
+    try {
+        const res = await fetch(`/api/admin/companies/${companyId}`, {
+            method: 'PUT',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success' || !data.company) {
+            throw new Error(data.message || 'Could not save the company name.');
+        }
+        portfolioDetailCache = { ...(portfolioDetailCache || {}), company: { ...company, ...data.company } };
+        fillCompanyPortfolioModal(portfolioDetailCache);
+        if (typeof loadAdminCompanies === 'function' && isAdminShellUser(currentUser)) {
+            await loadAdminCompanies();
+        }
+        const ok = document.getElementById('portfolio-rename-status');
+        if (ok) {
+            ok.textContent = 'Saved.';
+            ok.style.color = '#047857';
+        }
+    } catch (err) {
+        if (statusEl) {
+            statusEl.textContent = err.message || 'Could not save the company name.';
+            statusEl.style.color = '#dc2626';
+        }
+    } finally {
+        if (saveBtn) saveBtn.disabled = false;
+    }
+}
+
 async function saveCompanyCompliance(event) {
     event.preventDefault();
     if (!isAdminShellUser(currentUser)) return;
@@ -2000,6 +2645,8 @@ async function saveCompanyCompliance(event) {
         utr_number: ((document.getElementById('portfolio-compliance-utr') || {}).value || '').trim(),
         authentication_code: ((document.getElementById('portfolio-compliance-auth') || {}).value || '').trim(),
         activation_code: ((document.getElementById('portfolio-compliance-activation') || {}).value || '').trim(),
+        identity_verified: ((document.getElementById('portfolio-compliance-identity') || {}).value || 'Not started').trim(),
+        psc_verified: ((document.getElementById('portfolio-compliance-psc') || {}).value || 'Not started').trim(),
     };
     if (statusEl) statusEl.textContent = 'Saving…';
     if (saveBtn) saveBtn.disabled = true;
@@ -2139,7 +2786,7 @@ function renderDashboardCompanies(companies) {
             <div class="company-card-name">${escapeHtml(company.name || 'Company')}</div>
             <div class="company-card-meta">${escapeHtml(company.company_number || '—')}</div>
             <div class="company-card-footer">
-                <span>${escapeHtml(companyCountryLabel(company))}</span>
+                <span>UK</span>
                 <span class="status-badge ${(company.status || company.account_status) === 'Active' || (company.account_status === 'Good Standing') ? 'completed' : 'pending'}">${escapeHtml(company.status || company.account_status || '—')}</span>
             </div>
         </button>
@@ -2158,9 +2805,11 @@ async function loadClientCompanies() {
             throw new Error('load-failed');
         }
         clientCompaniesCache = data.companies || [];
-        renderPortfolioCompanies(clientCompaniesCache, 'portfolio-companies-grid', 'portfolio-company-count', data.pending_registrations || []);
+        clientPendingCache = data.pending_registrations || [];
+        renderPortfolioCompanies(clientCompaniesCache, 'portfolio-companies-grid', 'portfolio-company-count', clientPendingCache);
     } catch (err) {
         clientCompaniesCache = [];
+        clientPendingCache = [];
         if (countPill) countPill.textContent = '0 UK';
         if (grid) {
             grid.innerHTML = `
@@ -2190,7 +2839,8 @@ async function loadAdminCompanies() {
         if (chBanner) chBanner.hidden = Boolean(data.companies_house_configured);
         adminCompanyClientsCache = Array.isArray(data.clients) ? data.clients : [];
         adminCompaniesCache = list;
-        renderPortfolioCompanies(list, 'admin-portfolio-companies-grid', 'admin-portfolio-company-count', data.pending_registrations || []);
+        adminPendingCache = data.pending_registrations || [];
+        renderPortfolioCompanies(list, 'admin-portfolio-companies-grid', 'admin-portfolio-company-count', adminPendingCache);
     } catch (err) {
         if (countPill) countPill.textContent = '0 UK';
         if (grid) {
@@ -2715,8 +3365,9 @@ async function loadClientDocuments() {
                     <td>${escapeHtml(d.uploaded_by || '—')}</td>
                     <td><span class="status-badge ${documentStatusClass(d.status)}">${escapeHtml(d.status || '—')}</span></td>
                     <td>
-                        <a href="/api/documents/${d.id}/download" target="_blank" class="btn-secondary" style="padding:4px 10px; font-size:0.75rem; text-decoration:none; margin-right:6px;">View</a>
-                        <a href="/api/documents/${d.id}/download" class="btn-primary" style="padding:4px 10px; font-size:0.75rem; text-decoration:none;">Download</a>
+                        <div class="doc-file-actions">
+                            ${documentActionButtons(d)}
+                        </div>
                     </td>
                 </tr>
             `).join('');
@@ -2848,9 +3499,11 @@ async function loadAdminDashboard() {
         };
         setText('adm-tot-cust', data.stats.total_customers);
         setText('adm-tot-ord', data.stats.total_orders);
-        setText('adm-tot-rev', data.stats.total_revenue);
         setText('adm-tot-tix', data.stats.open_tickets);
-        renderAdminChart((data.charts && data.charts.monthly) || []);
+        if (canViewRevenue()) {
+            setText('adm-tot-rev', data.stats.total_revenue);
+            renderAdminChart((data.charts && data.charts.monthly) || []);
+        }
     } catch (err) {
         console.error(err);
     }
@@ -2881,7 +3534,7 @@ function drawRevenueFallback(canvas, labels, values) {
     ctx.lineTo(pad.left + plotW, pad.top + plotH);
     ctx.stroke();
     ctx.fillStyle = '#94a3b8';
-    ctx.font = '11px Inter, sans-serif';
+    ctx.font = `11px ${APPLE_UI_FONT}`;
     ctx.textAlign = 'right';
     ctx.fillText(`£${Math.round(max)}`, pad.left - 8, pad.top + 4);
     ctx.fillText('£0', pad.left - 8, pad.top + plotH);
@@ -2914,7 +3567,7 @@ function drawRevenueFallback(canvas, labels, values) {
         ctx.lineWidth = 2;
         ctx.stroke();
         ctx.fillStyle = '#64748b';
-        ctx.font = '10px Inter, sans-serif';
+        ctx.font = `10px ${APPLE_UI_FONT}`;
         ctx.textAlign = 'center';
         ctx.fillText(pt.label, pt.x, height - 10);
     });
@@ -2960,9 +3613,12 @@ function renderAdminChart(monthlyData) {
                     responsive: true,
                     maintainAspectRatio: false,
                     resizeDelay: 0,
+                    font: { family: APPLE_UI_FONT },
                     plugins: {
                         legend: { display: false },
                         tooltip: {
+                            titleFont: { family: APPLE_UI_FONT },
+                            bodyFont: { family: APPLE_UI_FONT },
                             callbacks: {
                                 label(ctx) {
                                     const amount = Number(ctx.parsed.y || 0);
@@ -2975,10 +3631,14 @@ function renderAdminChart(monthlyData) {
                         y: {
                             beginAtZero: true,
                             ticks: {
+                                font: { family: APPLE_UI_FONT },
                                 callback(value) {
                                     return `£${value}`;
                                 }
                             }
+                        },
+                        x: {
+                            ticks: { font: { family: APPLE_UI_FONT } }
                         }
                     }
                 }
@@ -3008,12 +3668,12 @@ function onAdminOrderDatePresetChange() {
     const showCustom = preset === 'custom';
     const fromEl = document.getElementById('filter-admin-order-from');
     const toEl = document.getElementById('filter-admin-order-to');
-    if (fromEl) fromEl.classList.toggle('is-visible', showCustom);
-    if (toEl) toEl.classList.toggle('is-visible', showCustom);
-    if (!showCustom) {
-        if (fromEl) fromEl.value = '';
-        if (toEl) toEl.value = '';
-    }
+    [fromEl, toEl].forEach((el) => {
+        if (!el) return;
+        el.classList.toggle('is-visible', showCustom);
+        el.hidden = !showCustom;
+        if (!showCustom) el.value = '';
+    });
 }
 
 function adminOrderProgressRange() {
@@ -3043,7 +3703,7 @@ function buildAdminOrderQuery(page) {
     if (category) qs.set('category', category);
     if (statusGroup) qs.set('status_group', statusGroup);
     if (status) qs.set('status', status);
-    if (payment) qs.set('payment_status', payment);
+    if (canViewRevenue() && payment) qs.set('payment_status', payment);
     if (customer) qs.set('customer_id', customer);
     if (preset && preset !== 'custom') qs.set('date_preset', preset);
     if (preset === 'custom' && dateFrom) qs.set('date_from', dateFrom);
@@ -3136,12 +3796,17 @@ function showAdminOrdersError(message) {
     box.textContent = message || '';
 }
 
+function adminOrdersColspan() {
+    return canViewRevenue() ? 10 : 8;
+}
+
 async function loadAdminOrders() {
+    applyAdminOrderFinanceVisibility();
     const tbody = document.getElementById('adm-orders-table-body');
     showAdminOrdersError('');
     try {
         if (tbody) {
-            tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; color:#64748b; padding:28px;">Loading orders…</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="${adminOrdersColspan()}" style="text-align:center; color:#64748b; padding:28px;">Loading orders…</td></tr>`;
         }
         const qs = buildAdminOrderQuery(adminOrdersPage);
         const res = await fetch(`/api/admin/orders?${qs.toString()}`, { credentials: 'same-origin' });
@@ -3150,20 +3815,25 @@ async function loadAdminOrders() {
             throw new Error(data.message || 'Unable to load orders.');
         }
         fillAdminOrderFacet('filter-admin-order-product', data.facets?.products || []);
-        fillAdminOrderFacet('filter-admin-order-category', data.facets?.categories || []);
-        fillAdminOrderFacet('filter-admin-order-year', data.facets?.years || []);
-        fillAdminOrderFacet('filter-admin-order-customer', data.facets?.customers || [], 'full_name', 'id');
         renderAdminOrderStats(data.stats);
         renderAdminOrderPagination(data.pagination);
         if (!tbody) return;
         if (!data.orders.length) {
-            tbody.innerHTML = `<tr><td colspan="10" style="text-align:center; color:#64748b; padding:28px;">No orders match the current filters.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="${adminOrdersColspan()}" style="text-align:center; color:#64748b; padding:28px;">No orders match the current filters.</td></tr>`;
             syncAdminOrdersSelectAllState();
             return;
         }
+        const showFinance = canViewRevenue();
         tbody.innerHTML = data.orders.map(o => {
             const product = o.products_summary || o.service_name || '—';
             const category = o.category_name ? `${escapeHtml(o.category_name)} · ` : '';
+            const financeCells = showFinance ? `
+                    <td class="cell-price">${adminOrderPriceCell(o)}</td>
+                    <td class="cell-payment">
+                        <select class="table-select" data-order-action="payment_mode" data-order-id="${o.id}">${staffOrderPaymentModeOptions(o.payment_mode || '')}</select>
+                    </td>` : '';
+            const ownerName = o.owner_name || o.client_name || '—';
+            const ownerEmail = o.owner_form_email || '';
             return `
                 <tr class="order-row" data-order-id="${o.id}">
                     <td class="cell-select">
@@ -3171,19 +3841,14 @@ async function loadAdminOrders() {
                     </td>
                     <td><button type="button" class="order-number-link" data-order-action="open" data-order-id="${o.id}">${escapeHtml(o.order_number)}</button></td>
                     <td class="cell-date">${escapeHtml(formatShortDate(o.created_at))}</td>
-                    <td class="cell-client">${escapeHtml(o.client_name || '')}<div class="cell-subtext">${escapeHtml(o.client_email || '')}</div></td>
+                    <td class="cell-client">
+                        <div class="owner-cell-name">${escapeHtml(ownerName)}</div>
+                        ${ownerEmail ? `<div class="owner-cell-email">${escapeHtml(ownerEmail)}</div>` : ''}
+                    </td>
                     <td class="cell-company">${escapeHtml(o.company_name || '—')}</td>
                     <td class="cell-product">${category}${escapeHtml(product)}</td>
-                    <td class="cell-price">£${parseFloat(o.total || 0).toFixed(2)}</td>
-                    <td>
-                        <select class="table-select" data-order-action="payment_mode" data-order-id="${o.id}">
-                            <option value="" ${!o.payment_mode ? 'selected' : ''}>Select mode</option>
-                            <option value="PKR(Bank Transfer)" ${o.payment_mode === 'PKR(Bank Transfer)' ? 'selected' : ''}>PKR(Bank Transfer)</option>
-                            <option value="GBP(Bank Transfer)" ${o.payment_mode === 'GBP(Bank Transfer)' ? 'selected' : ''}>GBP(Bank Transfer)</option>
-                            <option value="Website Charge" ${o.payment_mode === 'Website Charge' ? 'selected' : ''}>Website Charge</option>
-                        </select>
-                    </td>
-                    <td>
+                    ${financeCells}
+                    <td class="cell-status">
                         <select class="table-select" data-order-action="status" data-order-id="${o.id}">
                             <option value="Pending Verification" ${o.status === 'Pending Verification' ? 'selected' : ''}>Pending Verification</option>
                             <option value="Pending" ${o.status === 'Pending' ? 'selected' : ''}>Pending</option>
@@ -3195,18 +3860,20 @@ async function loadAdminOrders() {
                         </select>
                     </td>
                     <td class="cell-actions">
-                        <div class="order-row-actions">
+                        <div class="order-row-actions table-action-btns">
                             <button type="button" class="btn-primary btn-table" data-order-action="open" data-order-id="${o.id}">Manage</button>
+                            ${canManageOrders() ? `<button type="button" class="btn-secondary btn-table" data-order-action="change-details" data-order-id="${o.id}">Change details</button>` : ''}
                             ${canDeleteOrders() ? `<button type="button" class="portfolio-delete-btn" data-order-action="delete" data-order-id="${o.id}" data-order-number="${escapeHtml(o.order_number)}" title="Delete order" aria-label="Delete order"><i data-lucide="trash-2"></i></button>` : ''}
                         </div>
                     </td>
                 </tr>`;
         }).join('');
         syncAdminOrdersSelectAllState();
+        safeCreateIcons();
     } catch (err) {
         showAdminOrdersError(err.message || 'Unable to load orders.');
         if (tbody) {
-            tbody.innerHTML = `<tr><td colspan="10" style="text-align:center; color:#dc2626; padding:28px;">Unable to load orders.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="${adminOrdersColspan()}" style="text-align:center; color:#dc2626; padding:28px;">Unable to load orders.</td></tr>`;
         }
         syncAdminOrdersSelectAllState();
     }
@@ -3263,10 +3930,10 @@ function editSelectedAdminOrders() {
         return;
     }
     if (ids.length > 1) {
-        alert('Select one order at a time to edit, or open Manage on that row.');
+        alert('Select one order at a time to change details, or click Change details on that row.');
         return;
     }
-    openStaffOrderWorkspace(ids[0]);
+    openStaffOrderWorkspace(ids[0], { editCheckout: true });
 }
 
 async function deleteSelectedAdminOrders() {
@@ -3301,7 +3968,92 @@ async function deleteSelectedAdminOrders() {
     await loadAdminOrders();
 }
 
+function formatOrderPrice(total) {
+    return `£${parseFloat(total || 0).toFixed(2)}`;
+}
+
+function adminOrderPriceCell(order) {
+    const amount = parseFloat(order.total || 0).toFixed(2);
+    const editBtn = canEditOrderPrice()
+        ? `<button type="button" class="icon-edit-btn" data-order-action="edit-price" data-order-id="${order.id}" title="Edit price" aria-label="Edit price"><i data-lucide="pencil"></i></button>`
+        : '';
+    return `<div class="table-price-wrap" data-price-wrap="${order.id}">
+        <span class="table-price-value">${formatOrderPrice(amount)}</span>
+        ${editBtn}
+    </div>`;
+}
+
+function beginAdminOrderPriceEdit(orderId, wrapEl) {
+    if (!canEditOrderPrice()) return;
+    const wrap = wrapEl || document.querySelector(`[data-price-wrap="${orderId}"]`);
+    if (!wrap || wrap.querySelector('input[data-order-action="total"]')) return;
+    const current = wrap.querySelector('.table-price-value');
+    const raw = current ? String(current.textContent || '').replace(/£/g, '').replace(/,/g, '').trim() : '0.00';
+    wrap.innerHTML = `<span>£</span>
+        <input type="number" min="0" max="100000" step="0.01" inputmode="decimal" class="table-select table-price-input" data-order-action="total" data-order-id="${orderId}" value="${escapeHtml(raw)}" aria-label="Order price">`;
+    const input = wrap.querySelector('input');
+    if (input) {
+        input.focus();
+        input.select();
+    }
+}
+
+function beginStaffOrderPriceEdit() {
+    if (!canEditOrderPrice() || !staffOrderId) return;
+    const editor = document.getElementById('staff-order-price-editor');
+    const input = document.getElementById('staff-order-price-input');
+    const editBtn = document.getElementById('staff-order-price-edit');
+    const priceEl = document.getElementById('staff-order-price');
+    if (!editor || !input) return;
+    input.value = (priceEl && priceEl.dataset.total) || input.value || '0.00';
+    editor.hidden = false;
+    if (editBtn) editBtn.hidden = true;
+    input.focus();
+    input.select();
+}
+
+async function saveStaffOrderPriceEdit() {
+    const input = document.getElementById('staff-order-price-input');
+    if (!input || !staffOrderId) return;
+    await updateAdminOrderTotal(staffOrderId, input.value, input);
+}
+
+async function updateAdminOrderTotal(orderId, rawValue, inputEl) {
+    if (!canEditOrderPrice()) {
+        alert('Only an administrator can change order prices.');
+        if (inputEl) await loadAdminOrders();
+        return;
+    }
+    const parsed = parseFloat(String(rawValue || '').replace(/£/g, '').replace(/,/g, '').trim());
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100000) {
+        alert('Enter a valid price between £0 and £100,000.');
+        if (inputEl) await loadAdminOrders();
+        return;
+    }
+    const total = Math.round(parsed * 100) / 100;
+    try {
+        const res = await fetch(`/api/admin/orders/${orderId}`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            credentials: 'same-origin',
+            body: JSON.stringify({ total })
+        });
+        const data = await res.json();
+        if (!res.ok || data.status !== 'success') throw new Error(data.message || 'Unable to update price.');
+        if (inputEl) inputEl.value = total.toFixed(2);
+        loadAdminOrders();
+        if (staffOrderId === orderId) await openStaffOrderWorkspace(orderId);
+    } catch (err) {
+        alert(err.message || 'Unable to update price.');
+        await loadAdminOrders();
+    }
+}
+
 async function updateAdminOrderPaymentMode(orderId, paymentMode) {
+    if (!canViewRevenue()) {
+        alert('Only an administrator can change payment mode.');
+        return;
+    }
     try {
         const res = await fetch(`/api/admin/orders/${orderId}`, {
             method: 'PUT',
@@ -3385,6 +4137,9 @@ let staffOrderId = null;
 let staffOrderClientId = null;
 let staffOrderCompanyId = null;
 let staffOrderProgress = 0;
+let staffOrderRecord = null;
+let staffCheckoutFormEditing = false;
+let staffCheckoutFormDraft = [];
 
 function canOperateOrderDocuments() {
     return currentUser && ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF'].includes(currentUser.role);
@@ -3395,6 +4150,10 @@ function canManageOrders() {
 }
 
 function canDeleteOrders() {
+    return currentUser && ['SUPER_ADMIN', 'ADMIN'].includes(currentUser.role);
+}
+
+function canEditOrderPrice() {
     return currentUser && ['SUPER_ADMIN', 'ADMIN'].includes(currentUser.role);
 }
 
@@ -3590,9 +4349,13 @@ function setStaffOrderNotice(kind, message) {
 }
 
 function staffOrderPaymentModeOptions(selected) {
-    const modes = ['', 'PKR(Bank Transfer)', 'GBP(Bank Transfer)', 'Website Charge'];
-    const labels = { '': 'Select mode', 'PKR(Bank Transfer)': 'PKR(Bank Transfer)', 'GBP(Bank Transfer)': 'GBP(Bank Transfer)', 'Website Charge': 'Website Charge' };
-    return modes.map((mode) => `<option value="${mode}"${mode === (selected || '') ? ' selected' : ''}>${labels[mode]}</option>`).join('');
+    const modes = [
+        { value: '', label: 'Select' },
+        { value: 'PKR(Bank Transfer)', label: 'PKR' },
+        { value: 'GBP(Bank Transfer)', label: 'GBP' },
+        { value: 'Website Charge', label: 'Website' },
+    ];
+    return modes.map((mode) => `<option value="${mode.value}"${mode.value === (selected || '') ? ' selected' : ''}>${mode.label}</option>`).join('');
 }
 
 function staffOrderStatusOptions(selected) {
@@ -3601,11 +4364,210 @@ function staffOrderStatusOptions(selected) {
     ).join('');
 }
 
-async function openStaffOrderWorkspace(orderId) {
+function collapseCheckoutAddressFields(fields) {
+    const rank = {
+        street: 0, 'line 1': 0, 'address line 1': 0,
+        line2: 1, 'line 2': 1, 'address line 2': 1,
+        city: 2, state: 3, county: 3, 'county / state': 3,
+        zip: 4, postcode: 4, postal: 4, country: 5
+    };
+    const groupNames = {
+        'registered address': 'Registered address',
+        'registered company address': 'Registered address',
+        'billing address': 'Billing address',
+        'shipping address': 'Shipping address',
+        'director address': 'Director address',
+        'director home address': 'Director address',
+        address: 'Address'
+    };
+    const grouped = {};
+    const result = [];
+    (fields || []).forEach((field) => {
+        const label = String(field.label || '').trim();
+        const value = String(field.value || '').trim();
+        const low = label.toLowerCase().replace(/\s+/g, ' ');
+        const match = low.match(/^(registered(?: company)? address|billing address|shipping address|director(?: home)? address|address)\s+(.+)$/);
+        if (!match || !value) {
+            result.push(field);
+            return;
+        }
+        const groupKey = match[1].replace('registered company address', 'registered address').replace('director home address', 'director address');
+        let part = match[2].trim().replace('county/state', 'county / state');
+        if (rank[part] == null) {
+            const last = part.split(' ').pop();
+            part = rank[last] == null ? part : last;
+        }
+        if (rank[part] == null) {
+            result.push(field);
+            return;
+        }
+        if (!grouped[groupKey]) {
+            grouped[groupKey] = { pos: result.length, parts: {} };
+            result.push(null);
+        }
+        const r = rank[part];
+        if (grouped[groupKey].parts[r] == null) grouped[groupKey].parts[r] = value;
+    });
+    Object.keys(grouped).forEach((key) => {
+        const info = grouped[key];
+        const line = Object.keys(info.parts).sort((a, b) => Number(a) - Number(b)).map((k) => info.parts[k]).filter(Boolean).join(', ');
+        result[info.pos] = { label: groupNames[key] || 'Registered address', value: line };
+    });
+    return result.filter(Boolean);
+}
+
+function checkoutFieldKey(label) {
+    const raw = String(label || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const aliases = {
+        'passport cnic': 'passport cnic',
+        'passport number': 'passport cnic',
+        'passport no': 'passport cnic',
+        passport: 'passport cnic',
+        cnic: 'passport cnic',
+        'id number': 'passport cnic',
+        'registered address form': 'registered address',
+        'registered company address': 'registered address'
+    };
+    return aliases[raw] || raw;
+}
+
+function collapseCheckoutFormFields(fields) {
+    const collapsed = collapseCheckoutAddressFields(fields);
+    const seen = new Set();
+    return collapsed.filter((field) => {
+        const key = checkoutFieldKey(field.label);
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+}
+
+function isWideCheckoutField(label) {
+    return /address|description|activity|source of funds/i.test(label || '');
+}
+
+function setStaffCheckoutFormMode(editing) {
+    staffCheckoutFormEditing = Boolean(editing);
+    const editBtn = document.getElementById('staff-order-edit-form-btn');
+    const addBtn = document.getElementById('staff-order-add-form-btn');
+    const saveBtn = document.getElementById('staff-order-save-form-btn');
+    const cancelBtn = document.getElementById('staff-order-cancel-form-btn');
+    const canEdit = canManageOrders();
+    if (editBtn) editBtn.hidden = !canEdit || staffCheckoutFormEditing;
+    if (addBtn) addBtn.hidden = !canEdit || !staffCheckoutFormEditing;
+    if (saveBtn) saveBtn.hidden = !canEdit || !staffCheckoutFormEditing;
+    if (cancelBtn) cancelBtn.hidden = !canEdit || !staffCheckoutFormEditing;
+}
+
+function collectStaffCheckoutFormDraft() {
+    const checkoutEl = document.getElementById('staff-order-checkout-form');
+    if (!checkoutEl) return staffCheckoutFormDraft.slice();
+    return Array.from(checkoutEl.querySelectorAll('[data-checkout-field]')).map((row) => ({
+        label: (row.querySelector('[data-checkout-label]') || {}).value || row.getAttribute('data-checkout-label') || '',
+        value: (row.querySelector('[data-checkout-value]') || {}).value || '',
+    })).filter((field) => String(field.label || '').trim());
+}
+
+function renderStaffCheckoutForm(fields) {
+    const checkoutEl = document.getElementById('staff-order-checkout-form');
+    if (!checkoutEl) return;
+    const checkoutFields = collapseCheckoutFormFields(fields || []);
+    staffCheckoutFormDraft = checkoutFields.map((field) => ({
+        label: field.label || '',
+        value: field.value || '',
+    }));
+    setStaffCheckoutFormMode(staffCheckoutFormEditing);
+    if (!checkoutFields.length && !staffCheckoutFormEditing) {
+        checkoutEl.innerHTML = '<p class="staff-order-section-copy full">No checkout form data stored for this order yet.</p>';
+        return;
+    }
+    if (staffCheckoutFormEditing && canManageOrders()) {
+        const rows = (checkoutFields.length ? checkoutFields : [{ label: 'Email (form)', value: '' }]).map((field, index) => {
+            const wide = isWideCheckoutField(field.label);
+            const control = wide
+                ? `<textarea class="select-filter staff-order-form-textarea" data-checkout-value rows="3">${escapeHtml(field.value || '')}</textarea>`
+                : `<input type="text" class="select-filter staff-order-form-input" data-checkout-value value="${escapeHtml(field.value || '')}">`;
+            return `<div class="${wide ? 'full' : ''}" data-checkout-field data-checkout-label="${escapeHtml(field.label || '')}">
+                <label class="staff-order-field-label" for="staff-checkout-field-${index}">${escapeHtml(field.label || '')}</label>
+                ${control.replace('data-checkout-value', `id="staff-checkout-field-${index}" data-checkout-value`)}
+            </div>`;
+        }).join('');
+        checkoutEl.innerHTML = rows;
+        return;
+    }
+    checkoutEl.innerHTML = checkoutFields.map((field) => {
+        const wide = isWideCheckoutField(field.label);
+        return `<div class="${wide ? 'full' : ''}"><span class="staff-order-field-label">${escapeHtml(field.label || '')}</span><strong>${escapeHtml(field.value || '—')}</strong></div>`;
+    }).join('');
+}
+
+function staffCheckoutFieldsForEdit(order) {
+    const existing = collapseCheckoutFormFields((order && order.checkout_form) || staffCheckoutFormDraft || []);
+    if (existing.length) return existing;
+    return [
+        { label: 'Desired company name', value: (order && order.company_name) || '' },
+        { label: 'Director name', value: (order && order.company_owner && order.company_owner.full_name) || '' },
+        { label: 'Email (form)', value: (order && order.company_owner && order.company_owner.form_email) || '' },
+        { label: 'UK contact number', value: (order && order.company_owner && order.company_owner.phone) || (order && order.checkout_phone) || '' },
+        { label: 'Package', value: (order && (order.products_summary || order.service_name)) || '' },
+        { label: 'Registered address', value: '' },
+        { label: 'Director address', value: (order && order.company_owner && order.company_owner.address) || '' },
+    ];
+}
+
+function beginStaffCheckoutFormEdit() {
+    if (!canManageOrders()) return;
+    staffCheckoutFormEditing = true;
+    const draft = collectStaffCheckoutFormDraft();
+    renderStaffCheckoutForm(staffCheckoutFieldsForEdit(Object.assign({}, staffOrderRecord || {}, {
+        checkout_form: draft.length ? draft : ((staffOrderRecord && staffOrderRecord.checkout_form) || [])
+    })));
+}
+
+function addStaffCheckoutFormField() {
+    if (!canManageOrders() || !staffCheckoutFormEditing) return;
+    const label = window.prompt('Field name to add (for example Email, SIC code, or Package)');
+    if (!label || !String(label).trim()) return;
+    const draft = collectStaffCheckoutFormDraft();
+    draft.push({ label: String(label).trim(), value: '' });
+    renderStaffCheckoutForm(draft);
+}
+
+function cancelStaffCheckoutFormEdit() {
+    staffCheckoutFormEditing = false;
+    if (staffOrderId) openStaffOrderWorkspace(staffOrderId);
+}
+
+async function saveStaffCheckoutFormEdit() {
+    if (!canManageOrders() || !staffOrderId) return;
+    const checkout_form = collectStaffCheckoutFormDraft();
+    try {
+        const res = await fetch(`/api/admin/orders/${staffOrderId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ checkout_form }),
+        });
+        const data = await res.json();
+        if (!res.ok || data.status !== 'success') throw new Error(data.message || 'Unable to save checkout details.');
+        staffCheckoutFormEditing = false;
+        await openStaffOrderWorkspace(staffOrderId);
+        setStaffOrderNotice('success', 'Checkout details updated.');
+        if (typeof loadAdminOrders === 'function') loadAdminOrders();
+        if (typeof loadAdminCompanies === 'function') loadAdminCompanies();
+    } catch (err) {
+        setStaffOrderNotice('error', err.message || 'Unable to save checkout details.');
+    }
+}
+
+async function openStaffOrderWorkspace(orderId, options) {
     if (!currentUser || currentUser.role === 'CLIENT') {
         alert('Staff sign-in is required to process an order.');
         return;
     }
+    const editCheckout = Boolean(options && options.editCheckout) && canManageOrders();
+    if (Number(staffOrderId) !== Number(orderId)) staffCheckoutFormEditing = false;
+    if (editCheckout) staffCheckoutFormEditing = true;
     setStaffOrderNotice('', '');
     try {
         const orderRes = await fetch(`/api/client/orders/${orderId}`, { credentials: 'same-origin' });
@@ -3618,18 +4580,54 @@ async function openStaffOrderWorkspace(orderId) {
         staffOrderClientId = order.user_id;
         staffOrderCompanyId = order.company_id;
         staffOrderProgress = Number(order.progress_percent) || 0;
+        staffOrderRecord = order;
         document.getElementById('staff-order-number').textContent = order.order_number;
-        document.getElementById('staff-order-meta').textContent = `${formatDateTime(order.created_at) || formatDate(order.created_at)} · £${parseFloat(order.total).toFixed(2)}`;
+        const createdLabel = formatDateTime(order.created_at) || formatDate(order.created_at);
+        const showFinance = canViewRevenue();
+        document.getElementById('staff-order-meta').textContent = showFinance
+            ? `${createdLabel} · £${parseFloat(order.total || 0).toFixed(2)}`
+            : createdLabel;
         setPortfolioText('staff-order-date', formatShortDate(order.created_at) || formatDate(order.created_at));
         setPortfolioText('staff-order-company', order.company_name || '—');
+        const owner = order.company_owner || {};
+        setPortfolioText('staff-order-owner-name', owner.full_name || '—');
+        setPortfolioText('staff-order-owner-email', owner.form_email || '—');
+        setPortfolioText('staff-order-owner-phone', owner.phone || '—');
+        setPortfolioText('staff-order-portal-email', order.portal_login_email || order.client_email || '—');
         const category = order.category_name ? `${order.category_name} · ` : '';
         const productSummary = order.products_summary || order.service_name || '—';
         setPortfolioText('staff-order-product', `${category}${productSummary}`.trim() || '—');
-        const priceBits = [`£${parseFloat(order.total || 0).toFixed(2)}`];
-        if (order.price != null && order.vat != null) {
+        const priceBits = showFinance ? [`£${parseFloat(order.total || 0).toFixed(2)}`] : [];
+        if (showFinance && order.price != null && order.vat != null) {
             priceBits.push(`(£${parseFloat(order.price || 0).toFixed(2)} + £${parseFloat(order.vat || 0).toFixed(2)} VAT)`);
         }
-        setPortfolioText('staff-order-price', priceBits.join(' '));
+        setPortfolioText('staff-order-price', priceBits.join(' ') || '—');
+        const priceEl = document.getElementById('staff-order-price');
+        if (priceEl) priceEl.dataset.total = parseFloat(order.total || 0).toFixed(2);
+        const priceEditBtn = document.getElementById('staff-order-price-edit');
+        const priceEditor = document.getElementById('staff-order-price-editor');
+        const priceInput = document.getElementById('staff-order-price-input');
+        const priceSave = document.getElementById('staff-order-price-save');
+        if (priceEditor) priceEditor.hidden = true;
+        if (priceEditBtn) {
+            priceEditBtn.hidden = !canEditOrderPrice();
+            priceEditBtn.onclick = () => beginStaffOrderPriceEdit();
+        }
+        if (priceInput) {
+            priceInput.value = parseFloat(order.total || 0).toFixed(2);
+            priceInput.onkeydown = (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    saveStaffOrderPriceEdit();
+                }
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    if (priceEditor) priceEditor.hidden = true;
+                    if (priceEditBtn && canEditOrderPrice()) priceEditBtn.hidden = false;
+                }
+            };
+        }
+        if (priceSave) priceSave.onclick = () => saveStaffOrderPriceEdit();
         const paymentSel = document.getElementById('staff-order-payment-mode');
         if (paymentSel) {
             paymentSel.innerHTML = staffOrderPaymentModeOptions(order.payment_mode || '');
@@ -3648,24 +4646,22 @@ async function openStaffOrderWorkspace(orderId) {
         if (deleteBtn) deleteBtn.style.display = canDeleteOrders() ? 'inline-flex' : 'none';
         const progressBtn = document.getElementById('staff-order-progress-btn');
         if (progressBtn) progressBtn.style.display = canAdvanceOrderProgress(order) ? 'inline-flex' : 'none';
-        const checkoutFields = order.checkout_form || [];
-        const checkoutEl = document.getElementById('staff-order-checkout-form');
-        if (checkoutEl) {
-            checkoutEl.innerHTML = checkoutFields.length ? checkoutFields.map((field) => {
-                const wide = /address|description|activity|source of funds/i.test(field.label || '');
-                return `<div class="${wide ? 'full' : ''}"><span class="staff-order-field-label">${escapeHtml(field.label || '')}</span><strong>${escapeHtml(field.value || '—')}</strong></div>`;
-            }).join('') : '<p class="staff-order-section-copy full">No checkout form data stored for this order yet.</p>';
-        }
+        const checkoutFields = staffCheckoutFormEditing
+            ? staffCheckoutFieldsForEdit(order)
+            : collapseCheckoutFormFields(order.checkout_form || []);
+        renderStaffCheckoutForm(checkoutFields);
         const lines = data.line_items || [];
-        document.getElementById('staff-order-products').innerHTML = lines.length ? `<table class="data-table"><thead><tr><th>Category</th><th>Product</th><th>SKU</th><th>Qty</th><th>Unit</th><th>Total</th></tr></thead><tbody>${lines.map((item) => `
+        const productHead = showFinance
+            ? '<th>Category</th><th>Product</th><th>SKU</th><th>Qty</th><th>Unit</th><th>Total</th>'
+            : '<th>Category</th><th>Product</th><th>SKU</th><th>Qty</th>';
+        document.getElementById('staff-order-products').innerHTML = lines.length ? `<table class="data-table"><thead><tr>${productHead}</tr></thead><tbody>${lines.map((item) => `
             <tr>
                 <td>${escapeHtml(item.category_name || '—')}</td>
                 <td>${escapeHtml(item.product_name)}</td>
                 <td>${escapeHtml(item.sku || '—')}</td>
                 <td>${item.quantity}</td>
-                <td>£${parseFloat(item.unit_price || 0).toFixed(2)}</td>
-                <td>£${parseFloat(item.line_total || 0).toFixed(2)}</td>
-            </tr>`).join('')}</tbody></table>` : `<p class="staff-order-section-copy">${escapeHtml(productSummary)} · £${parseFloat(order.price || order.total || 0).toFixed(2)}</p>`;
+                ${showFinance ? `<td>£${parseFloat(item.unit_price || 0).toFixed(2)}</td><td>£${parseFloat(item.line_total || 0).toFixed(2)}</td>` : ''}
+            </tr>`).join('')}</tbody></table>` : `<p class="staff-order-section-copy">${escapeHtml(productSummary)}${showFinance ? ` · £${parseFloat(order.price || order.total || 0).toFixed(2)}` : ''}</p>`;
         const docs = (data.documents || []).filter((d) => d.is_customer_upload || d.uploaded_by === 'Customer Upload' || d.category === 'Checkout Upload');
         document.getElementById('staff-order-documents').innerHTML = docs.length ? docs.map((d) => `
             <div class="staff-order-doc-row">
@@ -3673,10 +4669,19 @@ async function openStaffOrderWorkspace(orderId) {
                     <strong>${escapeHtml(d.name)}</strong>
                     <div class="staff-order-field-sub">Customer checkout upload · ${escapeHtml(d.status || 'Pending Review')} · ${escapeHtml(d.file_type || '')}</div>
                 </div>
-                <a class="btn-secondary staff-order-doc-view" href="/api/documents/${d.id}/download">View</a>
+                <div class="doc-file-actions">
+                    ${documentActionButtons(d)}
+                </div>
             </div>`).join('') : '';
         const modal = document.getElementById('modal-staff-order');
-        if (modal) modal.classList.add('active');
+        if (modal) {
+            modal.classList.toggle('hide-order-finance', !showFinance);
+            modal.classList.add('active');
+        }
+        if (editCheckout) {
+            const checkoutEl = document.getElementById('staff-order-checkout-form');
+            if (checkoutEl) checkoutEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
         safeCreateIcons();
     } catch (err) {
         alert(err.message || 'Unable to open order.');
@@ -3684,6 +4689,7 @@ async function openStaffOrderWorkspace(orderId) {
 }
 
 function closeStaffOrderModal() {
+    staffCheckoutFormEditing = false;
     const modal = document.getElementById('modal-staff-order');
     if (modal) modal.classList.remove('active');
 }
@@ -4376,7 +5382,7 @@ function fillCreateUserRoleOptions() {
     }).join('');
     if (allowed.includes('STAFF')) sel.value = 'STAFF';
     else if (allowed.length) sel.value = allowed[0];
-    fillCreateUserDepartments([]);
+    fillCreateUserDepartments(STAFF_DEPARTMENTS.slice());
     syncCreateUserDepartmentField();
 }
 
@@ -4608,9 +5614,11 @@ function renderAdminCustomers() {
                 <td>${c.companies_count ?? 0}</td>
                 <td>${c.orders_count ?? 0}</td>
                 <td><span class="status-badge ${portalReady ? 'completed' : 'pending'}">${portalLabel}</span></td>
-                <td>
-                    <button type="button" class="btn-primary" style="padding:4px 10px; font-size:0.75rem;" onclick="openCrmClientModal(${c.id})">View CRM Profile</button>
-                    ${portalReady ? '' : `<button type="button" class="btn-secondary" style="padding:4px 10px; font-size:0.75rem; margin-left:6px;" onclick="setClientPortalPassword(${c.id}, ${JSON.stringify(c.email || '')})">Set password</button>`}
+                <td class="cell-actions">
+                    <div class="table-action-btns">
+                        <button type="button" class="btn-primary btn-table" data-customer-action="profile" data-customer-id="${c.id}">View profile</button>
+                        ${portalReady ? '' : `<button type="button" class="btn-secondary btn-table" data-customer-action="password" data-customer-id="${c.id}" data-customer-email="${escapeHtml(c.email || '')}">Set password</button>`}
+                    </div>
                 </td>
             </tr>
         `;
@@ -4676,80 +5684,101 @@ let currentCrmClientData = null;
 
 async function openCrmClientModal(clientId) {
     try {
-        const res = await fetch(`/api/admin/clients/${clientId}/full`);
-        const data = await res.json();
-        if (data.status === 'success') {
-            currentCrmClientData = data;
-            const c = data.client;
-            
-            document.getElementById('crm-modal-name').textContent = c.full_name;
-            document.getElementById('crm-modal-meta').textContent = `WP User ID: ${c.wordpress_user_id || 'N/A'} | ${c.email}`;
-            document.getElementById('crm-modal-avatar').textContent = c.full_name.split(' ').map(n => n[0]).join('');
-            
-            document.getElementById('crm-ov-email').textContent = c.email;
-            document.getElementById('crm-ov-phone').textContent = c.phone || 'N/A';
-            document.getElementById('crm-ov-country').textContent = c.country || 'United Kingdom';
-            document.getElementById('crm-ov-status').textContent = c.status;
-            document.getElementById('crm-ov-synced').textContent = c.last_synced_at ? `Synced (${c.last_synced_at})` : 'Not synced';
-            document.getElementById('crm-ov-address').textContent = c.address || 'N/A';
-            
-            // Populate Companies tab
-            const compBox = document.getElementById('crm-companies-list');
-            compBox.innerHTML = data.companies.length ? data.companies.map(comp => `
+        const res = await fetch(`/api/admin/clients/${clientId}/full`, { credentials: 'same-origin' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success' || !data.client) {
+            throw new Error(data.message || 'Unable to open customer profile.');
+        }
+        currentCrmClientData = data;
+        const c = data.client;
+        const displayName = (c.full_name || c.email || 'Customer').trim();
+        const initials = displayName.split(/\s+/).filter(Boolean).map((n) => n[0]).join('').slice(0, 2).toUpperCase() || 'C';
+
+        document.getElementById('crm-modal-name').textContent = displayName;
+        document.getElementById('crm-modal-meta').textContent = `WP User ID: ${c.wordpress_user_id || 'N/A'} | ${c.email || ''}`;
+        document.getElementById('crm-modal-avatar').textContent = initials;
+        document.getElementById('crm-ov-email').textContent = c.email || 'N/A';
+        document.getElementById('crm-ov-phone').textContent = c.phone || 'N/A';
+        document.getElementById('crm-ov-country').textContent = c.country || 'United Kingdom';
+        document.getElementById('crm-ov-status').textContent = c.status || '—';
+        document.getElementById('crm-ov-synced').textContent = c.last_synced_at ? `Synced (${c.last_synced_at})` : 'Not synced';
+        document.getElementById('crm-ov-address').textContent = c.address || 'N/A';
+
+        const compBox = document.getElementById('crm-companies-list');
+        if (compBox) {
+            const companies = data.companies || [];
+            compBox.innerHTML = companies.length ? companies.map((comp) => `
                 <div style="padding:10px; border:1px solid #e2e8f0; border-radius:8px; margin-bottom:8px;">
-                    <strong>${comp.name}</strong> (#${comp.company_number}) • ${comp.package}
-                    <div style="font-size:0.78rem; color:#64748b;">Office: ${comp.reg_office} | Status: ${comp.status}</div>
+                    <strong>${escapeHtml(comp.name || '')}</strong> (#${escapeHtml(comp.company_number || '')}) • ${escapeHtml(comp.package || '')}
+                    <div style="font-size:0.78rem; color:#64748b;">Office: ${escapeHtml(comp.reg_office || '—')} | Status: ${escapeHtml(comp.status || '')}</div>
                 </div>
             `).join('') : '<p style="color:#64748b;">No registered companies for this client.</p>';
-            
-            // Populate Orders tab
-            const ordBox = document.getElementById('crm-orders-list');
-            ordBox.innerHTML = data.orders.length ? data.orders.map(o => `
+        }
+
+        const ordBox = document.getElementById('crm-orders-list');
+        if (ordBox) {
+            const orders = data.orders || [];
+            ordBox.innerHTML = orders.length ? orders.map((o) => {
+                const priceBit = canViewRevenue() && o.total != null ? ` (£${parseFloat(o.total).toFixed(2)})` : '';
+                return `
                 <div style="padding:10px; border:1px solid #e2e8f0; border-radius:8px; margin-bottom:8px; display:flex; justify-content:space-between; gap:8px; align-items:center;">
                     <div>
-                        <strong>${escapeHtml(o.order_number)}</strong> — ${escapeHtml(o.service_name)} (£${parseFloat(o.total).toFixed(2)})
+                        <strong>${escapeHtml(o.order_number)}</strong> — ${escapeHtml(o.service_name)}${priceBit}
                         <div style="font-size:0.78rem; color:#64748b;">${escapeHtml(formatDate(o.created_at))} · ${escapeHtml(o.status)} · ${o.progress_percent}%</div>
                     </div>
-                    <div style="display:flex; gap:6px; flex-wrap:wrap;">
-                        ${canUploadClientDocuments() ? `<button type="button" class="btn-secondary" style="padding:4px 10px; font-size:0.75rem;" onclick="openDeliverDocumentModal({orderId:${o.id}, companyId:${o.company_id || 'null'}})">Upload Document</button>` : ''}
-                        <button type="button" class="btn-primary" style="padding:4px 10px; font-size:0.75rem;" onclick="closeCrmClientModal(); openStaffOrderWorkspace(${o.id})">Process</button>
+                    <div class="table-action-btns">
+                        ${canUploadClientDocuments() ? `<button type="button" class="btn-secondary btn-table" onclick="openDeliverDocumentModal({orderId:${o.id}, companyId:${o.company_id || 'null'}})">Upload</button>` : ''}
+                        ${canManageOrders() ? `<button type="button" class="btn-secondary btn-table" onclick="closeCrmClientModal(); openStaffOrderWorkspace(${o.id}, { editCheckout: true })">Change details</button>` : ''}
+                        <button type="button" class="btn-primary btn-table" onclick="closeCrmClientModal(); openStaffOrderWorkspace(${o.id})">Process</button>
                     </div>
-                </div>
-            `).join('') : '<p style="color:#64748b;">No order history available.</p>';
-            
-            // Populate Invoices tab
-            const invBox = document.getElementById('crm-invoices-list');
-            invBox.innerHTML = data.invoices.length ? data.invoices.map(inv => `
+                </div>`;
+            }).join('') : '<p style="color:#64748b;">No order history available.</p>';
+        }
+
+        const invBox = document.getElementById('crm-invoices-list');
+        if (invBox) {
+            const invoices = data.invoices || [];
+            invBox.innerHTML = invoices.length ? invoices.map((inv) => {
+                const amountBit = canViewRevenue() && inv.total != null ? ` — £${parseFloat(inv.total).toFixed(2)}` : '';
+                return `
                 <div style="padding:10px; border:1px solid #e2e8f0; border-radius:8px; margin-bottom:8px;">
-                    <strong>${inv.invoice_number}</strong> — £${parseFloat(inv.total).toFixed(2)} (${inv.status})
-                </div>
-            `).join('') : '<p style="color:#64748b;">No invoices available.</p>';
-            
-            renderCrmDocumentsList(data.documents || []);
-            const uploadBtn = document.getElementById('crm-upload-document-btn');
-            if (uploadBtn) uploadBtn.style.display = canUploadClientDocuments() ? 'inline-flex' : 'none';
-            
-            // Populate Support tab
-            const suppBox = document.getElementById('crm-support-list');
-            suppBox.innerHTML = data.support_tickets.length ? data.support_tickets.map(t => `
+                    <strong>${escapeHtml(inv.invoice_number || '')}</strong>${amountBit} (${escapeHtml(inv.status || '')})
+                </div>`;
+            }).join('') : '<p style="color:#64748b;">No invoices available.</p>';
+        }
+
+        renderCrmDocumentsList(data.documents || []);
+        const uploadBtn = document.getElementById('crm-upload-document-btn');
+        if (uploadBtn) uploadBtn.style.display = canUploadClientDocuments() ? 'inline-flex' : 'none';
+
+        const suppBox = document.getElementById('crm-support-list');
+        if (suppBox) {
+            const tickets = data.support_tickets || [];
+            suppBox.innerHTML = tickets.length ? tickets.map((t) => `
                 <div style="padding:10px; border:1px solid #e2e8f0; border-radius:8px; margin-bottom:8px;">
-                    <strong>Ticket #${t.ticket_number}</strong>: ${t.subject} (${t.status})
+                    <strong>Ticket #${escapeHtml(t.ticket_number || '')}</strong>: ${escapeHtml(t.subject || '')} (${escapeHtml(t.status || '')})
                 </div>
             `).join('') : '<p style="color:#64748b;">No support tickets filed.</p>';
+        }
 
-            // Populate Activity Logs tab
-            const logBox = document.getElementById('crm-logs-list');
-            logBox.innerHTML = data.activity_logs.length ? data.activity_logs.map(lg => `
+        const logBox = document.getElementById('crm-logs-list');
+        if (logBox) {
+            const logs = data.activity_logs || [];
+            logBox.innerHTML = logs.length ? logs.map((lg) => `
                 <div style="padding:8px; border-bottom:1px solid #f1f5f9; font-size:0.8rem;">
-                    <strong>${lg.action}</strong> • <span style="color:#64748b;">${formatDate(lg.created_at)}</span>
-                    <div style="color:#475569;">${lg.details || ''}</div>
+                    <strong>${escapeHtml(lg.action || '')}</strong> • <span style="color:#64748b;">${escapeHtml(formatDate(lg.created_at))}</span>
+                    <div style="color:#475569;">${escapeHtml(lg.details || '')}</div>
                 </div>
             `).join('') : '<p style="color:#64748b;">No audit trail recorded.</p>';
-
-            switchCrmTab('overview');
-            document.getElementById('crm-client-modal').classList.add('active');
         }
-    } catch (err) { console.error(err); }
+
+        switchCrmTab('overview');
+        const modal = document.getElementById('crm-client-modal');
+        if (modal) modal.classList.add('active');
+    } catch (err) {
+        console.error(err);
+        alert(err.message || 'Unable to open customer profile.');
+    }
 }
 
 function switchCrmTab(tabName) {
@@ -4801,8 +5830,9 @@ function renderCrmDocumentsList(docs) {
                 <div style="margin-top:6px;"><span class="status-badge ${documentStatusClass(doc.status)}">${escapeHtml(doc.status || '—')}</span></div>
             </div>
             <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
-                <a href="/api/documents/${doc.id}/download" target="_blank" class="btn-secondary" style="padding:4px 10px; font-size:0.75rem; text-decoration:none;">View</a>
-                <a href="/api/documents/${doc.id}/download" class="btn-primary" style="padding:4px 10px; font-size:0.75rem; text-decoration:none;">Download</a>
+                <div class="doc-file-actions">
+                    ${documentActionButtons(doc)}
+                </div>
                 ${canReview ? `
                     <select class="select-filter" style="min-width:140px;" onchange="reviewCrmDocument(${doc.id}, this.value)">
                         <option value="Pending Review" ${doc.status === 'Pending Review' ? 'selected' : ''}>Pending Review</option>
@@ -5132,10 +6162,10 @@ async function loadAdminDocuments() {
                     <td style="font-weight:700;">${escapeHtml(d.name || 'Document')}</td>
                     <td>${escapeHtml(d.category || '—')}</td>
                     <td><span class="status-badge ${d.status === 'Approved' ? 'completed' : (d.status === 'Rejected' ? 'cancelled' : 'pending')}">${escapeHtml(d.status || '')}</span></td>
-                    <td>
-                        <div class="order-row-actions">
-                            <a class="btn-secondary" style="padding:4px 10px; font-size:0.75rem; text-decoration:none;" href="/api/documents/${d.id}/download">View</a>
-                            ${pending ? `<button type="button" class="btn-primary" style="padding:4px 10px; font-size:0.75rem;" onclick="approveDocument(${d.id})">Approve</button>` : ''}
+                    <td class="cell-actions">
+                        <div class="order-row-actions table-action-btns">
+                            ${documentActionButtons(d)}
+                            ${pending ? `<button type="button" class="btn-primary btn-table" onclick="approveDocument(${d.id})">Approve</button>` : ''}
                         </div>
                     </td>
                 </tr>
@@ -5216,7 +6246,7 @@ async function loadAdminServices() {
         tbody.innerHTML = services.map((s) => {
             const sid = Number(s.id);
             const actions = canEdit
-                ? `<div style="display:flex; gap:6px; flex-wrap:wrap;">
+                ? `<div class="order-row-actions table-action-btns">
                         <button type="button" class="btn-secondary btn-table" onclick="openEditServiceModal(${sid})">Edit</button>
                         <button type="button" class="portfolio-delete-btn" title="Delete" aria-label="Delete service" onclick="deleteAdminService(${sid})"><i data-lucide="trash-2"></i></button>
                    </div>`
@@ -5393,12 +6423,14 @@ async function deleteAdminService(serviceId) {
 async function loadAdminInvoices() {
     const tbody = document.getElementById('adm-invoices-table-body');
     const errBox = document.getElementById('adm-invoices-error');
+    const showFinance = canViewRevenue();
+    const colCount = showFinance ? 6 : 5;
     if (errBox) {
         errBox.style.display = 'none';
         errBox.textContent = '';
     }
     if (tbody) {
-        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#64748b; padding:28px;">Loading invoices…</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="${colCount}" style="text-align:center; color:#64748b; padding:28px;">Loading invoices…</td></tr>`;
     }
     try {
         const res = await fetch('/api/admin/invoices', { credentials: 'same-origin' });
@@ -5409,7 +6441,7 @@ async function loadAdminInvoices() {
         const invoices = Array.isArray(data.invoices) ? data.invoices : [];
         if (!tbody) return;
         if (!invoices.length) {
-            tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#64748b; padding:28px;">No invoices yet.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="${colCount}" style="text-align:center; color:#64748b; padding:28px;">No invoices yet.</td></tr>`;
             return;
         }
         tbody.innerHTML = invoices.map((inv) => `
@@ -5417,7 +6449,7 @@ async function loadAdminInvoices() {
                 <td style="font-weight:700;">${escapeHtml(inv.invoice_number || '—')}</td>
                 <td>${escapeHtml(inv.client_name || '—')}<div style="font-size:0.72rem; color:#64748b;">${escapeHtml(inv.client_email || '')}</div></td>
                 <td>${escapeHtml(inv.order_number || '—')}</td>
-                <td>£${parseFloat(inv.total || 0).toFixed(2)}</td>
+                ${showFinance ? `<td class="cell-inv-total">£${parseFloat(inv.total || 0).toFixed(2)}</td>` : ''}
                 <td><span class="status-badge ${inv.status === 'Paid' ? 'completed' : (inv.status === 'Overdue' ? 'cancelled' : 'pending')}">${escapeHtml(inv.status || '')}</span></td>
                 <td>${escapeHtml(formatDate(inv.created_at))}</td>
             </tr>
@@ -5429,7 +6461,636 @@ async function loadAdminInvoices() {
             errBox.textContent = err.message || 'Unable to load invoices.';
         }
         if (tbody) {
-            tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#dc2626; padding:28px;">Unable to load invoices.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="${colCount}" style="text-align:center; color:#dc2626; padding:28px;">Unable to load invoices.</td></tr>`;
+        }
+    }
+}
+
+let accountancyCache = [];
+let accountancyBooksState = { companyId: 0, periodEnd: '', clientId: 0 };
+
+function accountancyStatusClass(status) {
+    const value = String(status || '').toLowerCase();
+    if (value === 'filed') return 'completed';
+    if (value === 'overdue') return 'cancelled';
+    if (value === 'in progress' || value === 'ready to file' || value === 'requested') return 'in-progress';
+    return 'pending';
+}
+
+function accountancyVerifyClass(ok, status) {
+    if (ok) return 'acct-badge is-ok';
+    const value = String(status || '').toLowerCase();
+    if (value === 'failed' || value === 'update required') return 'acct-badge is-block';
+    if (value === 'in progress') return 'acct-badge is-warn';
+    return 'acct-badge is-warn';
+}
+
+function accountancyAddressBadge(readiness) {
+    const address = (readiness && readiness.address) || {};
+    const text = address.value || '';
+    if (address.ok) return `<span class="acct-badge is-ok" title="${escapeHtml(text)}">On file</span>`;
+    if (text) return `<span class="acct-badge is-warn" title="${escapeHtml(text)}">Check</span>`;
+    return '<span class="acct-badge is-block">Missing</span>';
+}
+
+function accountancyIssueBadge(readiness) {
+    const blocking = Number((readiness && readiness.blocking_count) || 0);
+    const total = Number((readiness && readiness.issue_count) || 0);
+    const titles = ((readiness && readiness.issues) || []).map((item) => item.title).filter(Boolean).join('; ');
+    if (!total) return '<span class="acct-badge is-ok">Clear</span>';
+    if (blocking) return `<span class="acct-badge is-block" title="${escapeHtml(titles)}">${blocking} block</span>`;
+    return `<span class="acct-badge is-warn" title="${escapeHtml(titles)}">${total} warn</span>`;
+}
+
+function accountancyVerifyBadge(node) {
+    const item = node || {};
+    const label = item.ok ? 'Verified' : (item.status || 'Not started');
+    return `<span class="${accountancyVerifyClass(item.ok, item.status)}">${escapeHtml(label)}</span>`;
+}
+
+function formatGbpAmount(amount) {
+    const value = Number(amount || 0);
+    const abs = Math.abs(value).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return value < 0 ? `−£${abs}` : `£${abs}`;
+}
+
+function accountancyOutflowCategory(category) {
+    return ['Cost of sales', 'Staff costs', 'Other operating charges', 'Tax', 'Dividends / drawings', 'Bank charges', 'VAT'].includes(category);
+}
+
+function accountancyCompanyOptionLabel(row) {
+    const number = row.company_number ? ` (${row.company_number})` : '';
+    return `${row.name || 'Company'}${number}`;
+}
+
+function fillFileAccountsCompanyOptions(selectedId) {
+    const select = document.getElementById('file-accounts-company');
+    if (!select) return;
+    const options = ['<option value="">Select company</option>'].concat(
+        (accountancyCache || []).map((row) => `<option value="${Number(row.id)}">${escapeHtml(accountancyCompanyOptionLabel(row))}</option>`)
+    );
+    select.innerHTML = options.join('');
+    if (selectedId) select.value = String(selectedId);
+}
+
+function setFileAccountsCompanyLocked(locked, companyId) {
+    const select = document.getElementById('file-accounts-company');
+    const lockedEl = document.getElementById('file-accounts-company-locked');
+    const row = (accountancyCache || []).find((item) => Number(item.id) === Number(companyId));
+    if (select) {
+        select.hidden = Boolean(locked && companyId);
+        select.required = !select.hidden;
+        if (companyId) select.value = String(companyId);
+    }
+    if (lockedEl) {
+        lockedEl.hidden = !(locked && companyId);
+        lockedEl.textContent = row ? accountancyCompanyOptionLabel(row) : '';
+    }
+}
+
+function applyAccountancyCompanyPeriod() {
+    const select = document.getElementById('file-accounts-company');
+    const companyId = Number((select || {}).value || 0);
+    const row = (accountancyCache || []).find((item) => Number(item.id) === companyId);
+    const current = (row && row.current) || {};
+    const setVal = (id, value) => {
+        const el = document.getElementById(id);
+        if (el && value) el.value = String(value).slice(0, 10);
+    };
+    setVal('file-accounts-start', current.period_start);
+    setVal('file-accounts-end', current.period_end);
+    setVal('file-accounts-due', current.due_date);
+    const typeEl = document.getElementById('file-accounts-type');
+    if (typeEl && current.accounts_type) typeEl.value = current.accounts_type;
+    const statusEl = document.getElementById('file-accounts-status');
+    if (statusEl) {
+        const status = current.status && current.status !== 'Overdue' ? current.status : 'In progress';
+        if (Array.from(statusEl.options).some((option) => option.value === status)) statusEl.value = status;
+    }
+    const confirmEl = document.getElementById('file-accounts-confirmation');
+    if (confirmEl) confirmEl.value = current.confirmation_number || '';
+    const notesEl = document.getElementById('file-accounts-notes');
+    if (notesEl) notesEl.value = current.notes || '';
+    const idEl = document.getElementById('file-accounts-id');
+    if (idEl) idEl.value = current.id || '';
+    applyFileAccountsReadiness();
+}
+
+function applyFileAccountsReadiness() {
+    const select = document.getElementById('file-accounts-company');
+    const companyId = Number((select || {}).value || 0);
+    const row = (accountancyCache || []).find((item) => Number(item.id) === companyId);
+    const readiness = (row && row.readiness) || {};
+    const banner = document.getElementById('file-accounts-readiness');
+    const statusEl = document.getElementById('file-accounts-status');
+    const canFile = Boolean(readiness.can_file);
+    if (statusEl) {
+        Array.from(statusEl.options).forEach((option) => {
+            if (option.value === 'Ready to file') option.disabled = !canFile;
+        });
+        if (statusEl.value === 'Ready to file' && !canFile) statusEl.value = 'In progress';
+    }
+    if (!banner) return;
+    banner.hidden = true;
+    banner.innerHTML = '';
+}
+
+function openFileAccountsModal(companyId) {
+    if (!isAdminShellUser(currentUser)) return;
+    const err = document.getElementById('file-accounts-error');
+    if (err) {
+        err.style.display = 'none';
+        err.textContent = '';
+    }
+    const open = () => {
+        fillFileAccountsCompanyOptions(companyId);
+        setFileAccountsCompanyLocked(Boolean(companyId), companyId);
+        if (companyId) applyAccountancyCompanyPeriod();
+        const modal = document.getElementById('modal-file-accounts');
+        if (modal) modal.classList.add('active');
+        if (window.lucide) lucide.createIcons();
+    };
+    if (!(accountancyCache || []).length) {
+        loadAdminAccountancy().then(open).catch(open);
+        return;
+    }
+    open();
+}
+
+function closeFileAccountsModal() {
+    const modal = document.getElementById('modal-file-accounts');
+    if (modal) modal.classList.remove('active');
+    setFileAccountsCompanyLocked(false);
+}
+
+async function submitFileAccountsForm(event) {
+    event.preventDefault();
+    const err = document.getElementById('file-accounts-error');
+    const submitBtn = document.getElementById('file-accounts-submit');
+    const companyId = Number((document.getElementById('file-accounts-company') || {}).value || 0);
+    const filingId = Number((document.getElementById('file-accounts-id') || {}).value || 0);
+    const payload = {
+        company_id: companyId,
+        period_start: ((document.getElementById('file-accounts-start') || {}).value || '').trim(),
+        period_end: ((document.getElementById('file-accounts-end') || {}).value || '').trim(),
+        due_date: ((document.getElementById('file-accounts-due') || {}).value || '').trim(),
+        accounts_type: ((document.getElementById('file-accounts-type') || {}).value || 'Micro-entity').trim(),
+        status: ((document.getElementById('file-accounts-status') || {}).value || 'In progress').trim(),
+        confirmation_number: ((document.getElementById('file-accounts-confirmation') || {}).value || '').trim(),
+        notes: ((document.getElementById('file-accounts-notes') || {}).value || '').trim(),
+    };
+    if (err) {
+        err.style.display = 'none';
+        err.textContent = '';
+    }
+    if (!payload.company_id) {
+        if (err) {
+            err.style.display = 'block';
+            err.textContent = 'Select a company.';
+        }
+        return;
+    }
+    if (submitBtn) submitBtn.disabled = true;
+    try {
+        const url = filingId ? `/api/admin/accountancy/${filingId}` : '/api/admin/accountancy';
+        const res = await fetch(url, {
+            method: filingId ? 'PUT' : 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Could not save the accounts filing.');
+        }
+        closeFileAccountsModal();
+        await loadAdminAccountancy();
+    } catch (ex) {
+        if (err) {
+            err.style.display = 'block';
+            err.textContent = ex.message || 'Could not save the accounts filing.';
+        }
+    } finally {
+        if (submitBtn) submitBtn.disabled = false;
+    }
+}
+
+async function requestCompanyAccountsFiling(companyId) {
+    try {
+        const res = await fetch('/api/client/accountancy', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ company_id: Number(companyId) }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Could not request accounts filing.');
+        }
+        await loadClientAccountancy();
+    } catch (err) {
+        alert(err.message || 'Could not request accounts filing.');
+    }
+}
+
+function setAccountancyBooksError(message) {
+    const err = document.getElementById('acct-books-error');
+    if (!err) return;
+    if (!message) {
+        err.hidden = true;
+        err.textContent = '';
+        return;
+    }
+    err.hidden = false;
+    err.textContent = message;
+}
+
+function fillAccountancyBooksWorkspace(data) {
+    const company = (data && data.company) || {};
+    const current = (data && data.current) || {};
+    const readiness = (data && data.readiness) || {};
+    accountancyBooksState = {
+        companyId: Number(company.id || 0),
+        periodEnd: data.period_end || current.period_end || '',
+        clientId: Number(company.client_id || 0),
+    };
+    const title = document.getElementById('acct-books-title');
+    if (title) title.textContent = company.name || 'Accounts workspace';
+    const subtitle = document.getElementById('acct-books-subtitle');
+    if (subtitle) {
+        const yearEnd = formatUkNumericDate(accountancyBooksState.periodEnd) || 'this period';
+        const directorBit = [company.director, company.director_email || company.client_email].filter(Boolean).join(' · ');
+        subtitle.textContent = `${company.company_number || ''}${directorBit ? ` · ${directorBit}` : ''} · year end ${yearEnd} · bank statements to Companies House filing.`;
+    }
+    const identityEl = document.getElementById('acct-books-identity');
+    if (identityEl) identityEl.value = (readiness.identity && readiness.identity.status) || 'Not started';
+    const pscEl = document.getElementById('acct-books-psc');
+    if (pscEl) pscEl.value = (readiness.psc && readiness.psc.status) || 'Not started';
+    const checks = [
+        { label: 'Registered office', ok: Boolean(readiness.address && readiness.address.ok), detail: (readiness.address && readiness.address.value) || 'Missing' },
+        { label: 'Identity verification', ok: Boolean(readiness.identity && readiness.identity.ok), detail: (readiness.identity && readiness.identity.status) || 'Not started' },
+        { label: 'PSC register', ok: Boolean(readiness.psc && readiness.psc.ok), detail: (readiness.psc && readiness.psc.status) || 'Not started' },
+        { label: 'Authentication code', ok: Boolean(readiness.authentication_code && readiness.authentication_code.ok), detail: (readiness.authentication_code && readiness.authentication_code.ok) ? 'On file' : 'Missing' },
+        { label: 'Personal 11 dijits Code', ok: Boolean(readiness.personal_code && readiness.personal_code.ok), detail: (readiness.personal_code && readiness.personal_code.ok) ? 'On file' : 'Missing' },
+        { label: 'UTR', ok: Boolean(readiness.utr && readiness.utr.ok), detail: (readiness.utr && readiness.utr.ok) ? 'On file' : 'Missing' },
+    ];
+    const checksEl = document.getElementById('acct-books-checks');
+    if (checksEl) {
+        checksEl.innerHTML = checks.map((item) => `
+            <div class="acct-check ${item.ok ? 'is-ok' : 'is-block'}">
+                <span>${escapeHtml(item.label)}</span>
+                <strong>${escapeHtml(item.detail)}</strong>
+            </div>
+        `).join('');
+    }
+    const issues = Array.isArray(readiness.issues) ? readiness.issues : [];
+    const issuesEl = document.getElementById('acct-books-issues');
+    if (issuesEl) {
+        issuesEl.innerHTML = issues.length
+            ? issues.map((issue) => `<div class="acct-issue ${issue.severity === 'block' ? 'is-block' : 'is-warn'}"><strong>${escapeHtml(issue.title || '')}</strong> ${escapeHtml(issue.detail || '')}</div>`).join('')
+            : '<p class="acct-issue-clear">UK filing checks are complete for this period.</p>';
+    }
+    const statements = Array.isArray(data.statements) ? data.statements : [];
+    const statementsEl = document.getElementById('acct-books-statements');
+    if (statementsEl) {
+        statementsEl.innerHTML = statements.length
+            ? statements.map((doc) => `
+                <button type="button" class="acct-statement-item" onclick="openDocumentPreview(${Number(doc.id)})">
+                    <strong>${escapeHtml(doc.name || 'Bank statement')}</strong>
+                    <span>${escapeHtml(doc.file_size || '')} · ${escapeHtml(formatUkNumericDate((doc.created_at || '').slice(0, 10)) || '')}</span>
+                </button>
+            `).join('')
+            : '<p class="acct-related-empty">No bank statements on file for this company yet.</p>';
+    }
+    const totals = (data && data.totals) || {};
+    const totalsEl = document.getElementById('acct-books-totals');
+    if (totalsEl) {
+        const cats = Array.isArray(totals.by_category) ? totals.by_category : [];
+        totalsEl.innerHTML = `
+            <div class="acct-total-pill">In ${escapeHtml(formatGbpAmount(totals.inflows))}</div>
+            <div class="acct-total-pill">Out ${escapeHtml(formatGbpAmount(totals.outflows))}</div>
+            <div class="acct-total-pill is-net">Net ${escapeHtml(formatGbpAmount(totals.net))}</div>
+            ${cats.map((item) => `<div class="acct-total-pill">${escapeHtml(item.category)} ${escapeHtml(formatGbpAmount(item.amount))}</div>`).join('')}
+        `;
+    }
+    const entries = Array.isArray(data.entries) ? data.entries : [];
+    const body = document.getElementById('acct-books-entries-body');
+    if (body) {
+        body.innerHTML = entries.length
+            ? entries.map((entry) => `
+                <tr>
+                    <td>${escapeHtml(formatUkNumericDate(entry.entry_date) || '—')}</td>
+                    <td>${escapeHtml(entry.description || '')}</td>
+                    <td>${escapeHtml(entry.category || 'Other')}</td>
+                    <td>${escapeHtml(formatGbpAmount(entry.amount))}</td>
+                    <td>${escapeHtml(entry.source === 'bank_statement' ? 'Statement' : 'Manual')}</td>
+                    <td><div class="table-action-btns"><button type="button" class="btn-secondary btn-table" onclick="deleteAccountancyBookEntry(${Number(entry.id)})">Remove</button></div></td>
+                </tr>
+            `).join('')
+            : `<tr><td colspan="6" style="text-align:center; color:#64748b; padding:20px;">No cash book lines yet. Post each bank statement line here.</td></tr>`;
+    }
+    const dateEl = document.getElementById('acct-books-entry-date');
+    if (dateEl && !dateEl.value) dateEl.value = new Date().toISOString().slice(0, 10);
+    const fileBtn = document.getElementById('acct-books-file-btn');
+    if (fileBtn) fileBtn.textContent = readiness.can_file ? 'File accounts' : 'File anyway';
+    if (window.lucide) lucide.createIcons();
+}
+
+async function refreshAccountancyBooks() {
+    const companyId = Number(accountancyBooksState.companyId || 0);
+    if (!companyId) return;
+    const params = accountancyBooksState.periodEnd ? `?period_end=${encodeURIComponent(accountancyBooksState.periodEnd)}` : '';
+    const res = await fetch(`/api/admin/accountancy/${companyId}/books${params}`, { credentials: 'same-origin' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.status !== 'success') {
+        throw new Error(data.message || 'Unable to load the cash book.');
+    }
+    fillAccountancyBooksWorkspace(data);
+}
+
+async function openAccountancyBooks(companyId) {
+    if (!isAdminShellUser(currentUser)) return;
+    setAccountancyBooksError('');
+    accountancyBooksState.companyId = Number(companyId || 0);
+    const modal = document.getElementById('modal-accountancy-books');
+    if (modal) modal.classList.add('active');
+    if (window.lucide) lucide.createIcons();
+    try {
+        await refreshAccountancyBooks();
+    } catch (err) {
+        setAccountancyBooksError(err.message || 'Unable to load the cash book.');
+    }
+}
+
+function closeAccountancyBooks() {
+    const modal = document.getElementById('modal-accountancy-books');
+    if (modal) modal.classList.remove('active');
+}
+
+async function saveAccountancyVerification() {
+    const companyId = Number(accountancyBooksState.companyId || 0);
+    if (!companyId) return;
+    const saveBtn = document.getElementById('acct-books-save-verify');
+    if (saveBtn) saveBtn.disabled = true;
+    setAccountancyBooksError('');
+    try {
+        const res = await fetch(`/api/admin/companies/${companyId}`, {
+            method: 'PUT',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                identity_verified: ((document.getElementById('acct-books-identity') || {}).value || 'Not started').trim(),
+                psc_verified: ((document.getElementById('acct-books-psc') || {}).value || 'Not started').trim(),
+            }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Could not save verification.');
+        }
+        await refreshAccountancyBooks();
+        await loadAdminAccountancy();
+    } catch (err) {
+        setAccountancyBooksError(err.message || 'Could not save verification.');
+    } finally {
+        if (saveBtn) saveBtn.disabled = false;
+    }
+}
+
+async function uploadAccountancyBankStatement(event) {
+    event.preventDefault();
+    const companyId = Number(accountancyBooksState.companyId || 0);
+    const fileInput = document.getElementById('acct-books-file');
+    const statusEl = document.getElementById('acct-books-upload-status');
+    const submitBtn = document.getElementById('acct-books-upload-btn');
+    const file = fileInput && fileInput.files ? fileInput.files[0] : null;
+    if (!companyId || !file) {
+        if (statusEl) statusEl.textContent = 'Choose a bank statement file.';
+        return;
+    }
+    if (submitBtn) submitBtn.disabled = true;
+    if (statusEl) statusEl.textContent = 'Uploading…';
+    try {
+        const b64 = await readFileAsBase64(file);
+        const payload = {
+            company_id: companyId,
+            name: file.name,
+            file_name: file.name,
+            category: 'Bank statement',
+            client_message: 'Your accountant uploaded a bank statement to your company file.',
+            file_content_base64: b64,
+        };
+        if (accountancyBooksState.clientId) payload.client_id = accountancyBooksState.clientId;
+        const res = await fetch('/api/admin/documents', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Could not upload the bank statement.');
+        }
+        if (fileInput) fileInput.value = '';
+        if (statusEl) statusEl.textContent = 'Statement uploaded.';
+        await refreshAccountancyBooks();
+        await loadAdminAccountancy();
+    } catch (err) {
+        if (statusEl) statusEl.textContent = err.message || 'Upload failed.';
+    } finally {
+        if (submitBtn) submitBtn.disabled = false;
+    }
+}
+
+async function submitAccountancyBookEntry(event) {
+    event.preventDefault();
+    const companyId = Number(accountancyBooksState.companyId || 0);
+    if (!companyId) return;
+    const submitBtn = document.getElementById('acct-books-entry-submit');
+    const category = ((document.getElementById('acct-books-entry-category') || {}).value || 'Other').trim();
+    let direction = ((document.getElementById('acct-books-entry-direction') || {}).value || 'in').trim();
+    if (direction === 'in' && accountancyOutflowCategory(category)) direction = 'out';
+    const payload = {
+        period_end: accountancyBooksState.periodEnd,
+        entry_date: ((document.getElementById('acct-books-entry-date') || {}).value || '').trim(),
+        description: ((document.getElementById('acct-books-entry-desc') || {}).value || '').trim(),
+        category,
+        amount: ((document.getElementById('acct-books-entry-amount') || {}).value || '').trim(),
+        direction,
+        source: 'bank_statement',
+    };
+    setAccountancyBooksError('');
+    if (submitBtn) submitBtn.disabled = true;
+    try {
+        const res = await fetch(`/api/admin/accountancy/${companyId}/books`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Could not add the cash book line.');
+        }
+        const descEl = document.getElementById('acct-books-entry-desc');
+        const amountEl = document.getElementById('acct-books-entry-amount');
+        if (descEl) descEl.value = '';
+        if (amountEl) amountEl.value = '';
+        fillAccountancyBooksWorkspace(data);
+        await loadAdminAccountancy();
+    } catch (err) {
+        setAccountancyBooksError(err.message || 'Could not add the cash book line.');
+    } finally {
+        if (submitBtn) submitBtn.disabled = false;
+    }
+}
+
+async function deleteAccountancyBookEntry(entryId) {
+    const companyId = Number(accountancyBooksState.companyId || 0);
+    if (!companyId || !entryId) return;
+    setAccountancyBooksError('');
+    try {
+        const res = await fetch(`/api/admin/accountancy/${companyId}/books/${Number(entryId)}`, {
+            method: 'DELETE',
+            credentials: 'same-origin',
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Could not remove the cash book line.');
+        }
+        fillAccountancyBooksWorkspace(data);
+        await loadAdminAccountancy();
+    } catch (err) {
+        setAccountancyBooksError(err.message || 'Could not remove the cash book line.');
+    }
+}
+
+function fileAccountsFromBooks() {
+    const companyId = Number(accountancyBooksState.companyId || 0);
+    closeAccountancyBooks();
+    if (companyId) openFileAccountsModal(companyId);
+}
+
+async function loadAdminAccountancy() {
+    const tbody = document.getElementById('adm-accountancy-table-body');
+    const errBox = document.getElementById('adm-accountancy-error');
+    if (errBox) {
+        errBox.style.display = 'none';
+        errBox.textContent = '';
+    }
+    if (tbody) {
+        tbody.innerHTML = `<tr><td colspan="11" style="text-align:center; color:#64748b; padding:28px;">Loading companies…</td></tr>`;
+    }
+    try {
+        const res = await fetch('/api/admin/accountancy', { credentials: 'same-origin' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Unable to load accountancy.');
+        }
+        const stats = data.stats || {};
+        const setStat = (id, value) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = Number(value || 0);
+        };
+        setStat('accountancy-stat-overdue', stats.overdue);
+        setStat('accountancy-stat-due', stats.due_soon);
+        setStat('accountancy-stat-progress', stats.in_progress);
+        setStat('accountancy-stat-issues', stats.issues);
+        setStat('accountancy-stat-filed', stats.filed);
+        const rows = Array.isArray(data.companies) ? data.companies : [];
+        accountancyCache = rows;
+        if (!tbody) return;
+        if (!rows.length) {
+            tbody.innerHTML = `<tr><td colspan="11" style="text-align:center; color:#64748b; padding:28px;">No registered companies to file yet.</td></tr>`;
+            return;
+        }
+        tbody.innerHTML = rows.map((row) => {
+            const current = row.current || {};
+            const readiness = row.readiness || {};
+            const fileLabel = current.status === 'Filed' ? 'Update' : 'File';
+            return `
+                <tr>
+                    <td>
+                        <strong>${escapeHtml(row.name || 'Company')}</strong>
+                        <div class="cell-subtext">${escapeHtml(row.company_number || '')}</div>
+                    </td>
+                    <td>${escapeHtml(row.director || row.client_name || '—')}<div class="cell-subtext">${escapeHtml(row.director_email || row.client_email || '')}</div></td>
+                    <td>${accountancyAddressBadge(readiness)}</td>
+                    <td>${accountancyVerifyBadge(readiness.identity)}</td>
+                    <td>${accountancyVerifyBadge(readiness.psc)}</td>
+                    <td>${accountancyIssueBadge(readiness)}</td>
+                    <td>${escapeHtml(formatUkNumericDate(current.period_end) || '—')}</td>
+                    <td>${escapeHtml(formatUkNumericDate(current.due_date) || '—')}</td>
+                    <td>${escapeHtml(current.accounts_type || 'Micro-entity')}</td>
+                    <td><span class="status-badge ${accountancyStatusClass(current.status)}">${escapeHtml(current.status || 'Not started')}</span></td>
+                    <td>
+                        <div class="table-action-btns">
+                            <button type="button" class="btn-secondary btn-table" data-accountancy-action="books" data-accountancy-id="${Number(row.id)}">Books</button>
+                            <button type="button" class="btn-primary btn-table" data-accountancy-action="file" data-accountancy-id="${Number(row.id)}">${fileLabel}</button>
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+    } catch (err) {
+        if (errBox) {
+            errBox.style.display = 'block';
+            errBox.textContent = err.message || 'Unable to load accountancy.';
+        }
+        if (tbody) {
+            tbody.innerHTML = `<tr><td colspan="11" style="text-align:center; color:#dc2626; padding:28px;">Unable to load accountancy.</td></tr>`;
+        }
+    }
+}
+
+async function loadClientAccountancy() {
+    const tbody = document.getElementById('client-accountancy-table-body');
+    const errBox = document.getElementById('client-accountancy-error');
+    if (errBox) {
+        errBox.style.display = 'none';
+        errBox.textContent = '';
+    }
+    if (tbody) {
+        tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:#64748b; padding:28px;">Loading accounts…</td></tr>`;
+    }
+    try {
+        const res = await fetch('/api/client/accountancy', { credentials: 'same-origin' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Unable to load accountancy.');
+        }
+        const rows = Array.isArray(data.companies) ? data.companies : [];
+        if (!tbody) return;
+        if (!rows.length) {
+            tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:#64748b; padding:28px;">No registered companies yet.</td></tr>`;
+            return;
+        }
+        tbody.innerHTML = rows.map((row) => {
+            const current = row.current || {};
+            const readiness = row.readiness || {};
+            const canRequest = current.status !== 'Filed' && current.status !== 'Requested' && current.status !== 'In progress' && current.status !== 'Ready to file';
+            return `
+                <tr>
+                    <td>
+                        <strong>${escapeHtml(row.name || 'Company')}</strong>
+                        <div class="cell-subtext">${escapeHtml(row.company_number || '')}</div>
+                    </td>
+                    <td>${accountancyAddressBadge(readiness)}</td>
+                    <td>${accountancyVerifyBadge(readiness.identity)}</td>
+                    <td>${accountancyVerifyBadge(readiness.psc)}</td>
+                    <td>${escapeHtml(formatUkNumericDate(current.period_end) || '—')}</td>
+                    <td>${escapeHtml(formatUkNumericDate(current.due_date) || '—')}</td>
+                    <td><span class="status-badge ${accountancyStatusClass(current.status)}">${escapeHtml(current.status || 'Not started')}</span></td>
+                    <td>${canRequest ? `<div class="table-action-btns"><button type="button" class="btn-primary btn-table" onclick="requestCompanyAccountsFiling(${Number(row.id)})">Request filing</button></div>` : ''}</td>
+                </tr>
+            `;
+        }).join('');
+    } catch (err) {
+        if (errBox) {
+            errBox.style.display = 'block';
+            errBox.textContent = err.message || 'Unable to load accountancy.';
+        }
+        if (tbody) {
+            tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:#dc2626; padding:28px;">Unable to load accountancy.</td></tr>`;
         }
     }
 }
@@ -5729,12 +7390,218 @@ function formatShortDate(dateStr) {
     return `${day}/${month}/${year}`;
 }
 
+let globalSearchTimer = null;
+let globalSearchItems = [];
+let globalSearchIndex = -1;
+
 function handleGlobalSearch(query) {
-    if (activeView === 'client-orders') {
-        resetClientOrdersPage();
-        loadClientOrders();
+    const q = String(query || '').trim();
+    clearTimeout(globalSearchTimer);
+    if (q.length < 2) {
+        hideGlobalSearchResults();
+        return;
+    }
+    showGlobalSearchMessage('Searching…');
+    globalSearchTimer = setTimeout(() => fetchGlobalSearch(q), 120);
+}
+
+function hideGlobalSearchResults() {
+    const panel = document.getElementById('global-search-results');
+    if (panel) {
+        panel.hidden = true;
+        panel.innerHTML = '';
+        panel.style.left = '';
+        panel.style.top = '';
+        panel.style.width = '';
+    }
+    globalSearchItems = [];
+    globalSearchIndex = -1;
+}
+
+function positionGlobalSearchResults() {
+    const wrap = document.getElementById('header-search-box');
+    const panel = document.getElementById('global-search-results');
+    if (!wrap || !panel || panel.hidden || wrap.style.display === 'none') return;
+    const rect = wrap.getBoundingClientRect();
+    const width = Math.max(320, Math.min(rect.width, window.innerWidth - 24));
+    let left = rect.left;
+    if (left + width > window.innerWidth - 12) left = Math.max(12, window.innerWidth - width - 12);
+    panel.style.left = `${Math.round(left)}px`;
+    panel.style.top = `${Math.round(rect.bottom + 8)}px`;
+    panel.style.width = `${Math.round(width)}px`;
+}
+
+function showGlobalSearchMessage(message) {
+    const panel = document.getElementById('global-search-results');
+    if (!panel) return;
+    panel.innerHTML = `<div class="global-search-empty">${escapeHtml(message)}</div>`;
+    panel.hidden = false;
+    positionGlobalSearchResults();
+}
+
+async function fetchGlobalSearch(query) {
+    const panel = document.getElementById('global-search-results');
+    if (!panel || !currentUser) return;
+    try {
+        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`, { credentials: 'same-origin' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            showGlobalSearchMessage('Unable to search right now.');
+            return;
+        }
+        renderGlobalSearchResults(data.results || {});
+    } catch (err) {
+        showGlobalSearchMessage('Unable to search right now.');
     }
 }
+
+function flattenSearchResults(results) {
+    const groups = [
+        ['customers', 'Clients'],
+        ['orders', 'Orders'],
+        ['companies', 'Companies'],
+        ['documents', 'Documents'],
+        ['invoices', 'Invoices']
+    ];
+    const items = [];
+    groups.forEach(([key]) => {
+        (results[key] || []).forEach((row) => items.push(row));
+    });
+    return items;
+}
+
+function renderGlobalSearchResults(results) {
+    const panel = document.getElementById('global-search-results');
+    if (!panel) return;
+    const groups = [
+        ['customers', 'Clients'],
+        ['orders', 'Orders'],
+        ['companies', 'Companies'],
+        ['documents', 'Documents'],
+        ['invoices', 'Invoices']
+    ];
+    globalSearchItems = flattenSearchResults(results);
+    globalSearchIndex = -1;
+    if (!globalSearchItems.length) {
+        showGlobalSearchMessage('No matching clients, orders, or companies.');
+        return;
+    }
+    let html = '';
+    groups.forEach(([key, label]) => {
+        const rows = results[key] || [];
+        if (!rows.length) return;
+        html += `<div class="global-search-group"><div class="global-search-group-title">${label}</div>`;
+        rows.forEach((row) => {
+            const payload = encodeURIComponent(JSON.stringify(row));
+            html += `<button type="button" class="global-search-item" data-search-item="${payload}">
+                <span class="global-search-item-title">${escapeHtml(row.title || '')}</span>
+                <span class="global-search-item-sub">${escapeHtml(row.subtitle || '')}</span>
+            </button>`;
+        });
+        html += `</div>`;
+    });
+    panel.innerHTML = html;
+    panel.hidden = false;
+    positionGlobalSearchResults();
+    panel.querySelectorAll('.global-search-item').forEach((btn) => {
+        btn.addEventListener('mousedown', (event) => {
+            event.preventDefault();
+            try {
+                openGlobalSearchResult(JSON.parse(decodeURIComponent(btn.getAttribute('data-search-item') || '')));
+            } catch (err) { /* ignore */ }
+        });
+    });
+}
+
+function highlightGlobalSearchItem() {
+    const panel = document.getElementById('global-search-results');
+    if (!panel) return;
+    panel.querySelectorAll('.global-search-item').forEach((btn, idx) => {
+        btn.classList.toggle('is-active', idx === globalSearchIndex);
+        if (idx === globalSearchIndex) btn.scrollIntoView({ block: 'nearest' });
+    });
+}
+
+function openGlobalSearchResult(item) {
+    if (!item || !item.id) return;
+    hideGlobalSearchResults();
+    const input = document.getElementById('global-search-input');
+    if (input) input.blur();
+    if (item.type === 'customer') {
+        switchView('admin-customers');
+        setTimeout(() => openCrmClientModal(item.id), 60);
+        return;
+    }
+    if (item.type === 'order') {
+        if (isAdminShellUser(currentUser)) {
+            switchView('admin-orders');
+            setTimeout(() => openStaffOrderWorkspace(item.id), 60);
+        } else {
+            switchView('client-orders');
+            setTimeout(() => openOrderDetailsModal(item.id), 60);
+        }
+        return;
+    }
+    if (item.type === 'company') {
+        switchView(isAdminShellUser(currentUser) ? 'admin-companies' : 'client-companies');
+        setTimeout(() => openCompanyPortfolioDetail(item.id), 60);
+        return;
+    }
+    if (item.type === 'document') {
+        switchView(isAdminShellUser(currentUser) ? 'admin-documents' : 'client-documents');
+        setTimeout(() => openDocumentPreview(item.id, item.title, item.file_type || ''), 60);
+        return;
+    }
+    if (item.type === 'invoice') {
+        switchView(isAdminShellUser(currentUser) ? 'admin-invoices' : 'client-invoices');
+    }
+}
+
+document.addEventListener('keydown', (event) => {
+    if ((event.metaKey || event.ctrlKey) && (event.key === 'k' || event.key === 'K')) {
+        const input = document.getElementById('global-search-input');
+        const box = document.getElementById('header-search-box');
+        if (input && box && box.style.display !== 'none') {
+            event.preventDefault();
+            input.focus();
+            input.select();
+        }
+        return;
+    }
+    const panel = document.getElementById('global-search-results');
+    if (!panel || panel.hidden) return;
+    if (event.key === 'Escape') {
+        hideGlobalSearchResults();
+        return;
+    }
+    if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        globalSearchIndex = Math.min(globalSearchItems.length - 1, globalSearchIndex + 1);
+        highlightGlobalSearchItem();
+        return;
+    }
+    if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        globalSearchIndex = Math.max(0, globalSearchIndex - 1);
+        highlightGlobalSearchItem();
+        return;
+    }
+    if (event.key === 'Enter' && globalSearchIndex >= 0 && globalSearchItems[globalSearchIndex]) {
+        event.preventDefault();
+        openGlobalSearchResult(globalSearchItems[globalSearchIndex]);
+    }
+});
+
+document.addEventListener('click', (event) => {
+    const wrap = document.getElementById('header-search-box');
+    const panel = document.getElementById('global-search-results');
+    if (wrap && wrap.contains(event.target)) return;
+    if (panel && panel.contains(event.target)) return;
+    hideGlobalSearchResults();
+});
+
+window.addEventListener('resize', positionGlobalSearchResults);
+window.addEventListener('scroll', positionGlobalSearchResults, true);
 
 function formatDate(dateStr) {
     if (!dateStr) return '';

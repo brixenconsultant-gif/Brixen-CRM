@@ -158,6 +158,31 @@ def ensure_schema():
         """)
     if 'checkout_form_json' not in order_cols:
         conn.execute("ALTER TABLE orders ADD COLUMN checkout_form_json TEXT")
+    if 'owner_name' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN owner_name TEXT")
+    if 'owner_form_email' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN owner_form_email TEXT")
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS company_owners (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER NOT NULL UNIQUE,
+            company_id INTEGER,
+            full_name TEXT NOT NULL DEFAULT '',
+            form_email TEXT NOT NULL DEFAULT '',
+            phone TEXT,
+            date_of_birth TEXT,
+            nationality TEXT,
+            passport_cnic TEXT,
+            address TEXT,
+            source TEXT NOT NULL DEFAULT 'formation_form',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
+            FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_company_owners_email ON company_owners(form_email);
+        CREATE INDEX IF NOT EXISTS idx_company_owners_company ON company_owners(company_id);
+    """)
     company_cols = {row[1] for row in conn.execute("PRAGMA table_info(companies)").fetchall()}
     if 'utr_number' not in company_cols:
         conn.execute("ALTER TABLE companies ADD COLUMN utr_number TEXT")
@@ -165,6 +190,53 @@ def ensure_schema():
         conn.execute("ALTER TABLE companies ADD COLUMN authentication_code TEXT")
     if 'activation_code' not in company_cols:
         conn.execute("ALTER TABLE companies ADD COLUMN activation_code TEXT")
+    if 'identity_verified' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN identity_verified TEXT NOT NULL DEFAULT 'Not started'")
+    if 'identity_verified_at' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN identity_verified_at TIMESTAMP")
+    if 'psc_verified' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN psc_verified TEXT NOT NULL DEFAULT 'Not started'")
+    if 'psc_verified_at' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN psc_verified_at TIMESTAMP")
+    if 'ch_checked_at' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN ch_checked_at TIMESTAMP")
+    if 'registration_notified_at' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN registration_notified_at TIMESTAMP")
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS company_accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            period_start DATE NOT NULL,
+            period_end DATE NOT NULL,
+            due_date DATE,
+            accounts_type TEXT NOT NULL DEFAULT 'Micro-entity',
+            status TEXT NOT NULL DEFAULT 'Not started',
+            confirmation_number TEXT,
+            notes TEXT,
+            filed_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_company_accounts_period
+            ON company_accounts(company_id, period_end);
+        CREATE TABLE IF NOT EXISTS company_book_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id INTEGER NOT NULL,
+            period_end DATE NOT NULL,
+            entry_date DATE NOT NULL,
+            description TEXT NOT NULL,
+            amount REAL NOT NULL,
+            category TEXT NOT NULL DEFAULT 'Other',
+            source TEXT NOT NULL DEFAULT 'manual',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_company_book_entries_company_period
+            ON company_book_entries(company_id, period_end);
+    """)
     task_cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
     if 'department' not in task_cols:
         conn.execute("ALTER TABLE tasks ADD COLUMN department TEXT")
@@ -180,6 +252,21 @@ def ensure_schema():
         );
         CREATE INDEX IF NOT EXISTS idx_dismissed_company_cards_lookup
             ON dismissed_company_cards(user_id, name_key, company_number, woocommerce_order_id);
+        CREATE TABLE IF NOT EXISTS email_outbox (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            recipient TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            body_text TEXT,
+            body_html TEXT,
+            status TEXT NOT NULL DEFAULT 'queued',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            message_id TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            sent_at TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_email_outbox_status
+            ON email_outbox(status, created_at);
         CREATE TABLE IF NOT EXISTS roles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT UNIQUE NOT NULL,
@@ -227,6 +314,7 @@ def ensure_rbac():
         ('documents.delete', 'Delete documents'),
         ('invoices.view', 'View invoices'),
         ('invoices.create', 'Create invoices'),
+        ('accountancy.manage', 'File and track company yearly accounts'),
         ('notifications.send', 'Send notifications'),
         ('staff.manage', 'Manage internal staff accounts'),
         ('settings.manage', 'Modify system & integration settings'),
@@ -248,8 +336,9 @@ def ensure_rbac():
         links.append(('SUPER_ADMIN', pname))
         links.append(('ADMIN', pname))
     for pname in (
-        'clients.view', 'orders.view', 'orders.edit', 'documents.view',
-        'documents.upload', 'documents.send', 'invoices.view',
+        'clients.view', 'clients.edit', 'clients.create',
+        'orders.view', 'orders.edit', 'documents.view',
+        'documents.upload', 'documents.send', 'invoices.view', 'accountancy.manage',
     ):
         links.append(('MANAGER', pname))
         links.append(('STAFF', pname))

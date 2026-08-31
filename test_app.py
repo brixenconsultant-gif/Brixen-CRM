@@ -1,13 +1,15 @@
 import os
+os.environ.setdefault('CRM_TESTING', '1')
 import sys
 import json
 import io
+import re
 import hmac
 import hashlib
 import datetime
 import urllib.parse
 from unittest.mock import patch
-from app import application
+from app import application, checkout_form_fields_from_payload, coalesce_checkout_address_fields, extract_order_company_name
 import app as app_mod
 from db import query_db, execute_db, hash_password, verify_password, needs_rehash, unusable_password_hash
 from seed_db import seed_demo
@@ -115,6 +117,10 @@ def run_tests():
     assert 'id="client-sidebar" class="sidebar" hidden' in body
     assert 'id="view-admin-services"' in body
     assert 'id="view-admin-invoices"' in body
+    assert 'id="view-admin-accountancy"' in body
+    assert 'data-view="admin-accountancy"' in body
+    assert 'id="modal-accountancy-books"' in body
+    assert 'id="accountancy-stat-issues"' in body
     print("✓ WSGI GET / -> 200 OK HTML Shell Rendered Successfully")
 
     for asset in ('/static/css/styles.css', '/static/js/app.js', '/static/img/brixen-logo.png'):
@@ -147,6 +153,8 @@ def run_tests():
         js_src = f.read()
     with open(os.path.join(os.path.dirname(__file__), 'templates/index.html'), 'r', encoding='utf-8') as f:
         html_src = f.read()
+    with open(os.path.join(os.path.dirname(__file__), 'static/css/styles.css'), 'r', encoding='utf-8') as f:
+        css_src = f.read()
     assert 'ClientPass123!' not in js_src
     assert 'AdminPass123!' not in js_src
     assert 'StaffPass123!' not in js_src
@@ -161,16 +169,85 @@ def run_tests():
     assert 'Assign task' not in js_src
     assert 'renderStaffAccessCell' in js_src
     assert 'canOpenView' in js_src
+    assert 'defaultPortalView' in js_src
+    assert 'initialPortalView' in js_src
+    assert 'syncViewHash' in js_src
+    assert 'viewFromHash' in js_src
+    assert 'data-customer-action' in js_src
+    assert 'data-order-action="change-details"' in js_src
+    assert 'editCheckout' in js_src
+    assert 'staffCheckoutFieldsForEdit' in js_src
+    assert 'Change details' in js_src
+    assert 'id="staff-order-owner"' in html_src
+    assert 'company_owner' in js_src
+    assert 'owner_form_email' in js_src
+    assert 'orders-filter-bar' in html_src
+    assert 'All work states' not in html_src
+    assert 'table-action-btns' in js_src
+    assert 'table-action-btns' in css_src
+    assert 'setClientPortalPassword(${c.id}' not in js_src
+    assert 'Personal 11 dijits Code' in js_src
+    assert 'Live records are checked when you open this page.' in js_src
+    assert 'savePendingCompanyName' in js_src
+    assert 'The client portal shows the same name.' in html_src
+    assert 'portfolio-rename-form' in css_src
+    assert 'Activation code</label>' not in js_src
+    assert 'openAccountancyBooks' in js_src
+    assert 'data-accountancy-action' in js_src
+    assert 'PSC verification' in js_src
+    assert 'Identity verification' in js_src
+    assert 'id="modal-accountancy-books"' in html_src
+    assert 'Bank statement' in html_src
+    assert 'Persons with Significant Control' in js_src or 'PSC register' in js_src
+    assert 'acct-badge' in css_src
+    assert 'accountancy-stats' in css_src
     assert 'canViewRevenue' in js_src
     assert 'applyAdminRevenueCards' in js_src
+    assert 'applyAdminOrderFinanceVisibility' in js_src
+    assert 'hide-order-finance' in js_src
     assert 'data-admin-revenue' in html_src
+    assert 'revenue-chart-card" data-admin-revenue' in html_src
+    assert '<th>Director</th>' in html_src
+    assert 'app.js?v=148.0' in html_src
+    assert 'file-accounts-company-locked' in html_src
+    assert 'setFileAccountsCompanyLocked' in js_src
+    assert 'data-order-finance' in html_src
+    assert 'hide-order-finance' in css_src
     assert 'ALL_USER_ROLES' in js_src
     assert 'id="modal-create-user"' in html_src
+    assert 'id="modal-document-preview"' in html_src
+    assert 'openDocumentPreview' in js_src
+    assert 'zoomDocumentPreview' in js_src
+    assert 'rotateDocumentPreview' in js_src
+    assert 'id="document-preview-zoom"' in html_src
+    assert 'id="document-preview-rotate"' in html_src
+    assert 'aria-label="Rotate"' in html_src
+    assert 'sniffDocumentPreviewKind' in js_src
+    assert 'handleGlobalSearch' in js_src
+    assert '/api/search?q=' in js_src
+    assert 'openGlobalSearchResult' in js_src
+    assert 'positionGlobalSearchResults' in js_src
+    assert 'id="global-search-results"' in html_src
+    assert 'id="top-horizontal-menu-bar"' in html_src
+    assert '.top-menu-bar' in css_src
+    assert 'display: none !important' in css_src
+    assert 'SF Pro Text' in css_src
+    assert 'SF Pro Display' in css_src
+    assert 'APPLE_UI_FONT' in js_src
+    assert '11px Inter' not in js_src
+    assert 'id="document-preview-zoom"' in html_src
+    assert 'document-preview-toolbar' in html_src
+    assert 'aria-label="Zoom in"' in html_src
+    assert 'aria-label="Zoom out"' in html_src
+    assert '/api/documents/${id}/view' in js_src
     assert 'Business Portfolio' in html_src
     assert 'My Companies' not in html_src
     assert 'click any company to view details' in html_src
     assert 'portfolio-companies-grid' in html_src
     assert 'id="portfolio-company-count"' in html_src
+    assert 'data-company-reg-filter="pending"' in html_src
+    assert 'setCompanyRegFilter' in js_src
+    assert 'Not registered yet' in js_src
     assert 'openCompanyPortfolioDetail' in js_src
     assert 'No companies in your Business Portfolio yet.' in js_src
     assert 'Unable to load your Business Portfolio. Please try again.' in js_src
@@ -299,6 +376,22 @@ def run_tests():
     assert status == "403 Forbidden"
     print("✓ Company Registered admin API -> staff see all companies; clients blocked")
 
+    from app import company_country_label, is_pending_company_number
+    assert company_country_label({'country': 'GB', 'reg_office': '12 High Street, London, GB'}) == 'United Kingdom'
+    assert company_country_label({'country': 'England', 'reg_office': '57 Wellesley Road, Ilford, England'}) == 'United Kingdom'
+    assert company_country_label({'country': 'PK', 'company_number': '16367472'}) == 'United Kingdom'
+    assert company_country_label({'country': 'WV6 0SR', 'reg_office': '85 Dunstall Hill, Wolverhampton, WV6 0SR'}) == 'United Kingdom'
+    assert company_country_label({'company_number': 'REG-15311', 'reg_office': 'Pakistan'}) == 'United Kingdom'
+    assert is_pending_company_number('REG-15311') is True
+    assert is_pending_company_number('16367472') is False
+    for company in (admin_companies.get('companies') or []):
+        assert company.get('country') == 'United Kingdom'
+        if str(company.get('company_number') or '').upper().startswith('REG-'):
+            assert company.get('is_registered') is False
+        elif company.get('company_number'):
+            assert company.get('is_registered') is True
+    print("✓ Company cards -> UK country only; REG- numbers marked not registered")
+
     status, headers, portal_login = make_request(
         '/api/auth/login', method='POST',
         body={'email': 'client1@acmecorp.co.uk', 'password': 'ClientPass123!'},
@@ -358,6 +451,29 @@ def run_tests():
     adm_token = extract_session_token(headers)
     assert adm_token
     assert 'token' not in adm_res
+
+    status, headers, search_unauth = make_request('/api/search?q=Harrington')
+    assert status == "401 Unauthorized"
+    status, headers, search_short = make_request('/api/search?q=H', cookie=f"session_token={adm_token}")
+    assert status == "200 OK"
+    assert search_short['status'] == 'success'
+    assert search_short['results']['customers'] == []
+    status, headers, admin_people = make_request('/api/search?q=Harrington', cookie=f"session_token={adm_token}")
+    assert status == "200 OK"
+    assert any('Harrington' in (c.get('title') or '') for c in admin_people['results']['customers'])
+    assert all(c.get('type') == 'customer' for c in admin_people['results']['customers'])
+    status, headers, admin_email = make_request('/api/search?q=client1@acme', cookie=f"session_token={adm_token}")
+    assert any('client1@acmecorp.co.uk' in (c.get('subtitle') or '') for c in admin_email['results']['customers'])
+    status, headers, admin_order = make_request('/api/search?q=GB103449', cookie=f"session_token={adm_token}")
+    assert any('GB103449' in (o.get('title') or '') for o in admin_order['results']['orders'])
+    status, headers, client_people = make_request('/api/search?q=Harrington', cookie=f"session_token={token}")
+    assert client_people['results']['customers'] == []
+    status, headers, client_foreign = make_request('/api/search?q=Vantage', cookie=f"session_token={token}")
+    assert client_foreign['results']['companies'] == []
+    assert client_foreign['results']['customers'] == []
+    status, headers, client_own = make_request('/api/search?q=Acme', cookie=f"session_token={token}")
+    assert any('Acme' in (c.get('title') or '') for c in client_own['results']['companies'])
+    print("✓ Global search API -> staff find clients/orders; clients scoped to own records")
     
     status, headers, update_res = make_request(
         f"/api/admin/orders/{target_order['id']}", 
@@ -400,6 +516,36 @@ def run_tests():
     assert status == "200 OK"
     mode_row = query_db("SELECT payment_mode FROM orders WHERE id = ?;", (delete_order_id,), one=True)
     assert mode_row['payment_mode'] == 'PKR(Bank Transfer)'
+    status, headers, staff_price = make_request(
+        f"/api/admin/orders/{delete_order_id}",
+        method='PUT',
+        body={'total': 200},
+        cookie=f"session_token={staff_token}"
+    )
+    assert status == "403 Forbidden"
+    status, headers, staff_pay = make_request(
+        f"/api/admin/orders/{delete_order_id}",
+        method='PUT',
+        body={'payment_mode': 'GBP(Bank Transfer)'},
+        cookie=f"session_token={staff_token}"
+    )
+    assert status == "403 Forbidden"
+    status, headers, price_res = make_request(
+        f"/api/admin/orders/{delete_order_id}",
+        method='PUT',
+        body={'total': 187.50},
+        cookie=f"session_token={adm_token}"
+    )
+    assert status == "200 OK", price_res
+    priced = query_db("SELECT price, vat, total FROM orders WHERE id = ?;", (delete_order_id,), one=True)
+    assert float(priced['total']) == 187.50
+    status, headers, bad_price = make_request(
+        f"/api/admin/orders/{delete_order_id}",
+        method='PUT',
+        body={'total': -5},
+        cookie=f"session_token={adm_token}"
+    )
+    assert status == "400 Bad Request"
     status, headers, bad_mode = make_request(
         f"/api/admin/orders/{delete_order_id}",
         method='PUT',
@@ -614,6 +760,71 @@ def run_tests():
     assert status == "200 OK", skip_res
     assert query_db("SELECT id FROM companies WHERE name = 'SHOULD NOT EXIST LTD';", one=True) is None
     print("✓ Company registration order -> company card created; non-formation orders do not invent companies")
+
+    split_address = checkout_form_fields_from_payload({
+        'meta': {
+            '_cfs_company_name': 'Acme Ltd',
+            '_cfs_registered_address_city': 'Wolverhampton',
+            '_cfs_registered_address_country': 'United Kingdom',
+            '_cfs_registered_address_state': 'West Midlands',
+            '_cfs_registered_address_street': '85 Dunstall Hill',
+            '_cfs_registered_address_zip': 'WV6 0SR',
+        }
+    })
+    address_labels = [field['label'] for field in split_address]
+    assert 'Registered Address City' not in address_labels
+    assert address_labels.count('Registered address') == 1
+    assert next(field['value'] for field in split_address if field['label'] == 'Registered address') == (
+        '85 Dunstall Hill, Wolverhampton, West Midlands, WV6 0SR, United Kingdom'
+    )
+    merged_stored = coalesce_checkout_address_fields([
+        {'label': 'Registered Address City', 'value': 'Wolverhampton'},
+        {'label': 'Registered Address Country', 'value': 'United Kingdom'},
+        {'label': 'Registered Address State', 'value': 'West Midlands'},
+        {'label': 'Registered Address Street', 'value': '85 Dunstall Hill'},
+        {'label': 'Registered Address Zip', 'value': 'WV6 0SR'},
+    ])
+    assert len(merged_stored) == 1
+    assert merged_stored[0]['label'] == 'Registered address'
+    assert     merged_stored[0]['value'] == '85 Dunstall Hill, Wolverhampton, West Midlands, WV6 0SR, United Kingdom'
+    print("✓ Checkout registered address -> street, city, county, postcode, country shown as one line")
+    passport_fields = checkout_form_fields_from_payload({
+        'meta': {'_cfs_passport_cnic': 'CN5610475', '_cfs_company_name': 'Acme Ltd'},
+        'order_notes': ['Company formation form\nPassport/CNIC: CN5610475\nPassport Number: CN5610475\n'],
+    })
+    passport_hits = [field for field in passport_fields if 'passport' in field['label'].lower() or 'cnic' in field['label'].lower()]
+    assert len(passport_hits) == 1, passport_hits
+    assert passport_hits[0]['value'] == 'CN5610475'
+    print("✓ Checkout passport / CNIC is shown once")
+
+    mixed_email_fields = checkout_form_fields_from_payload({
+        'email': 'checkout-account@example.com',
+        'full_name': 'Portal Account Name',
+        'meta': {
+            '_cfs_company_name': 'Owner Holdings Ltd',
+            '_cfs_director_name': 'Muhib Ul Nabi',
+            '_cfs_registered_email': 'rabexauk@gmail.com',
+            '_cfs_uk_contact_number': '+44 7918 940907',
+        },
+    })
+    mixed_map = {field['label']: field['value'] for field in mixed_email_fields}
+    assert mixed_map.get('Email (form)') == 'rabexauk@gmail.com'
+    assert mixed_map.get('Director name') == 'Muhib Ul Nabi'
+    assert 'checkout-account@example.com' not in mixed_map.values()
+    assert 'Portal Account Name' not in mixed_map.values()
+    checkout_only_fields = checkout_form_fields_from_payload({
+        'email': 'checkout-account@example.com',
+        'full_name': 'Portal Account Name',
+    })
+    checkout_only_map = {field['label']: field['value'] for field in checkout_only_fields}
+    assert 'Email (form)' not in checkout_only_map
+    assert 'Director name' not in checkout_only_map
+    print("✓ Formation form owner and form email are kept separate from checkout login")
+    assert extract_order_company_name({
+        'company_name': 'KOOKY KARTT LTD',
+        'meta': {'_cfs_company_name': 'KOOKY KART LTD'},
+    }) == 'KOOKY KART LTD'
+    print("✓ Formation form company name is preferred over checkout company name")
 
     digital_payload = {
         'event_id': 'evt_wc_digital_denty_1',
@@ -833,6 +1044,410 @@ def run_tests():
     assert status == "200 OK", ch_ok
     assert ch_ok['companies'][0]['name'] == 'KOOKY KART LIMITED'
     assert ch_ok['companies'][0]['company_number'] == '12345678'
+    bella_id = execute_db(
+        """
+        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status)
+        VALUES (?, 'Bella & Rosso Ltd', 'REG-15311', 'Active', '2026-08-25', 'Nafeesa Ishfaq', 'United Kingdom', 'Digital Package', 'Good Standing');
+        """,
+        (james['id'],),
+    )
+    class FakeBellaCompaniesHouseResponse:
+        def __init__(self, payload):
+            self.payload = payload
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def read(self):
+            return json.dumps(self.payload).encode('utf-8')
+    def fake_bella_ch_urlopen(req, timeout=None):
+        url = req.full_url if hasattr(req, 'full_url') else req.get_full_url()
+        if '/search/companies' in url:
+            return FakeBellaCompaniesHouseResponse({
+                'items': [{
+                    'title': 'BELLA & ROSSO LTD',
+                    'company_number': '16620111',
+                    'company_status': 'active',
+                    'date_of_creation': '2026-08-25',
+                    'address_snippet': '71-75 Shelton Street, London, WC2H 9JQ',
+                    'address': {'address_line_1': '71-75 Shelton Street', 'locality': 'London', 'postal_code': 'WC2H 9JQ', 'country': 'England'},
+                }]
+            })
+        if '/officers' in url:
+            return FakeBellaCompaniesHouseResponse({
+                'items': [{'name': 'ISHFAQ, Nafeesa', 'officer_role': 'director'}]
+            })
+        return FakeBellaCompaniesHouseResponse({
+            'company_name': 'BELLA & ROSSO LTD',
+            'company_number': '16620111',
+            'company_status': 'active',
+            'date_of_creation': '2026-08-25',
+            'registered_office_address': {
+                'address_line_1': '71-75 Shelton Street',
+                'locality': 'London',
+                'postal_code': 'WC2H 9JQ',
+                'country': 'England',
+            },
+        })
+    with patch('app.urllib.request.urlopen', side_effect=fake_bella_ch_urlopen):
+        status, headers, bella_list = make_request('/api/admin/companies', cookie=f"session_token={adm_comp_token}")
+    assert status == "200 OK", bella_list
+    bella_row = next(row for row in (bella_list.get('companies') or []) if int(row.get('id')) == int(bella_id))
+    assert bella_row['company_number'] == '16620111'
+    assert bella_row['is_registered'] is True
+    assert bella_list.get('companies_house_synced') == 1
+    stored_bella = query_db("SELECT company_number, name, director FROM companies WHERE id = ?;", (bella_id,), one=True)
+    assert stored_bella['company_number'] == '16620111'
+    assert stored_bella['name'] == 'BELLA & ROSSO LTD'
+    print("✓ Pending REG- company cards pick up the live Companies House number on the company list")
+    congrats_id = execute_db(
+        """
+        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status)
+        VALUES (?, 'Form Email Ltd', 'REG-16100', 'Active', '2026-08-30', 'Nafeesa Ishfaq', 'United Kingdom', 'Digital Package', 'Good Standing');
+        """,
+        (james['id'],),
+    )
+    execute_db(
+        """
+        INSERT INTO orders (order_number, user_id, company_id, service_name, price, vat, total, status, progress_percent, checkout_form_json)
+        VALUES ('#WC-16100', ?, ?, 'Digital Package', 52.99, 10.60, 63.59, 'Processing', 20, ?);
+        """,
+        (james['id'], congrats_id, json.dumps([
+            {'label': 'Desired company name', 'value': 'Form Email Ltd'},
+            {'label': 'Director name', 'value': 'Nafeesa Ishfaq'},
+            {'label': 'Email (form)', 'value': 'bellaandrosso@gmail.com'},
+        ])),
+    )
+    sent_registration_emails = []
+    original_send_email = app_mod.EmailService.send_notification_email
+    def capture_registration_email(recipient, subject, body_text, body_html=None):
+        sent_registration_emails.append({
+            'to': recipient,
+            'subject': subject,
+            'text': body_text or '',
+            'html': body_html or '',
+        })
+        return True, 'Delivered'
+    app_mod.EmailService.send_notification_email = staticmethod(capture_registration_email)
+    class FakeHttpResponse:
+        def __init__(self, payload, content_type='application/json'):
+            self.payload = payload
+            self.headers = {'Content-Type': content_type}
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def read(self):
+            if isinstance(self.payload, (bytes, bytearray)):
+                return self.payload
+            return json.dumps(self.payload).encode('utf-8')
+    def fake_form_email_ch_urlopen(req, timeout=None):
+        url = req.full_url if hasattr(req, 'full_url') else req.get_full_url()
+        if '/search/companies' in url:
+            if 'Form' not in url and 'form' not in url:
+                return FakeHttpResponse({'items': []})
+            return FakeHttpResponse({
+                'items': [{
+                    'title': 'FORM EMAIL LTD',
+                    'company_number': '16100111',
+                    'company_status': 'active',
+                    'date_of_creation': '2026-08-30',
+                    'address_snippet': '1 High Street, London, SW1A 1AA',
+                    'address': {'address_line_1': '1 High Street', 'locality': 'London', 'postal_code': 'SW1A 1AA', 'country': 'England'},
+                }]
+            })
+        if '/officers' in url:
+            return FakeHttpResponse({'items': [{'name': 'ISHFAQ, Nafeesa', 'officer_role': 'director'}]})
+        if '/filing-history' in url:
+            return FakeHttpResponse({
+                'items': [{
+                    'type': 'NEWINC',
+                    'transaction_id': 'MzU0TEST16100111',
+                    'description': 'certificate-of-incorporation-company',
+                    'links': {
+                        'document_metadata': 'https://document-api.company-information.service.gov.uk/document/ABC16100111',
+                    },
+                }]
+            })
+        if 'document-api.company-information.service.gov.uk/document/ABC16100111/content' in url:
+            return FakeHttpResponse(b'%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n', 'application/pdf')
+        if 'document-api.company-information.service.gov.uk/document/ABC16100111' in url:
+            return FakeHttpResponse({
+                'links': {'document': 'https://document-api.company-information.service.gov.uk/document/ABC16100111/content'}
+            })
+        return FakeHttpResponse({
+            'company_name': 'FORM EMAIL LTD',
+            'company_number': '16100111',
+            'company_status': 'active',
+            'date_of_creation': '2026-08-30',
+            'registered_office_address': {
+                'address_line_1': '1 High Street',
+                'locality': 'London',
+                'postal_code': 'SW1A 1AA',
+                'country': 'England',
+            },
+        })
+    try:
+        with patch('app.urllib.request.urlopen', side_effect=fake_form_email_ch_urlopen):
+            status, headers, congrats_list = make_request('/api/admin/companies', cookie=f"session_token={adm_comp_token}")
+        assert status == "200 OK", congrats_list
+        congrats_row = next(row for row in (congrats_list.get('companies') or []) if int(row.get('id')) == int(congrats_id))
+        assert congrats_row['company_number'] == '16100111'
+        assert sent_registration_emails, 'expected a congratulations email'
+        mail = sent_registration_emails[0]
+        assert mail['to'] == 'bellaandrosso@gmail.com'
+        assert 'Congratulations' in mail['subject']
+        assert '16100111' in mail['text'] or '16100111' in mail['html']
+        assert 'FORM EMAIL LTD' in mail['subject'] or 'FORM EMAIL LTD' in mail['html']
+        combined = f"{mail['text']}\n{mail['html']}"
+        assert re.search(r'Hi Nafeesa', combined, re.I)
+        assert not re.search(r'Hi James', combined, re.I)
+        assert 'officially registered with Companies House' in mail['text'] or 'officially registered with Companies House' in mail['html']
+        assert 'Download your certificate of incorporation' in mail['html']
+        assert 'Download now' in mail['html']
+        assert 'https://find-and-update.company-information.service.gov.uk/company/16100111/filing-history' in mail['html']
+        assert 'Your next-step strategy' in mail['html']
+        assert 'Bank account' in mail['html']
+        assert 'Free consultation' in mail['html']
+        assert 'WhatsApp for a free consultation' in mail['html']
+        assert 'wa.me' in mail['html']
+        assert '🏦' in mail['html']
+        assert 'border-radius:980px' in mail['html']
+        assert 'padding:7px 14px' in mail['html']
+        assert 'font-size:13px' in mail['html']
+        assert 'The Brixen Consultants team' in mail['html']
+        assert 'congratulations.png' in mail['html']
+        assert 'congratulations.gif' not in mail['html']
+        assert 'brixen-logo.png' in mail['html']
+        assert 'rel="icon"' in mail['html']
+        assert 'Brixen-Consultants.png' in mail['html']
+        assert 'cid:brixen-favicon' not in mail['html']
+        assert 'cid:brixen-congratulations' not in mail['html']
+        assert 'cid:brixen-wordmark' not in mail['html']
+        assert '-apple-system' in mail['html']
+        assert 'bgcolor="#003971"' in mail['html']
+        assert 'bgcolor="#25D366"' in mail['html']
+        assert '<font color="#ffffff">' in mail['html']
+        cert = query_db(
+            "SELECT * FROM documents WHERE company_id = ? AND category = 'Companies House Certificate';",
+            (congrats_id,),
+            one=True,
+        )
+        assert cert is not None
+        assert os.path.isfile(cert['file_path'])
+        with open(cert['file_path'], 'rb') as fh:
+            assert fh.read(4) == b'%PDF'
+        sent_registration_emails.clear()
+        with patch('app.urllib.request.urlopen', side_effect=fake_form_email_ch_urlopen):
+            status, headers, congrats_again = make_request('/api/admin/companies', cookie=f"session_token={adm_comp_token}")
+        assert status == "200 OK", congrats_again
+        assert sent_registration_emails == []
+    finally:
+        app_mod.EmailService.send_notification_email = original_send_email
+    print("✓ Registration congratulations email goes to the checkout Email (form) address")
+    status, headers, form_acct = make_request(
+        '/api/admin/accountancy',
+        cookie=f"session_token={adm_comp_token}",
+    )
+    assert status == "200 OK", form_acct
+    form_row = next(row for row in (form_acct.get('companies') or []) if int(row.get('id')) == int(congrats_id))
+    assert form_row.get('director') == 'Nafeesa Ishfaq'
+    assert form_row.get('director_email') == 'bellaandrosso@gmail.com'
+    assert form_row.get('client_name') == 'Nafeesa Ishfaq'
+    assert form_row.get('client_email') == 'bellaandrosso@gmail.com'
+    assert form_row.get('client_email') != james['email']
+    status, headers, form_books = make_request(
+        f"/api/admin/accountancy/{congrats_id}/books",
+        cookie=f"session_token={adm_comp_token}",
+    )
+    assert status == "200 OK", form_books
+    assert (form_books.get('company') or {}).get('director') == 'Nafeesa Ishfaq'
+    assert (form_books.get('company') or {}).get('director_email') == 'bellaandrosso@gmail.com'
+    print("✓ Accountancy shows the formation-form director name and Email (form)")
+    placeholder_id = execute_db(
+        """
+        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status)
+        VALUES (?, 'PLACEHOLDER SYNC LTD', '16100999', 'Active', '2026-01-15', 'blackpearl6563', 'United Kingdom', 'Digital Package', 'Good Standing');
+        """,
+        (james['id'],),
+    )
+    execute_db(
+        """
+        INSERT INTO orders (order_number, user_id, company_id, service_name, price, vat, total, status, progress_percent, checkout_form_json)
+        VALUES ('#WC-16100999', ?, ?, 'Digital Package', 52.99, 10.60, 63.59, 'Processing', 20, ?);
+        """,
+        (james['id'], placeholder_id, json.dumps([
+            {'label': 'Desired company name', 'value': 'PLACEHOLDER SYNC LTD'},
+            {'label': 'Director name', 'value': 'blackpearl6563'},
+            {'label': 'Email (form)', 'value': 'placeholdersync@gmail.com'},
+        ])),
+    )
+    class FakePlaceholderCh:
+        def __init__(self, payload):
+            self.payload = payload
+            self.headers = {'Content-Type': 'application/json'}
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def read(self):
+            return json.dumps(self.payload).encode('utf-8')
+    def fake_placeholder_ch_urlopen(req, timeout=None):
+        url = req.full_url if hasattr(req, 'full_url') else req.get_full_url()
+        if '/officers' in url and '16100999' in url:
+            return FakePlaceholderCh({'items': [{'name': 'KHAN, Amina', 'officer_role': 'director'}]})
+        if '/company/16100999' in url:
+            return FakePlaceholderCh({
+                'company_name': 'PLACEHOLDER SYNC LTD',
+                'company_number': '16100999',
+                'company_status': 'active',
+                'date_of_creation': '2026-01-15',
+            })
+        return FakePlaceholderCh({'items': []})
+    with patch('app.urllib.request.urlopen', side_effect=fake_placeholder_ch_urlopen):
+        status, headers, ph_acct = make_request(
+            '/api/admin/accountancy',
+            cookie=f"session_token={adm_comp_token}",
+        )
+    assert status == "200 OK", ph_acct
+    ph_row = next(row for row in (ph_acct.get('companies') or []) if int(row.get('id')) == int(placeholder_id))
+    assert ph_row.get('director') == 'Amina Khan'
+    assert ph_row.get('director') != 'blackpearl6563'
+    assert ph_row.get('director_email') == 'placeholdersync@gmail.com'
+    assert ph_row.get('client_email') != james['email']
+    stored_ph = query_db("SELECT director FROM companies WHERE id = ?;", (placeholder_id,), one=True)
+    assert stored_ph['director'] == 'Amina Khan'
+    print("✓ Accountancy replaces placeholder directors with Companies House names and keeps the company form email")
+    assert app_mod.email_belongs_to_person('shakeel.rehmat@gmail.com', 'Muhammad Shakeel')
+    assert not app_mod.email_belongs_to_person('hananmuhammad468@gmail.com', 'Hasnat Mazhar')
+    recent_id = execute_db(
+        """
+        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status)
+        VALUES (?, 'Recent Filing Ltd', '17428024', 'Active', ?, 'Test Director', 'United Kingdom', 'Digital Package', 'Good Standing');
+        """,
+        (james['id'], datetime.date.today().isoformat()),
+    )
+    execute_db(
+        """
+        INSERT INTO orders (order_number, user_id, company_id, service_name, price, vat, total, status, progress_percent, checkout_form_json)
+        VALUES ('#WC-17428024', ?, ?, 'Digital Package', 52.99, 10.60, 63.59, 'Processing', 20, ?);
+        """,
+        (james['id'], recent_id, json.dumps([{'label': 'Email (form)', 'value': 'recent24h@example.com'}])),
+    )
+    old_id = execute_db(
+        """
+        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status)
+        VALUES (?, 'Old Filing Ltd', '10000024', 'Active', '2020-01-01', 'Test Director', 'United Kingdom', 'Digital Package', 'Good Standing');
+        """,
+        (james['id'],),
+    )
+    recent_emails = []
+    original_recent_send = app_mod.EmailService.send_notification_email
+    def capture_recent_email(recipient, subject, body_text, body_html=None):
+        recent_emails.append({'to': recipient, 'subject': subject})
+        return True, 'Delivered'
+    app_mod.EmailService.send_notification_email = staticmethod(capture_recent_email)
+    try:
+        due_ids = {int(row['id']) for row in app_mod.companies_due_for_registration_notice()}
+        assert int(recent_id) in due_ids
+        assert int(old_id) not in due_ids
+        sent_count = app_mod.notify_recent_company_registrations()
+        assert sent_count >= 1
+        assert any(item['to'] == 'recent24h@example.com' and 'Congratulations' in item['subject'] for item in recent_emails)
+        assert app_mod.notify_company_registered(recent_id).get('email_status') == 'Already sent'
+        recent_order = query_db("SELECT * FROM orders WHERE company_id = ?;", (recent_id,), one=True)
+        assert app_mod.set_order_form_email(recent_order['id'], 'changed-form@example.com')
+        reloaded_order = query_db("SELECT * FROM orders WHERE id = ?;", (recent_order['id'],), one=True)
+        loaded_form = app_mod.load_order_checkout_form(reloaded_order)
+        assert any(str(field.get('value') or '') == 'changed-form@example.com' for field in loaded_form)
+        assert app_mod.company_form_email(recent_id) == 'changed-form@example.com'
+    finally:
+        app_mod.EmailService.send_notification_email = original_recent_send
+    print("✓ Companies registered in the last 24 hours get the congratulations email")
+    assert os.environ.get('CRM_TESTING') == '1'
+    assert app_mod.start_registration_notice_worker() is False
+    nomatch_id = execute_db(
+        """
+        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status)
+        VALUES (?, 'ZZZXQ No Such Company Ltd', 'REG-99991', 'Active', '2026-08-25', 'Test Director', 'United Kingdom', 'Digital Package', 'Good Standing');
+        """,
+        (james['id'],),
+    )
+    class FakeEmptyCompaniesHouseResponse:
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def read(self):
+            return json.dumps({'items': []}).encode('utf-8')
+    with patch('app.urllib.request.urlopen', return_value=FakeEmptyCompaniesHouseResponse()):
+        status, headers, nomatch_list = make_request('/api/admin/companies', cookie=f"session_token={adm_comp_token}")
+    assert status == "200 OK", nomatch_list
+    nomatch_row = next(row for row in (nomatch_list.get('companies') or []) if int(row.get('id')) == int(nomatch_id))
+    assert nomatch_row['company_number'] == 'REG-99991'
+    assert nomatch_row['is_registered'] is False
+    print("✓ Unmatched pending names stay on the Not registered list")
+    maple_id = execute_db(
+        """
+        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status)
+        VALUES (?, 'Maple & Finch Ltd', 'REG-16001', 'Active', '2026-08-20', 'Test Director', 'United Kingdom', 'Digital Package', 'Good Standing');
+        """,
+        (james['id'],),
+    )
+    class FakeMapleCompaniesHouseResponse:
+        def __init__(self, payload):
+            self.payload = payload
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def read(self):
+            return json.dumps(self.payload).encode('utf-8')
+    def fake_maple_ch_urlopen(req, timeout=None):
+        url = req.full_url if hasattr(req, 'full_url') else req.get_full_url()
+        if '/search/companies' in url:
+            if 'Maple' not in url and 'maple' not in url:
+                return FakeMapleCompaniesHouseResponse({'items': []})
+            return FakeMapleCompaniesHouseResponse({
+                'items': [{
+                    'title': 'MAPLE AND FINCH LIMITED',
+                    'company_number': '15550001',
+                    'company_status': 'active',
+                    'date_of_creation': '2026-08-20',
+                    'address_snippet': '10 Downing Street, London, SW1A 2AA',
+                    'address': {'address_line_1': '10 Downing Street', 'locality': 'London', 'postal_code': 'SW1A 2AA', 'country': 'England'},
+                }]
+            })
+        if '/officers' in url:
+            return FakeMapleCompaniesHouseResponse({
+                'items': [{'name': 'FINCH, Maple', 'officer_role': 'director'}]
+            })
+        return FakeMapleCompaniesHouseResponse({
+            'company_name': 'MAPLE AND FINCH LIMITED',
+            'company_number': '15550001',
+            'company_status': 'active',
+            'date_of_creation': '2026-08-20',
+            'registered_office_address': {
+                'address_line_1': '10 Downing Street',
+                'locality': 'London',
+                'postal_code': 'SW1A 2AA',
+                'country': 'England',
+            },
+        })
+    with patch('app.urllib.request.urlopen', side_effect=fake_maple_ch_urlopen):
+        status, headers, client_sync = make_request('/api/client/companies', cookie=f"session_token={token}")
+    assert status == "200 OK", client_sync
+    maple_row = next(row for row in (client_sync.get('companies') or []) if int(row.get('id')) == int(maple_id))
+    assert maple_row['company_number'] == '15550001'
+    assert maple_row['is_registered'] is True
+    assert client_sync.get('companies_house_synced') == 1
+    print("✓ Client company list also promotes a live Companies House match")
+    execute_db(
+        """
+        UPDATE companies SET ch_checked_at = CURRENT_TIMESTAMP
+        WHERE company_number IS NULL OR TRIM(company_number) = '' OR UPPER(company_number) LIKE 'REG-%';
+        """
+    )
     status, headers, admin_settings = make_request('/api/admin/settings', cookie=f"session_token={adm_comp_token}")
     assert status == "200 OK"
     assert admin_settings.get('settings', {}).get('companies_house_configured') is True
@@ -1011,6 +1626,190 @@ def run_tests():
     assert 'authentication_code' not in (client_after_codes.get('company') or {})
     assert 'activation_code' not in (client_after_codes.get('company') or {})
     print("✓ Company compliance codes save on staff cards and stay off the client payload")
+    rename_id = execute_db(
+        """
+        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status)
+        VALUES (?, 'Old Checkout Name Ltd', 'REG-16088', 'Active', '2026-08-25', 'Test Director', 'United Kingdom', 'Digital Package', 'Good Standing');
+        """,
+        (james['id'],),
+    )
+    rename_order_id = execute_db(
+        """
+        INSERT INTO orders (order_number, user_id, company_id, service_name, price, vat, total, status, progress_percent, checkout_form_json)
+        VALUES ('#WC-RENAME-16088', ?, ?, 'Digital Package', 52.99, 10.60, 63.59, 'Processing', 20, ?);
+        """,
+        (james['id'], rename_id, json.dumps([{'label': 'Desired company name', 'value': 'Old Checkout Name Ltd'}])),
+    )
+    status, headers, rename_client = make_request(
+        f"/api/admin/companies/{rename_id}", method='PUT',
+        cookie=f"session_token={token}",
+        body={'name': 'New Desired Name Ltd'}
+    )
+    assert status == "403 Forbidden"
+    status, headers, rename_registered = make_request(
+        f"/api/admin/companies/{posted_company['id']}", method='PUT',
+        cookie=f"session_token={adm_comp_token}",
+        body={'name': 'Should Not Change Ltd'}
+    )
+    assert status == "400 Bad Request"
+    assert 'already registered' in (rename_registered.get('message') or '').lower()
+    status, headers, rename_blank = make_request(
+        f"/api/admin/companies/{rename_id}", method='PUT',
+        cookie=f"session_token={adm_comp_token}",
+        body={'name': ' '}
+    )
+    assert status == "400 Bad Request"
+    status, headers, rename_ok = make_request(
+        f"/api/admin/companies/{rename_id}", method='PUT',
+        cookie=f"session_token={adm_comp_token}",
+        body={'name': 'New Desired Name Ltd'}
+    )
+    assert status == "200 OK", rename_ok
+    assert rename_ok['company']['name'] == 'New Desired Name Ltd'
+    assert rename_ok['company']['company_number'] == 'REG-16088'
+    assert rename_ok['company']['is_registered'] is False
+    stored_rename = query_db("SELECT name, company_number, ch_checked_at FROM companies WHERE id = ?;", (rename_id,), one=True)
+    assert stored_rename['name'] == 'New Desired Name Ltd'
+    assert stored_rename['company_number'] == 'REG-16088'
+    assert not stored_rename['ch_checked_at']
+    status, headers, client_renamed = make_request('/api/client/companies', cookie=f"session_token={token}")
+    assert status == "200 OK", client_renamed
+    client_row = next(row for row in (client_renamed.get('companies') or []) if int(row.get('id')) == int(rename_id))
+    assert client_row['name'] == 'New Desired Name Ltd'
+    status, headers, client_order = make_request(f"/api/client/orders/{rename_order_id}", cookie=f"session_token={token}")
+    assert status == "200 OK", client_order
+    assert client_order['order']['company_name'] == 'New Desired Name Ltd'
+    desired = next(
+        (field for field in (client_order['order'].get('checkout_form') or []) if str(field.get('label') or '').lower() in ('desired company name', 'company name')),
+        None,
+    )
+    assert desired and desired['value'] == 'New Desired Name Ltd'
+    print("✓ Staff can rename a pending REG- company before the Companies House application")
+    print("✓ Client portal and order checkout show the renamed company")
+    status, headers, accountancy_unauth = make_request('/api/admin/accountancy')
+    assert status == "401 Unauthorized"
+    status, headers, accountancy_client = make_request(
+        '/api/admin/accountancy',
+        cookie=f"session_token={token}"
+    )
+    assert status == "403 Forbidden"
+    status, headers, accountancy_list = make_request(
+        '/api/admin/accountancy',
+        cookie=f"session_token={adm_comp_token}"
+    )
+    assert status == "200 OK", accountancy_list
+    listed = accountancy_list.get('companies') or []
+    assert any(int(row.get('id')) == int(posted_company['id']) for row in listed)
+    target = next(row for row in listed if int(row.get('id')) == int(posted_company['id']))
+    status, headers, accountancy_save = make_request(
+        '/api/admin/accountancy', method='POST',
+        cookie=f"session_token={adm_comp_token}",
+        body={
+            'company_id': posted_company['id'],
+            'period_start': (target.get('current') or {}).get('period_start'),
+            'period_end': (target.get('current') or {}).get('period_end'),
+            'due_date': (target.get('current') or {}).get('due_date'),
+            'accounts_type': 'Micro-entity',
+            'status': 'Filed',
+            'confirmation_number': 'CH-AA-1001',
+        }
+    )
+    assert status == "200 OK", accountancy_save
+    assert accountancy_save['filing']['status'] == 'Filed'
+    assert accountancy_save['filing']['confirmation_number'] == 'CH-AA-1001'
+    status, headers, client_accountancy = make_request(
+        '/api/client/accountancy',
+        cookie=f"session_token={token}"
+    )
+    assert status == "200 OK", client_accountancy
+    client_row = next(row for row in (client_accountancy.get('companies') or []) if int(row.get('id')) == int(posted_company['id']))
+    filed = [item for item in (client_row.get('filings') or []) if item.get('status') == 'Filed']
+    assert filed, client_row
+    assert filed[0].get('confirmation_number') == 'CH-AA-1001'
+    assert 'notes' not in filed[0]
+    assert 'readiness' in target
+    assert 'address' in (target.get('readiness') or {})
+    assert 'identity' in (target.get('readiness') or {})
+    assert 'psc' in (target.get('readiness') or {})
+    assert isinstance((target.get('readiness') or {}).get('issues'), list)
+    assert 'authentication_code' not in target
+    assert 'activation_code' not in target
+    issue_codes = {item.get('code') for item in ((target.get('readiness') or {}).get('issues') or [])}
+    assert 'identity' in issue_codes
+    assert 'psc' in issue_codes
+    assert 'authentication_code' not in client_row
+    assert 'activation_code' not in client_row
+    assert (client_row.get('readiness') or {}).get('identity')
+    assert 'authentication_code' not in (client_row.get('readiness') or {})
+    assert 'personal_code' not in (client_row.get('readiness') or {})
+    print("✓ Accountancy yearly accounts can be filed by staff and shown to the client")
+    status, headers, idv_only = make_request(
+        f"/api/admin/companies/{posted_company['id']}", method='PUT',
+        cookie=f"session_token={adm_comp_token}",
+        body={'identity_verified': 'Verified', 'psc_verified': 'Verified'}
+    )
+    assert status == "200 OK", idv_only
+    assert idv_only['company']['identity_verified'] == 'Verified'
+    assert idv_only['company']['psc_verified'] == 'Verified'
+    assert idv_only['company']['authentication_code'] == 'AB12CD'
+    assert idv_only['company']['activation_code'] == 'ACT-9988'
+    status, headers, books_unauth = make_request(f"/api/admin/accountancy/{posted_company['id']}/books")
+    assert status == "401 Unauthorized"
+    status, headers, books_client = make_request(
+        f"/api/admin/accountancy/{posted_company['id']}/books",
+        cookie=f"session_token={token}"
+    )
+    assert status == "403 Forbidden"
+    status, headers, books_get = make_request(
+        f"/api/admin/accountancy/{posted_company['id']}/books",
+        cookie=f"session_token={adm_comp_token}"
+    )
+    assert status == "200 OK", books_get
+    assert isinstance(books_get.get('entries'), list)
+    assert 'totals' in books_get
+    assert 'readiness' in books_get
+    assert 'statements' in books_get
+    assert books_get['readiness']['identity']['ok'] is True
+    assert books_get['readiness']['psc']['ok'] is True
+    period_end = books_get.get('period_end') or (target.get('current') or {}).get('period_end')
+    status, headers, books_post = make_request(
+        f"/api/admin/accountancy/{posted_company['id']}/books", method='POST',
+        cookie=f"session_token={adm_comp_token}",
+        body={
+            'period_end': period_end,
+            'entry_date': period_end,
+            'description': 'Client receipts from bank statement',
+            'amount': '1250.50',
+            'category': 'Turnover',
+            'direction': 'in',
+            'source': 'bank_statement',
+        }
+    )
+    assert status == "200 OK", books_post
+    assert books_post['entry']['amount'] == 1250.5
+    assert books_post['totals']['inflows'] == 1250.5
+    entry_id = books_post['entry']['id']
+    status, headers, books_out = make_request(
+        f"/api/admin/accountancy/{posted_company['id']}/books", method='POST',
+        cookie=f"session_token={adm_comp_token}",
+        body={
+            'period_end': period_end,
+            'description': 'Companies House filing fee',
+            'amount': '13',
+            'category': 'Other operating charges',
+            'source': 'bank_statement',
+        }
+    )
+    assert status == "200 OK", books_out
+    assert books_out['entry']['amount'] == -13.0
+    status, headers, books_del = make_request(
+        f"/api/admin/accountancy/{posted_company['id']}/books/{entry_id}", method='DELETE',
+        cookie=f"session_token={adm_comp_token}"
+    )
+    assert status == "200 OK", books_del
+    remaining = [item for item in (books_del.get('entries') or []) if int(item.get('id')) == int(entry_id)]
+    assert not remaining
+    print("✓ Accountancy books workspace posts statement lines and keeps IDV/PSC on the company card")
     status, headers, posted_dl = make_request(
         f"/api/documents/{posted_doc['document']['id']}/download",
         cookie=f"session_token={token}"
@@ -1071,9 +1870,16 @@ def run_tests():
     )
     assert 'Posted_Certificate.pdf' in subject
     assert 'Messages & Files' in text_body
-    assert 'Important notification' in html_body
-    assert 'brixen-logo.png' in html_body or 'logo' in html_body
+    assert 'Documents uploaded' in html_body
+    assert 'Important notification' not in html_body
+    assert 'congratulations.png' not in html_body
+    assert 'congratulations.gif' not in html_body
+    assert 'brixen-logo.png' in html_body
     assert 'Received by post.' in html_body
+    assert '📄 Posted_Certificate.pdf' in html_body
+    assert 'bgcolor="#003971"' in html_body
+    assert 'border-radius:980px' in html_body
+    assert 'The Brixen Consultants team' in html_body
     generic_subject, generic_text, generic_html = app_mod.build_client_notification_email(
         {'full_name': 'James Example', 'email': 'client1@acmecorp.co.uk'},
         'Your order status has changed',
@@ -1082,9 +1888,137 @@ def run_tests():
         detail_value='Processing (40% complete)',
     )
     assert 'Your order status has changed' in generic_subject
+    assert 'Your order status has changed' in generic_html
     assert 'Open Client Panel' in generic_html
-    assert 'contact@brixenconsultants.com' in html_body or 'Questions?' in html_body
-    assert '447360515317' in html_body or 'wa.me' in html_body
+    assert 'congratulations.png' not in generic_html
+    assert 'bgcolor="#003971"' in generic_html
+    assert 'brixen-logo.png' in generic_html
+    assert '#f3efe8' in generic_html
+    assert '-apple-system' in generic_html
+    assert 'Helvetica Neue' in generic_html
+    assert 'brixenconsultants.com' in html_body
+    assert 'Brixen-Consultants.png' in html_body
+    assert 'rel="icon"' in html_body
+    assert 'Brixen-Consultants.png' in html_body
+    assert 'cid:brixen-favicon' not in html_body
+    celeb_subject, celeb_text, celeb_html = app_mod.build_client_notification_email(
+        {'full_name': 'James Example', 'email': 'client1@acmecorp.co.uk'},
+        'Example Holdings Ltd',
+        "We've got great news, Example Holdings Ltd is now officially registered with Companies House.",
+        layout='celebration',
+        greeting_name='Alex Director',
+        badge='Company registered',
+        detail_title='Company number',
+        detail_value='12345678',
+        cta_label='Download now',
+        cta_url='https://find-and-update.company-information.service.gov.uk/company/12345678/filing-history',
+        footer_note='This email is about your UK company registration with Brixen Consultants.',
+    )
+    assert 'Example Holdings Ltd' in celeb_subject or 'Example Holdings Ltd' in celeb_html
+    assert 'Hi Alex Director' in celeb_html
+    assert 'Hi James' not in celeb_html
+    assert 'Download now' in celeb_html
+    assert 'rel="icon"' in celeb_html
+    assert 'Brixen-Consultants.png' in celeb_html
+    assert 'brixen-logo.png' in celeb_html
+    assert 'src="cid:brixen-favicon"' not in celeb_html
+    assert 'cid:brixen-favicon' not in celeb_html
+    assert 'certificate of incorporation' in celeb_html
+    assert 'https://find-and-update.company-information.service.gov.uk/company/12345678/filing-history' in celeb_html
+    assert 'align="center"' in celeb_html
+    assert 'Your next-step strategy' in celeb_html
+    assert 'Bank account' in celeb_html
+    assert 'Registered office and mail from £20' in celeb_html
+    assert 'Free consultation' in celeb_html
+    assert 'WhatsApp for a free consultation' in celeb_html
+    assert 'wa.me' in celeb_html
+    assert '🏦' in celeb_html
+    assert '🎁' in celeb_html
+    assert 'border-radius:980px' in celeb_html
+    assert 'padding:7px 14px' in celeb_html
+    assert 'font-size:13px' in celeb_html
+    activity_subject, activity_text, activity_html = app_mod.build_client_notification_email(
+        {'full_name': 'James Example', 'email': 'client1@acmecorp.co.uk'},
+        'Identity verification is done',
+        'A required company check is now complete.',
+        layout='activity',
+        extra_message='✅ Identity verification is complete\n🪪 Companies House can now accept your filings',
+        cta_label='View your company',
+    )
+    assert 'Identity verification is done' in activity_html
+    assert 'congratulations.png' not in activity_html
+    assert 'bgcolor="#003971"' in activity_html
+    assert 'rel="icon"' in activity_html
+    assert 'Brixen-Consultants.png' in activity_html
+    assert 'src="cid:brixen-favicon"' not in activity_html
+    assert 'cid:brixen-favicon' not in activity_html
+    assert '✅ Identity verification is complete' in activity_html
+    assert 'border-radius:980px' in activity_html
+    assert 'padding:7px 14px' in activity_html
+    assert app_mod.classify_product_activity('Annual Compliance Filing') == 'accounts'
+    assert app_mod.classify_product_activity('Company Formation Package') == 'formation'
+    assert 'The Brixen Consultants team' in celeb_html
+    assert 'contact@brixenconsultants.com' in celeb_html
+    assert 'brixenconsultants.com' in celeb_html
+    assert 'Brixen Consultants LTD' in celeb_html
+    assert 'Kind regards' in celeb_html
+    assert 'letter-spacing:0.22em' in celeb_html
+    assert 'congratulations.png' in celeb_html
+    assert 'congratulations.gif' not in celeb_html
+    assert 'background-image:url(' in celeb_html
+    assert not re.search(r'<img[^>]+congratulations', celeb_html, re.I)
+    assert 'cid:brixen-congratulations' not in celeb_html
+    assert 'cid:brixen-wordmark' not in celeb_html
+    assert 'bgcolor="#003971"' in celeb_html
+    assert 'bgcolor="#25D366"' in celeb_html
+    assert '<font color="#ffffff">' in celeb_html
+    assert '<font color="#c5a572">' in celeb_html
+    assert 'color-scheme" content="light"' in celeb_html
+    assert 'Company number 12345678' in celeb_html
+    assert 'Company number: 12345678' in celeb_text or '12345678' in celeb_text
+    assert 'Important notification' not in celeb_html
+    assert '17314564' not in celeb_html
+    assert 'Wellesley' not in celeb_html
+    assert not app_mod.inline_images_for_html(celeb_html)
+    mime_msg, envelope_from = app_mod.build_outbound_email(
+        'contact@brixenconsultants.com',
+        'Congratulations — Example Holdings Ltd is registered',
+        celeb_text,
+        celeb_html,
+    )
+    mime_blob = mime_msg.as_string()
+    assert 'brixen-favicon' not in mime_blob
+    assert 'Content-ID:' not in mime_blob
+    assert 'filename="congratulations' not in mime_blob
+    assert 'Brixen Consultants' in str(mime_msg['From'])
+    assert 'LTD' not in str(mime_msg['From'])
+    assert mime_msg['Reply-To']
+    assert mime_msg['Message-ID']
+    assert '@' in str(mime_msg['Message-ID'])
+    assert envelope_from.rsplit('@', 1)[-1] in str(mime_msg['Message-ID'])
+    assert mime_msg['Date']
+    assert '@' in envelope_from
+    assert mime_msg['Organization'] == 'Brixen Consultants'
+    assert mime_msg['Content-Language'] == 'en-GB'
+    assert not mime_msg['Auto-Submitted']
+    assert not mime_msg['X-Mailer']
+    assert not mime_msg['X-Priority']
+    assert not mime_msg['Precedence']
+    assert not mime_msg['List-Unsubscribe']
+    queued, queued_status = app_mod.EmailService.send_notification_email(
+        'queued-client@example.com',
+        'Queued until SMTP is configured',
+        'This should be kept in the outbox.',
+        '<p>This should be kept in the outbox.</p>',
+    )
+    app_mod.ensure_schema()
+    outbox_rows = query_db(
+        "SELECT recipient, subject, status FROM email_outbox WHERE recipient = 'queued-client@example.com' ORDER BY id DESC;"
+    ) or []
+    assert queued_status
+    assert outbox_rows, f'expected outbox row, got {outbox_rows!r} status={queued_status!r}'
+    assert outbox_rows[0]['subject'] == 'Queued until SMTP is configured'
+    assert outbox_rows[0]['status'] in ('queued', 'failed', 'sent')
     print("✓ Branded HTML document notification template includes logo, CTA, and client message")
     print("✓ Branded client notification emails cover documents, orders, and support updates")
     print("✓ Company posted-document upload notifies the customer and is visible on their company card")
@@ -1169,6 +2103,136 @@ def run_tests():
     print("✓ Staff can manually add a historical company to a client portfolio")
     print("✓ Admin can delete a company from Company Registered")
     print("✓ Deleted company cards stay off Company Registered (no awaiting-name revival)")
+    registered_snap = execute_db(
+        """
+        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status)
+        VALUES (?, 'SNAPKART LTD', '17361991', 'Active', '2026-07-24', 'Test Director', 'United Kingdom', 'Digital Package', 'Good Standing');
+        """,
+        (james['id'],),
+    )
+    assert app_mod.match_company_for_client(james['id'], 'SNAPKARTT LTD') == registered_snap
+    typo_snap = execute_db(
+        """
+        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status)
+        VALUES (?, 'SNAPKARTT LTD', 'REG-16289', 'Active', '2026-08-22', 'Test Director', 'United Kingdom', 'Digital Package', 'Pending');
+        """,
+        (james['id'],),
+    )
+    snap_form = json.dumps([
+        {'label': 'Director name', 'value': 'Test Director'},
+        {'label': 'Email (form)', 'value': 'owner-form@example.com'},
+        {'label': 'Billing address', 'value': '85 Dunstall Hill, Wolverhampton, WV6 0SR'},
+    ])
+    snap_order_id = execute_db(
+        """
+        INSERT INTO orders (order_number, user_id, company_id, service_name, price, vat, total, status, progress_percent, woocommerce_order_id, checkout_form_json)
+        VALUES ('#WC-16289', ?, ?, 'Digital Package', 52.99, 10.60, 63.59, 'Completed', 100, '16289', ?);
+        """,
+        (james['id'], typo_snap, snap_form),
+    )
+    status, headers, typo_del = make_request(
+        f'/api/admin/companies/{typo_snap}', method='DELETE',
+        cookie=f"session_token={adm_comp_token}"
+    )
+    assert status == "200 OK", typo_del
+    assert query_db("SELECT id FROM companies WHERE id = ?;", (typo_snap,), one=True) is None
+    relinked = query_db(
+        "SELECT company_id, portfolio_hidden, checkout_form_json FROM orders WHERE id = ?;",
+        (snap_order_id,),
+        one=True,
+    )
+    assert relinked['company_id'] == registered_snap
+    assert int(relinked['portfolio_hidden'] or 0) == 0
+    relinked_fields = {field['label']: field['value'] for field in json.loads(relinked['checkout_form_json'])}
+    assert relinked_fields.get('Director name') == 'Test Director'
+    assert relinked_fields.get('Email (form)') == 'owner-form@example.com'
+    assert relinked_fields.get('Desired company name') == 'SNAPKART LTD'
+    snap_typo_payload = {
+        'event_id': 'evt_wc_snapkart_typo_1',
+        'event_type': 'order.created',
+        'data': {
+            'woocommerce_order_id': '16290',
+            'order_number': '#WC-16290',
+            'wordpress_user_id': 'wp_user_101',
+            'email': 'client1@acmecorp.co.uk',
+            'company_name': 'SNAPKARTT LTD',
+            'service_name': 'Digital Package',
+            'price': 52.99,
+            'total': 63.59,
+            'status': 'Processing',
+            'line_items': [{
+                'product_name': 'Digital Package',
+                'category': 'Company Incorporation',
+                'quantity': 1,
+            }],
+        },
+    }
+    typo_bytes = json.dumps(snap_typo_payload).encode('utf-8')
+    typo_sig = hmac.new(webhook_secret_bytes(), typo_bytes, hashlib.sha256).hexdigest()
+    status, headers, typo_sync = make_request(
+        '/api/v1/wordpress/webhook', method='POST', body=snap_typo_payload,
+        headers={'X-Brixen-Signature': typo_sig}
+    )
+    assert status == "200 OK", typo_sync
+    snap_cards = query_db(
+        "SELECT id, name FROM companies WHERE user_id = ? AND name LIKE 'SNAPKART%';",
+        (james['id'],),
+    ) or []
+    assert [row['name'] for row in snap_cards] == ['SNAPKART LTD']
+    synced_typo = query_db("SELECT company_id FROM orders WHERE order_number = '#WC-16290';", one=True)
+    assert synced_typo['company_id'] == registered_snap
+    print("✓ Duplicate typo company card is merged into the registered company name")
+    love_wales_id = execute_db(
+        """
+        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status)
+        VALUES (?, 'Love Wales Ltd', 'REG-16310', 'Active', '2026-08-25', 'Test Director', 'United Kingdom', 'Digital Package', 'Pending');
+        """,
+        (james['id'],),
+    )
+    rabexa_id = execute_db(
+        """
+        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status)
+        VALUES (?, 'RABEXA LTD', '17428561', 'Active', '2026-08-31', 'Muhib Ul Nabi', 'United Kingdom', 'Digital Package', 'Good Standing');
+        """,
+        (james['id'],),
+    )
+    love_order_id = execute_db(
+        """
+        INSERT INTO orders (order_number, user_id, company_id, service_name, price, vat, total, status, progress_percent, woocommerce_order_id, checkout_form_json)
+        VALUES ('#WC-16310', ?, ?, 'Digital Package', 52.99, 10.60, 63.59, 'Completed', 100, '16310', ?);
+        """,
+        (james['id'], rabexa_id, json.dumps([
+            {'label': 'Desired company name', 'value': 'RABEXA LTD'},
+            {'label': 'Director name', 'value': 'Muhib Ul Nabi'},
+        ])),
+    )
+    assert app_mod.merge_pending_order_company_duplicates() >= 1
+    assert query_db("SELECT id FROM companies WHERE id = ?;", (love_wales_id,), one=True) is None
+    kept = query_db("SELECT company_id FROM orders WHERE id = ?;", (love_order_id,), one=True)
+    assert kept['company_id'] == rabexa_id
+    assert query_db("SELECT name FROM companies WHERE id = ?;", (rabexa_id,), one=True)['name'] == 'RABEXA LTD'
+    reuse_id = execute_db(
+        """
+        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status)
+        VALUES (?, 'Love Wales Ltd', 'REG-16311', 'Active', '2026-08-25', 'Test Director', 'United Kingdom', 'Digital Package', 'Pending');
+        """,
+        (james['id'],),
+    )
+    reused = app_mod.ensure_company_from_registration_order(
+        james['id'],
+        'Test Director',
+        {
+            'company_name': 'RABEXA TWO LTD',
+            'woocommerce_order_id': '16311',
+            'service_name': 'Digital Package',
+        },
+        'Digital Package',
+        [{'product_name': 'Digital Package'}],
+        '16311',
+    )
+    assert reused == reuse_id
+    assert query_db("SELECT name FROM companies WHERE id = ?;", (reuse_id,), one=True)['name'] == 'RABEXA TWO LTD'
+    print("✓ Same order number keeps one company when Love Wales converts to RABEXA LTD")
     status, headers, readd_legacy = make_request(
         '/api/admin/companies', method='POST',
         body={
@@ -1312,6 +2376,8 @@ def run_tests():
     assert listed['products_summary']
     assert 'Registered Office Address' in listed['products_summary']
     assert listed.get('category_name') == 'Address Services'
+    assert listed.get('total') is not None
+    assert 'payment_mode' in listed
     assert 'notes' not in listed
     assert adm_orders.get('pagination')
     assert adm_orders['pagination']['total'] >= 1
@@ -1387,6 +2453,35 @@ def run_tests():
     assert status == "200 OK"
     notes_after = query_db("SELECT COUNT(*) as c FROM notifications WHERE user_id = ?;", (james['id'],), one=True)['c']
     assert notes_after == notes_before
+    status, headers, form_denied = make_request(
+        f"/api/admin/orders/{wc_order_id}", method='PUT',
+        cookie=f"session_token={token}",
+        body={'checkout_form': [{'label': 'Email (form)', 'value': 'hacked@example.com'}]}
+    )
+    assert status == "403 Forbidden"
+    status, headers, form_upd = make_request(
+        f"/api/admin/orders/{wc_order_id}", method='PUT',
+        cookie=f"session_token={adm_token}",
+        body={'checkout_form': [
+            {'label': 'Email (form)', 'value': 'updated-form@example.com'},
+            {'label': 'Director name', 'value': 'Updated Director'},
+        ]}
+    )
+    assert status == "200 OK", form_upd
+    status, headers, form_detail = make_request(f'/api/client/orders/{wc_order_id}', cookie=f"session_token={adm_token}")
+    assert status == "200 OK"
+    form_fields = {str(field.get('label') or ''): str(field.get('value') or '') for field in (form_detail.get('order', {}).get('checkout_form') or [])}
+    assert form_fields.get('Email (form)') == 'updated-form@example.com'
+    assert form_fields.get('Director name') == 'Updated Director'
+    owner = form_detail.get('order', {}).get('company_owner') or {}
+    assert owner.get('form_email') == 'updated-form@example.com'
+    assert owner.get('full_name') == 'Updated Director'
+    stored_owner = query_db("SELECT full_name, form_email FROM company_owners WHERE order_id = ?;", (wc_order_id,), one=True)
+    assert stored_owner['form_email'] == 'updated-form@example.com'
+    assert stored_owner['full_name'] == 'Updated Director'
+    order_owner_cols = query_db("SELECT owner_name, owner_form_email FROM orders WHERE id = ?;", (wc_order_id,), one=True)
+    assert order_owner_cols['owner_form_email'] == 'updated-form@example.com'
+    print("✓ Staff can correct checkout form details after the order is placed")
     status, headers, order_tasks = make_request(f'/api/admin/tasks?order_id={wc_order_id}', cookie=f"session_token={adm_token}")
     assert status == "200 OK"
     status, headers, client_order_tasks = make_request(f'/api/admin/tasks?order_id={wc_order_id}', cookie=f"session_token={token}")
@@ -1720,6 +2815,21 @@ def run_tests():
     status, headers, streamed_bytes = make_request(f"/api/documents/{doc_id}/download", cookie=f"session_token={token}")
     assert status == "200 OK"
     assert streamed_bytes == raw_pdf_bytes
+    assert 'attachment' in (headers.get('Content-Disposition') or '')
+    status, headers, preview_bytes = make_request(f"/api/documents/{doc_id}/view", cookie=f"session_token={token}")
+    assert status == "200 OK"
+    assert preview_bytes == raw_pdf_bytes
+    assert str(headers.get('Content-Disposition') or '').startswith('inline')
+    assert headers.get('Content-Type') == 'application/pdf'
+    assert headers.get('Accept-Ranges') == 'bytes'
+    status, headers, preview_range = make_request(
+        f"/api/documents/{doc_id}/view",
+        cookie=f"session_token={token}",
+        headers={'Range': 'bytes=0-3'}
+    )
+    assert status == "206 Partial Content"
+    assert preview_range == b'%PDF'
+    assert str(headers.get('Content-Range') or '').startswith('bytes 0-3/')
     print(f"✓ P2 Private Document Upload & Physical Binary Streaming -> Success (Path: ...{doc_rec['file_path'][-40:]}, Size: {len(streamed_bytes)} bytes)")
 
     # Client B access attempt on Client A document (Must return 403 Forbidden)
@@ -1991,6 +3101,38 @@ def run_tests():
     status, headers, marcus_orders = make_request('/api/admin/orders', cookie=f"session_token={marcus_token}")
     assert status == "200 OK"
     assert 'revenue' not in (marcus_orders.get('stats') or {})
+    for o in (marcus_orders.get('orders') or []):
+        assert 'total' not in o
+        assert 'price' not in o
+        assert 'vat' not in o
+        assert 'payment_mode' not in o
+        assert 'payment_status' not in o
+    marcus_oid = (marcus_orders.get('orders') or [{}])[0].get('id')
+    if marcus_oid:
+        status, headers, marcus_price = make_request(
+            f"/api/admin/orders/{marcus_oid}",
+            method='PUT',
+            body={'total': 333.33},
+            cookie=f"session_token={marcus_token}"
+        )
+        assert status == "403 Forbidden", marcus_price
+        status, headers, marcus_pay = make_request(
+            f"/api/admin/orders/{marcus_oid}",
+            method='PUT',
+            body={'payment_mode': 'GBP(Bank Transfer)'},
+            cookie=f"session_token={marcus_token}"
+        )
+        assert status == "403 Forbidden", marcus_pay
+        status, headers, marcus_detail = make_request(
+            f"/api/client/orders/{marcus_oid}",
+            cookie=f"session_token={marcus_token}"
+        )
+        assert status == "200 OK", marcus_detail
+        assert 'total' not in (marcus_detail.get('order') or {})
+        assert 'payment_mode' not in (marcus_detail.get('order') or {})
+        for item in (marcus_detail.get('line_items') or []):
+            assert 'unit_price' not in item
+            assert 'line_total' not in item
     status, headers, marcus_docs = make_request('/api/admin/documents', cookie=f"session_token={marcus_token}")
     assert status == "403 Forbidden"
     status, headers, marcus_invoices = make_request('/api/admin/invoices', cookie=f"session_token={marcus_token}")
@@ -2007,7 +3149,7 @@ def run_tests():
     status, headers, all_access = make_request(
         f"/api/admin/staff/{eleanor['id']}",
         method='PUT',
-        body={'departments': ['New Signups', 'Orders', 'Documents', 'Support', 'Compliance', 'Accounts', 'General']},
+        body={'departments': ['New Signups', 'Orders', 'Documents', 'Support', 'Compliance', 'Accounts', 'Accountancy', 'General']},
         cookie=f"session_token={adm_token}"
     )
     assert status == "200 OK"
@@ -2311,15 +3453,18 @@ def run_tests():
 
     st, hd, mgr_order = rbac_request('/api/client/orders/1', manager_token)
     assert st == "200 OK"
+    assert 'total' not in (mgr_order.get('order') or {})
+    assert 'payment_mode' not in (mgr_order.get('order') or {})
     st, hd, super_order = rbac_request('/api/client/orders/1', super_token)
     assert st == "200 OK"
+    assert 'total' in (super_order.get('order') or {})
     st, hd, mgr_msgs = rbac_request(f'/api/client/tickets/{tick_id}/messages', manager_token)
     assert st == "200 OK"
     print("✓ Order/Ticket RBAC -> MANAGER and SUPER_ADMIN can access staff ticket/order detail")
 
     rbac_get_matrix = [
         ('/api/admin/stats', 'admin dashboard', {
-            'SUPER_ADMIN': '200 OK', 'ADMIN': '200 OK', 'MANAGER': '200 OK', 'STAFF': '403 Forbidden', 'CLIENT': '403 Forbidden'
+            'SUPER_ADMIN': '200 OK', 'ADMIN': '200 OK', 'MANAGER': '200 OK', 'STAFF': '200 OK', 'CLIENT': '403 Forbidden'
         }),
         ('/api/admin/services', 'orders.view', {
             'SUPER_ADMIN': '200 OK', 'ADMIN': '200 OK', 'MANAGER': '200 OK', 'STAFF': '403 Forbidden', 'CLIENT': '403 Forbidden'
@@ -2354,13 +3499,22 @@ def run_tests():
 
     st, hd, stats_res = rbac_request('/api/admin/stats', manager_token)
     assert 'total_customers' in stats_res.get('stats', {})
-    monthly = (stats_res.get('charts') or {}).get('monthly')
+    assert 'total_revenue' not in stats_res.get('stats', {})
+    assert 'pending_payments' not in stats_res.get('stats', {})
+    assert not (stats_res.get('charts') or {}).get('monthly')
+    st, hd, staff_stats = rbac_request('/api/admin/stats', staff_token)
+    assert 'total_customers' in staff_stats.get('stats', {})
+    assert 'total_revenue' not in staff_stats.get('stats', {})
+    assert not (staff_stats.get('charts') or {}).get('monthly')
+    st, hd, admin_stats = rbac_request('/api/admin/stats', super_token)
+    assert 'total_revenue' in admin_stats.get('stats', {})
+    monthly = (admin_stats.get('charts') or {}).get('monthly')
     assert isinstance(monthly, list) and len(monthly) == 6
     assert all(isinstance(m.get('month'), str) and 'rev' in m and m.get('label') for m in monthly)
     assert all(isinstance(m.get('rev'), (int, float)) for m in monthly)
     st, hd, svc_res = rbac_request('/api/admin/services', marcus_token)
     assert isinstance(svc_res.get('services'), list)
-    print("✓ Admin RBAC GET payloads -> MANAGER stats and Orders staff services catalog returned.")
+    print("✓ Admin RBAC GET payloads -> staff/manager stats omit revenue; admin gets the chart.")
 
     service_body = {
         'name': 'RBAC Catalog Probe',

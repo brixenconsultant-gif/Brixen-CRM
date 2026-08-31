@@ -21,11 +21,13 @@ for line in env_lines:
 # 1. WordPress Brixen CRM settings saved
 print("Check 1 (WordPress Brixen CRM Settings Saved): PASS")
 
-# 2. CRM Base URL Check
-if '187.52.116.13' in base_url or 'portal.brixenconsultants.com' in base_url:
-    print("Check 2 (CRM Base URL is http://187.52.116.13): PASS")
+# 2. CRM Base URL Check — local bind and portal.brixenconsultants.com are the same portal
+if '127.0.0.1:5050' in base_url or 'portal.brixenconsultants.com' in base_url:
+    print("Check 2 (CRM Base URL is the merged local portal): PASS")
+elif '187.52.116.13' in base_url:
+    print(f"Check 2 (CRM Base URL must be the local portal): FAIL ({base_url})")
 else:
-    print(f"Check 2 (CRM Base URL is http://187.52.116.13): FAIL ({base_url})")
+    print(f"Check 2 (CRM Base URL is the merged local portal): FAIL ({base_url})")
 
 # 3. Webhook Secret Present Check (Do NOT display secret)
 if len(secret) == 64:

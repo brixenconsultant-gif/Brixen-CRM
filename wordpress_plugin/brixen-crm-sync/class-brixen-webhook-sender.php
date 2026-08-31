@@ -27,6 +27,27 @@ class Brixen_CRM_Webhook_Sender {
     }
 
     /**
+     * Verify a signed CRM pull request for order data.
+     */
+    public static function verify_order_pull_request($order_id, $timestamp, $signature, $max_age_seconds = 300) {
+        $secret = self::get_webhook_secret();
+        $order_id = trim((string) $order_id);
+        $timestamp = trim((string) $timestamp);
+        $signature = trim(str_replace('sha256=', '', (string) $signature));
+        if ($secret === '' || $order_id === '' || $timestamp === '' || $signature === '') {
+            return false;
+        }
+        if (!ctype_digit($timestamp)) {
+            return false;
+        }
+        if (abs(time() - (int) $timestamp) > $max_age_seconds) {
+            return false;
+        }
+        $expected = hash_hmac('sha256', $order_id . '|' . $timestamp, $secret);
+        return hash_equals($expected, $signature);
+    }
+
+    /**
      * Send event payload to CRM webhook endpoint.
      *
      * @param string $event_type E.g., 'user.created', 'order.created'

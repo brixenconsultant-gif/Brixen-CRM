@@ -6,6 +6,7 @@
     <meta name="theme-color" content="#003971">
     <title>Brixen Consultants - Corporate CMS & Client Portal</title>
     <link rel="icon" type="image/png" href="https://brixenconsultants.com/wp-content/uploads/2025/11/Brixen-Consultants.png">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png">
     <link rel="canonical" href="https://portal.brixenconsultants.com/">
     <style>
         html.auth-pending body { background: #f8fafc; }
@@ -45,7 +46,7 @@
             box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
         }
         #auth-loading-screen img { height: 38px; margin-bottom: 14px; }
-        #auth-loading-screen p { margin: 0; font-family: Inter, sans-serif; font-size: 0.88rem; font-weight: 600; color: #64748b; }
+        #auth-loading-screen p { margin: 0; font-family: "SF Pro Text", "SF Pro", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; font-size: 0.94rem; font-weight: 500; color: #6e6e73; letter-spacing: -0.016em; }
     </style>
     <script>
         document.documentElement.classList.add('auth-pending');
@@ -58,12 +59,9 @@
             if (app) app.setAttribute('hidden', '');
         });
     </script>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Red+Hat+Display:wght@500;700;800&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-    <link rel="stylesheet" href="/static/css/styles.css?v=66.0">
+    <link rel="stylesheet" href="/static/css/styles.css?v=98.0">
 </head>
 <body>
     <div id="auth-loading-screen" role="status" aria-live="polite">
@@ -97,6 +95,7 @@
                     <div class="nav-group-title">MY PORTFOLIO</div>
                     <ul class="nav-list">
                         <li class="nav-item" data-view="client-companies" data-portfolio="Business Portfolio"><a href="#companies" onclick="switchView('client-companies')"><i data-lucide="building-2"></i> <span>Company Registered</span><span style="display:none">Business Portfolio</span></a></li>
+                        <li class="nav-item" data-view="client-accountancy"><a href="#accountancy" onclick="switchView('client-accountancy')"><i data-lucide="calculator"></i> <span>Accountancy</span></a></li>
                         <li class="nav-item" data-view="client-addresses"><a href="#addresses" onclick="switchView('client-addresses')"><i data-lucide="map-pin"></i> <span>Addresses</span></a></li>
                     </ul>
                 </div>
@@ -159,6 +158,7 @@
                         <li class="nav-item" data-view="admin-dashboard"><a href="#admin-dashboard"><i data-lucide="pie-chart"></i> <span>Overview</span></a></li>
                         <li class="nav-item" data-view="admin-customers"><a href="#admin-customers"><i data-lucide="users"></i> <span>Customers / Signups</span></a></li>
                         <li class="nav-item" data-view="admin-companies"><a href="#admin-companies" onclick="switchView('admin-companies')"><i data-lucide="building-2"></i> <span>Company Registered</span></a></li>
+                        <li class="nav-item" data-view="admin-accountancy"><a href="#admin-accountancy" onclick="switchView('admin-accountancy')"><i data-lucide="calculator"></i> <span>Accountancy</span></a></li>
                         <li class="nav-item" data-view="admin-orders"><a href="#admin-orders"><i data-lucide="package-check"></i> <span>Orders Manager</span></a></li>
                         <li class="nav-item" data-view="admin-tasks"><a href="#admin-tasks"><i data-lucide="list-checks"></i> <span>Tasks &amp; Team</span></a></li>
                         <li class="nav-item" data-view="admin-services"><a href="#admin-services"><i data-lucide="layers"></i> <span>Services Catalog</span></a></li>
@@ -195,9 +195,11 @@
                 <button type="button" id="mobile-nav-toggle" class="mobile-nav-toggle" onclick="toggleMobileNav()" aria-label="Open menu" aria-expanded="false">
                     <i data-lucide="menu"></i>
                 </button>
-                <div class="search-box" id="header-search-box" style="display: none;">
-                    <i data-lucide="search" style="width:16px; height:16px; color:#94a3b8;"></i>
-                    <input type="text" id="global-search-input" placeholder="Search orders, companies, invoices..." oninput="handleGlobalSearch(this.value)">
+                <div class="header-search-wrap" id="header-search-box" style="display: none;">
+                    <div class="search-box">
+                    <i data-lucide="search" style="width:16px; height:16px; color:#86868b;"></i>
+                    <input type="text" id="global-search-input" placeholder="Search clients, email, orders…" autocomplete="off" oninput="handleGlobalSearch(this.value)" onfocus="handleGlobalSearch(this.value)">
+                    </div>
                 </div>
 
                 <!-- ====================================================
@@ -214,6 +216,9 @@
                             </li>
                             <li class="top-menu-item" data-view="client-companies">
                                 <a href="#companies" onclick="switchView('client-companies')"><i data-lucide="building-2"></i> <span>Company Registered</span></a>
+                            </li>
+                            <li class="top-menu-item" data-view="client-accountancy">
+                                <a href="#accountancy" onclick="switchView('client-accountancy')"><i data-lucide="calculator"></i> <span>Accountancy</span></a>
                             </li>
                             <li class="top-menu-item" data-view="client-invoices">
                                 <a href="#invoices" onclick="switchView('client-invoices')"><i data-lucide="file-text"></i> <span>Invoices</span></a>
@@ -244,6 +249,9 @@
                             </li>
                             <li class="top-menu-item" data-view="admin-companies">
                                 <a href="#admin-companies" onclick="switchView('admin-companies')"><i data-lucide="building-2"></i> <span>Company Registered</span></a>
+                            </li>
+                            <li class="top-menu-item" data-view="admin-accountancy">
+                                <a href="#admin-accountancy" onclick="switchView('admin-accountancy')"><i data-lucide="calculator"></i> <span>Accountancy</span></a>
                             </li>
                             <li class="top-menu-item" data-view="admin-documents">
                                 <a href="#admin-documents" onclick="switchView('admin-documents')"><i data-lucide="folder-lock"></i> <span>Documents</span></a>
@@ -343,7 +351,7 @@
                                 <span class="account-name" id="header-user-name"></span>
                                 <span class="account-role" id="header-user-role"></span>
                             </div>
-                            <i data-lucide="chevron-down" class="account-menu-chevron"></i>
+                            <span class="dropdown-caret" aria-hidden="true">^</span>
                         </button>
                         <div id="account-dropdown" class="account-dropdown">
                             <button type="button" id="account-menu-return" class="account-dropdown-item" style="display:none;" onclick="stopImpersonation(event)">Return to original account</button>
@@ -380,23 +388,23 @@
 
                 <!-- 0. LOGIN VIEW -->
                 <div id="view-login" class="view-panel login-panel is-active" style="display:none; max-width: 440px; margin: 40px auto;">
-                    <div style="background: #ffffff; border: 1px solid var(--border-color); border-radius: var(--radius-xl); padding: 32px; box-shadow: var(--shadow-card);">
-                        <div style="text-align: center; margin-bottom: 24px;">
-                            <img src="/static/img/brixen-logo.png" alt="Brixen Consultants" style="height: 38px; margin-bottom: 12px;">
-                            <h2 style="font-size: 1.4rem; font-weight: 800; color: var(--text-primary);">Sign in</h2>
-                            <p style="font-size: 0.82rem; color: var(--text-muted); margin-top: 4px;">Use the email and password for your account. Team accounts are created by an administrator — there is no public signup.</p>
+                    <div class="apple-card">
+                        <div class="apple-card-intro">
+                            <img src="/static/img/brixen-logo.png" alt="Brixen Consultants">
+                            <h2>Sign in</h2>
+                            <p>Use the email and password for your account. Team accounts are created by an administrator — there is no public signup.</p>
                         </div>
-                        <form id="login-form" onsubmit="handleFormLogin(event)">
-                            <div style="margin-bottom: 16px;">
-                                <label style="display: block; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px;">Email Address</label>
-                                <input type="email" id="login-email" required placeholder="you@company.com" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: var(--radius-md); font-size: 0.9rem;">
+                        <form id="login-form" class="apple-form" onsubmit="handleFormLogin(event)">
+                            <div class="apple-field">
+                                <label for="login-email">Email address</label>
+                                <input type="email" id="login-email" required placeholder="you@company.com" autocomplete="username">
                             </div>
-                            <div style="margin-bottom: 20px;">
-                                <label style="display: block; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px;">Password</label>
-                                <input type="password" id="login-password" required placeholder="••••••••" style="width: 100%; padding: 10px 14px; border: 1px solid var(--border-color); border-radius: var(--radius-md); font-size: 0.9rem;">
+                            <div class="apple-field">
+                                <label for="login-password">Password</label>
+                                <input type="password" id="login-password" required placeholder="••••••••" autocomplete="current-password">
                             </div>
-                            <div id="login-error-msg" style="display: none; padding: 10px; border-radius: var(--radius-sm); background: #fef2f2; color: #dc2626; font-size: 0.8rem; font-weight: 600; margin-bottom: 16px;"></div>
-                            <button type="submit" class="btn-primary" style="width: 100%; justify-content: center; padding: 12px; font-weight: 700; border-radius: var(--radius-md);">Sign In</button>
+                            <div id="login-error-msg" class="apple-form-error" style="display: none;"></div>
+                            <button type="submit" class="btn-primary btn-block">Sign In</button>
                         </form>
                     </div>
                 </div>
@@ -608,7 +616,39 @@
                         </div>
                         <div class="portfolio-count-pill" id="portfolio-company-count">0 UK</div>
                     </div>
+                    <div class="portfolio-filter-bar" role="tablist" aria-label="Company registration filter">
+                        <button type="button" class="is-active" data-company-reg-scope="client" data-company-reg-filter="all" onclick="setCompanyRegFilter('client', 'all')">All <span data-count>0</span></button>
+                        <button type="button" data-company-reg-scope="client" data-company-reg-filter="ch" onclick="setCompanyRegFilter('client', 'ch')">Companies House <span data-count>0</span></button>
+                        <button type="button" data-company-reg-scope="client" data-company-reg-filter="pending" onclick="setCompanyRegFilter('client', 'pending')">Not registered <span data-count>0</span></button>
+                    </div>
                     <div id="portfolio-companies-grid" class="portfolio-grid"></div>
+                </div>
+
+                <div id="view-client-accountancy" class="view-panel" style="display: none;">
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>Accountancy</h1>
+                            <p>See identity, PSC, registered office, and yearly accounts status for your companies.</p>
+                        </div>
+                    </div>
+                    <div id="client-accountancy-error" class="dash-banner-error" style="display:none;" role="alert"></div>
+                    <div class="data-table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Company</th>
+                                    <th>Address</th>
+                                    <th>IDV</th>
+                                    <th>PSC</th>
+                                    <th>Year end</th>
+                                    <th>Due</th>
+                                    <th>Status</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="client-accountancy-table-body"></tbody>
+                        </table>
+                    </div>
                 </div>
 
                 <!-- 3B. COMPANY REGISTERED VIEW (ADMIN) -->
@@ -627,10 +667,53 @@
                             <div class="portfolio-count-pill" id="admin-portfolio-company-count">0 UK</div>
                         </div>
                     </div>
+                    <div class="portfolio-filter-bar" role="tablist" aria-label="Company registration filter">
+                        <button type="button" class="is-active" data-company-reg-scope="admin" data-company-reg-filter="all" onclick="setCompanyRegFilter('admin', 'all')">All <span data-count>0</span></button>
+                        <button type="button" data-company-reg-scope="admin" data-company-reg-filter="ch" onclick="setCompanyRegFilter('admin', 'ch')">Companies House <span data-count>0</span></button>
+                        <button type="button" data-company-reg-scope="admin" data-company-reg-filter="pending" onclick="setCompanyRegFilter('admin', 'pending')">Not registered <span data-count>0</span></button>
+                    </div>
                     <div id="admin-ch-banner" class="portfolio-ch-banner" hidden>
                         Add a Companies House API key in System Settings to search live company names and numbers.
                     </div>
                     <div id="admin-portfolio-companies-grid" class="portfolio-grid"></div>
+                </div>
+
+                <div id="view-admin-accountancy" class="view-panel" style="display: none;">
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>Accountancy</h1>
+                            <p>Post bank statements into the cash book, complete UK Companies House checks, then file yearly accounts.</p>
+                        </div>
+                        <button type="button" class="btn-primary" onclick="openFileAccountsModal()"><i data-lucide="file-plus"></i> File accounts</button>
+                    </div>
+                    <div class="stats-grid accountancy-stats" style="margin-bottom:18px;">
+                        <div class="stat-card"><div class="stat-info"><div class="label">Overdue</div><div class="value" id="accountancy-stat-overdue">0</div></div></div>
+                        <div class="stat-card"><div class="stat-info"><div class="label">Due in 60 days</div><div class="value" id="accountancy-stat-due">0</div></div></div>
+                        <div class="stat-card"><div class="stat-info"><div class="label">In progress</div><div class="value" id="accountancy-stat-progress">0</div></div></div>
+                        <div class="stat-card"><div class="stat-info"><div class="label">Issues</div><div class="value" id="accountancy-stat-issues">0</div></div></div>
+                        <div class="stat-card"><div class="stat-info"><div class="label">Filed</div><div class="value" id="accountancy-stat-filed">0</div></div></div>
+                    </div>
+                    <div id="adm-accountancy-error" class="dash-banner-error" style="display:none;" role="alert"></div>
+                    <div class="data-table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Company</th>
+                                    <th>Director</th>
+                                    <th>Address</th>
+                                    <th>IDV</th>
+                                    <th>PSC</th>
+                                    <th>Issues</th>
+                                    <th>Year end</th>
+                                    <th>Due</th>
+                                    <th>Type</th>
+                                    <th>Status</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="adm-accountancy-table-body"></tbody>
+                        </table>
+                    </div>
                 </div>
 
                 <!-- 4. ADDRESSES VIEW -->
@@ -882,7 +965,7 @@
                             </div>
                             <div class="stat-icon blue"><i data-lucide="shopping-bag"></i></div>
                         </div>
-                        <div class="stat-card">
+                        <div class="stat-card" data-admin-revenue>
                             <div class="stat-info">
                                 <div class="label">Total Revenue</div>
                                 <div class="value" id="adm-tot-rev">—</div>
@@ -898,7 +981,7 @@
                         </div>
                     </div>
 
-                    <div class="revenue-chart-card">
+                    <div class="revenue-chart-card" data-admin-revenue>
                         <div class="revenue-chart-head">
                             <h3>Revenue Trend</h3>
                             <p id="admin-chart-caption">Last 6 months of paid order totals</p>
@@ -915,7 +998,7 @@
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>Admin Orders Manager</h1>
-                            <p>Filter, open, and process website and CRM orders from the live database.</p>
+                            <p>Every website and CRM order is here. After a customer asks for a change, open that order and update company name, email, director, address, package, or price.</p>
                         </div>
                     </div>
 
@@ -929,18 +1012,10 @@
                     </div>
 
                     <div class="orders-filter-row orders-filter-toolbar">
-                        <div class="filter-group orders-filter-grid">
-                            <input type="search" class="select-filter filter-search" id="filter-admin-order-search" placeholder="Search order #, customer, email, product…" oninput="scheduleLoadAdminOrders()">
-                            <select class="select-filter" id="filter-admin-order-product" onchange="resetAdminOrdersPage(); loadAdminOrders()"><option value="">All products</option></select>
-                            <select class="select-filter" id="filter-admin-order-category" onchange="resetAdminOrdersPage(); loadAdminOrders()"><option value="">All categories</option></select>
-                            <select class="select-filter" id="filter-admin-order-status-group" onchange="resetAdminOrdersPage(); loadAdminOrders()">
-                                <option value="">All work states</option>
-                                <option value="pending">Pending</option>
-                                <option value="in_progress">In progress</option>
-                                <option value="completed">Completed</option>
-                            </select>
-                            <select class="select-filter" id="filter-admin-order-status" onchange="resetAdminOrdersPage(); loadAdminOrders()">
-                                <option value="">All statuses</option>
+                        <div class="filter-group orders-filter-bar">
+                            <input type="search" class="select-filter filter-search" id="filter-admin-order-search" placeholder="Search" oninput="scheduleLoadAdminOrders()" aria-label="Search orders">
+                            <select class="select-filter" id="filter-admin-order-status" onchange="resetAdminOrdersPage(); loadAdminOrders()" aria-label="Status">
+                                <option value="">Status</option>
                                 <option value="Pending Verification">Pending Verification</option>
                                 <option value="Pending">Pending</option>
                                 <option value="Processing">Processing</option>
@@ -949,52 +1024,39 @@
                                 <option value="Cancelled">Cancelled</option>
                                 <option value="Refunded">Refunded</option>
                             </select>
-                            <select class="select-filter" id="filter-admin-order-payment" onchange="resetAdminOrdersPage(); loadAdminOrders()">
-                                <option value="">All payments</option>
+                            <select class="select-filter" id="filter-admin-order-product" onchange="resetAdminOrdersPage(); loadAdminOrders()" aria-label="Product"><option value="">Product</option></select>
+                            <select class="select-filter" id="filter-admin-order-payment" onchange="resetAdminOrdersPage(); loadAdminOrders()" aria-label="Payment">
+                                <option value="">Payment</option>
                                 <option value="Paid">Paid</option>
-                                <option value="Pending">Payment pending</option>
+                                <option value="Pending">Pending</option>
                                 <option value="Overdue">Overdue</option>
                                 <option value="Unpaid">Unpaid</option>
                             </select>
-                            <select class="select-filter" id="filter-admin-order-customer" onchange="resetAdminOrdersPage(); loadAdminOrders()"><option value="">All customers</option></select>
-                            <select class="select-filter" id="filter-admin-order-progress" onchange="resetAdminOrdersPage(); loadAdminOrders()">
-                                <option value="">All progress</option>
-                                <option value="0-25">0–25%</option>
-                                <option value="26-50">26–50%</option>
-                                <option value="51-75">51–75%</option>
-                                <option value="76-99">76–99%</option>
-                                <option value="100-100">100%</option>
-                            </select>
-                            <select class="select-filter" id="filter-admin-order-preset" onchange="onAdminOrderDatePresetChange(); resetAdminOrdersPage(); loadAdminOrders()">
-                                <option value="">All dates</option>
+                            <select class="select-filter" id="filter-admin-order-preset" onchange="onAdminOrderDatePresetChange(); resetAdminOrdersPage(); loadAdminOrders()" aria-label="Date">
+                                <option value="">Date</option>
                                 <option value="today">Today</option>
                                 <option value="yesterday">Yesterday</option>
                                 <option value="this_week">This week</option>
                                 <option value="this_month">This month</option>
                                 <option value="last_month">Last month</option>
                                 <option value="this_year">This year</option>
-                                <option value="custom">Custom range</option>
+                                <option value="custom">Custom</option>
                             </select>
-                            <select class="select-filter" id="filter-admin-order-month" onchange="resetAdminOrdersPage(); loadAdminOrders()">
-                                <option value="">Month</option>
-                                <option value="1">January</option><option value="2">February</option><option value="3">March</option>
-                                <option value="4">April</option><option value="5">May</option><option value="6">June</option>
-                                <option value="7">July</option><option value="8">August</option><option value="9">September</option>
-                                <option value="10">October</option><option value="11">November</option><option value="12">December</option>
-                            </select>
-                            <select class="select-filter" id="filter-admin-order-year" onchange="resetAdminOrdersPage(); loadAdminOrders()"><option value="">Year</option></select>
                             <input type="date" class="select-filter filter-date" id="filter-admin-order-from" onchange="resetAdminOrdersPage(); loadAdminOrders()" hidden aria-label="From date">
                             <input type="date" class="select-filter filter-date" id="filter-admin-order-to" onchange="resetAdminOrdersPage(); loadAdminOrders()" hidden aria-label="To date">
-                            <button type="button" class="btn-secondary filter-clear" onclick="clearAdminOrderFilters()">Clear filters</button>
+                            <button type="button" class="orders-filter-clear" onclick="clearAdminOrderFilters()">Clear</button>
                         </div>
+                    </div>
+                    <div id="adm-orders-changes-banner" class="orders-changes-banner">
+                        Click <strong>Change details</strong> on any order to correct checkout information the customer asked to change.
                     </div>
                     <div id="adm-orders-error" style="display:none; padding:10px 14px; border-radius:8px; background:#fef2f2; color:#dc2626; font-size:0.82rem; font-weight:600; margin:12px 0;" role="alert"></div>
                     <div id="adm-orders-selection-bar" style="display:none; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:10px 14px; margin:0 0 12px; border:1px solid #dbeafe; border-radius:10px; background:#eff6ff;">
                         <div style="font-size:0.85rem; font-weight:700; color:#0f172a;">
                             <span id="adm-orders-selected-count">0</span> selected
                         </div>
-                        <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                            <button type="button" class="btn-primary" id="adm-orders-edit-selected" onclick="editSelectedAdminOrders()"><i data-lucide="pencil"></i> Edit</button>
+                        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                            <button type="button" class="btn-primary" id="adm-orders-edit-selected" onclick="editSelectedAdminOrders()"><i data-lucide="pencil"></i> Change details</button>
                             <button type="button" class="portfolio-delete-btn" id="adm-orders-delete-selected" onclick="deleteSelectedAdminOrders()" style="display:none;" title="Delete selected" aria-label="Delete selected orders"><i data-lucide="trash-2"></i></button>
                             <button type="button" class="btn-secondary" onclick="clearSelectedAdminOrders()">Clear</button>
                         </div>
@@ -1003,18 +1065,18 @@
                         <table class="data-table">
                             <thead>
                                 <tr>
-                                    <th style="width:40px;">
+                                    <th class="col-select" scope="col">
                                         <input type="checkbox" id="adm-orders-select-all" title="Select all on this page" aria-label="Select all orders on this page" onchange="toggleSelectAllAdminOrders(this.checked)">
                                     </th>
-                                    <th>Order #</th>
-                                    <th>Date</th>
-                                    <th>Client</th>
-                                    <th>Company</th>
-                                    <th>Category / Product</th>
-                                    <th>Price</th>
-                                    <th>Payment Mode</th>
-                                    <th>Status</th>
-                                    <th>Action</th>
+                                    <th class="col-order" scope="col">Order #</th>
+                                    <th class="col-date" scope="col">Date</th>
+                                    <th class="col-client" scope="col">Owner</th>
+                                    <th class="col-company" scope="col">Company</th>
+                                    <th class="col-product" scope="col">Product</th>
+                                    <th class="col-price" scope="col">Price</th>
+                                    <th class="col-payment" scope="col">Payment</th>
+                                    <th class="col-status" scope="col">Status</th>
+                                    <th class="col-actions" scope="col">Action</th>
                                 </tr>
                             </thead>
                             <tbody id="adm-orders-table-body"></tbody>
@@ -1114,7 +1176,7 @@
                             <span id="adm-customers-count" style="font-size:0.8rem; color:#64748b; font-weight:600;"></span>
                         </div>
                     </div>
-                    <div class="data-table-container">
+                    <div class="data-table-container customers-table-wrap">
                         <table class="data-table">
                             <thead>
                                 <tr>
@@ -1125,7 +1187,7 @@
                                     <th>Companies</th>
                                     <th>Orders</th>
                                     <th>Status</th>
-                                    <th>Action</th>
+                                    <th class="col-actions">Action</th>
                                 </tr>
                             </thead>
                             <tbody id="adm-customers-table-body"></tbody>
@@ -1167,14 +1229,14 @@
                         </div>
                     </div>
                     <div id="adm-invoices-error" class="dash-banner-error" style="display:none;" role="alert"></div>
-                    <div class="data-table-container">
+                    <div class="data-table-container invoices-table-wrap">
                         <table class="data-table">
                             <thead>
                                 <tr>
                                     <th>Invoice #</th>
                                     <th>Client</th>
                                     <th>Order</th>
-                                    <th>Total</th>
+                                    <th class="col-inv-total">Total</th>
                                     <th>Status</th>
                                     <th>Date</th>
                                 </tr>
@@ -1771,16 +1833,47 @@
                 <div><span class="staff-order-field-label">Date</span><strong id="staff-order-date">—</strong></div>
                 <div><span class="staff-order-field-label">Company</span><strong id="staff-order-company">—</strong></div>
                 <div class="full"><span class="staff-order-field-label">Category / Product</span><strong id="staff-order-product">—</strong></div>
-                <div><span class="staff-order-field-label">Price</span><strong id="staff-order-price">—</strong></div>
-                <div><span class="staff-order-field-label">Payment mode</span><select id="staff-order-payment-mode" class="select-filter staff-order-field-control" onchange="updateAdminOrderPaymentMode(staffOrderId, this.value)"></select></div>
+                <div data-order-finance>
+                    <span class="staff-order-field-label">Price</span>
+                    <div class="price-display-row">
+                        <strong id="staff-order-price">—</strong>
+                        <button type="button" id="staff-order-price-edit" class="icon-edit-btn" hidden title="Edit price" aria-label="Edit price"><i data-lucide="pencil"></i></button>
+                    </div>
+                    <div id="staff-order-price-editor" class="price-editor-row" hidden>
+                        <span>£</span>
+                        <input type="number" id="staff-order-price-input" class="select-filter table-price-input" min="0" max="100000" step="0.01" inputmode="decimal" aria-label="Order price">
+                        <button type="button" class="btn-primary btn-table" id="staff-order-price-save">Save</button>
+                    </div>
+                </div>
+                <div data-order-finance><span class="staff-order-field-label">Payment mode</span><select id="staff-order-payment-mode" class="select-filter staff-order-field-control" onchange="updateAdminOrderPaymentMode(staffOrderId, this.value)"></select></div>
                 <div><span class="staff-order-field-label">Status</span><select id="staff-order-status-select" class="select-filter staff-order-field-control" onchange="updateAdminOrderStatus(staffOrderId, this.value)"></select></div>
             </div>
             <div id="staff-order-manage" style="display:none; gap:8px; margin:12px 0 16px; align-items:center; flex-wrap:wrap;">
                 <button type="button" class="btn-primary" id="staff-order-progress-btn" onclick="advanceStaffOrderProgress()"><i data-lucide="plus"></i> Advance Progress</button>
                 <button type="button" class="portfolio-delete-btn" id="staff-order-delete-btn" style="display:none;" onclick="openDeleteOrderModal(staffOrderId)" title="Delete order" aria-label="Delete order"><i data-lucide="trash-2"></i></button>
             </div>
-            <h4 class="staff-order-section-title">Checkout form details</h4>
-            <p class="staff-order-section-copy">Information the customer submitted on the website at checkout (not their Brixen account profile).</p>
+            <div id="staff-order-owner" class="staff-order-owner-card">
+                <h4 class="staff-order-section-title">Company owner</h4>
+                <p class="staff-order-section-copy">The person named on the company form, with the form email — not the portal login or WooCommerce checkout account. This owner record is kept for company mail and future marketing.</p>
+                <div class="staff-order-book-grid" id="staff-order-owner-fields">
+                    <div><span class="staff-order-field-label">Owner name</span><strong id="staff-order-owner-name">—</strong></div>
+                    <div><span class="staff-order-field-label">Form email</span><strong id="staff-order-owner-email">—</strong></div>
+                    <div><span class="staff-order-field-label">UK contact</span><strong id="staff-order-owner-phone">—</strong></div>
+                    <div><span class="staff-order-field-label">Portal login</span><strong id="staff-order-portal-email">—</strong></div>
+                </div>
+            </div>
+            <div class="staff-order-section-head">
+                <div>
+                    <h4 class="staff-order-section-title">Checkout form details</h4>
+                    <p class="staff-order-section-copy">Correct company name, form email, director, address, or any other form detail after the customer asks for a change.</p>
+                </div>
+                <div class="staff-order-form-actions" id="staff-order-form-actions">
+                    <button type="button" class="btn-secondary" id="staff-order-edit-form-btn" onclick="beginStaffCheckoutFormEdit()">Edit details</button>
+                    <button type="button" class="btn-secondary" id="staff-order-add-form-btn" hidden onclick="addStaffCheckoutFormField()">Add field</button>
+                    <button type="button" class="btn-primary" id="staff-order-save-form-btn" hidden onclick="saveStaffCheckoutFormEdit()">Save changes</button>
+                    <button type="button" class="btn-secondary" id="staff-order-cancel-form-btn" hidden onclick="cancelStaffCheckoutFormEdit()">Cancel</button>
+                </div>
+            </div>
             <div id="staff-order-checkout-form" class="staff-order-book-grid" style="margin-bottom:16px;"></div>
             <h4 class="staff-order-section-title">Products</h4>
             <div id="staff-order-products" style="margin-bottom:16px;"></div>
@@ -1851,6 +1944,7 @@
                             <option value="Company Documents">Company Documents</option>
                             <option value="Proof of Address">Proof of Address</option>
                             <option value="ID Document">ID Document</option>
+                            <option value="Bank statement">Bank statement</option>
                             <option value="Compliance">Compliance</option>
                             <option value="Legal">Legal</option>
                         </select>
@@ -1901,7 +1995,7 @@
                 <div style="display:flex; flex-direction:column; gap:12px; margin-top:10px;">
                     <div>
                         <label style="font-size:0.8rem; font-weight:700;">Company numbers *</label>
-                        <textarea id="import-webfiling-numbers" class="select-filter" style="width:100%; height:140px; margin-top:4px; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; padding:10px;" placeholder="12345678&#10;87654321&#10;SC123456" required></textarea>
+                        <textarea id="import-webfiling-numbers" class="select-filter font-mono" style="width:100%; height:140px; margin-top:4px; padding:10px;" placeholder="12345678&#10;87654321&#10;SC123456" required></textarea>
                         <p style="margin:6px 0 0; font-size:0.78rem; color:#64748b;">Paste one number per line (or comma-separated). Open <a href="https://ewf.companieshouse.gov.uk/runpage?page=savedCompanies" target="_blank" rel="noopener noreferrer">WebFiling saved companies</a>, copy the numbers, and paste them here.</p>
                     </div>
                     <div class="create-company-client-section">
@@ -2124,7 +2218,16 @@
             </div>
             <div class="portfolio-tab-panel" data-panel="overview">
                 <div class="portfolio-detail-grid">
-                    <div><span>Company name</span><strong id="portfolio-detail-name-field">—</strong></div>
+                    <div class="full" id="portfolio-detail-name-wrap">
+                        <span>Company name</span>
+                        <strong id="portfolio-detail-name-field">—</strong>
+                        <form id="portfolio-rename-form" class="portfolio-rename-form" hidden onsubmit="savePendingCompanyName(event)">
+                            <input type="text" id="portfolio-rename-input" name="name" required minlength="2" maxlength="160" autocomplete="off" placeholder="Desired company name">
+                            <button type="submit" class="btn-primary" id="portfolio-rename-save">Save name</button>
+                            <span id="portfolio-rename-status" role="status"></span>
+                        </form>
+                        <p id="portfolio-rename-hint" class="portfolio-rename-hint" hidden>Change this before the Companies House application. The client portal shows the same name.</p>
+                    </div>
                     <div><span>Company number</span><strong id="portfolio-detail-number-field">—</strong></div>
                     <div><span>Status</span><strong id="portfolio-detail-status">—</strong></div>
                     <div><span>Country</span><strong id="portfolio-detail-country">—</strong></div>
@@ -2160,6 +2263,200 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=114.0"></script>
+    </div>
+
+    <div id="modal-file-accounts" class="modal-overlay" style="z-index:1100;">
+        <div class="modal-card" style="max-width:640px;">
+            <div class="modal-header">
+                <div>
+                    <h3 id="file-accounts-title">File yearly accounts</h3>
+                    <p style="font-size:0.8rem; color:#64748b;">Complete UK filing checks, then record the Companies House annual accounts for this company.</p>
+                </div>
+                <button type="button" class="btn-close" onclick="closeFileAccountsModal()"><i data-lucide="x"></i></button>
+            </div>
+            <form id="file-accounts-form" onsubmit="submitFileAccountsForm(event)">
+                <input type="hidden" id="file-accounts-id" value="">
+                <div id="file-accounts-error" style="display:none; padding:10px; border-radius:8px; background:#fef2f2; color:#dc2626; font-size:0.8rem; font-weight:600;" role="alert"></div>
+                <div id="file-accounts-readiness" class="acct-readiness-banner" hidden></div>
+                <div style="display:flex; flex-direction:column; gap:12px; margin-top:10px;">
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Company *</label>
+                        <select id="file-accounts-company" class="select-filter" style="width:100%; margin-top:4px;" required onchange="applyAccountancyCompanyPeriod()"></select>
+                        <div id="file-accounts-company-locked" class="file-accounts-company-locked" hidden></div>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Period start</label>
+                            <input type="date" id="file-accounts-start" class="select-filter" style="width:100%; margin-top:4px;" required>
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Year end</label>
+                            <input type="date" id="file-accounts-end" class="select-filter" style="width:100%; margin-top:4px;" required>
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Due date</label>
+                            <input type="date" id="file-accounts-due" class="select-filter" style="width:100%; margin-top:4px;">
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Accounts type</label>
+                            <select id="file-accounts-type" class="select-filter" style="width:100%; margin-top:4px;">
+                                <option value="Micro-entity">Micro-entity</option>
+                                <option value="Small">Small</option>
+                                <option value="Dormant">Dormant</option>
+                                <option value="Abridged">Abridged</option>
+                                <option value="Full">Full</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Status</label>
+                            <select id="file-accounts-status" class="select-filter" style="width:100%; margin-top:4px;">
+                                <option value="In progress">In progress</option>
+                                <option value="Ready to file">Ready to file</option>
+                                <option value="Filed">Filed</option>
+                                <option value="Not started">Not started</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Confirmation number</label>
+                            <input type="text" id="file-accounts-confirmation" class="select-filter" style="width:100%; margin-top:4px;" maxlength="40" placeholder="Companies House receipt">
+                        </div>
+                    </div>
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Internal notes</label>
+                        <textarea id="file-accounts-notes" class="select-filter" style="width:100%; height:70px; margin-top:4px; font-family:inherit; padding:8px;" placeholder="Staff notes for this filing."></textarea>
+                    </div>
+                    <div style="display:flex; justify-content:flex-end; gap:10px;">
+                        <button type="button" class="btn-secondary" onclick="closeFileAccountsModal()">Cancel</button>
+                        <button type="submit" class="btn-primary" id="file-accounts-submit">Save filing</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="modal-accountancy-books" class="modal-overlay" style="z-index:1100;">
+        <div class="modal-card acct-workspace-card">
+            <div class="modal-header">
+                <div>
+                    <h3 id="acct-books-title">Accounts workspace</h3>
+                    <p id="acct-books-subtitle" style="font-size:0.8rem; color:#64748b;">Bank statements → cash book → Companies House filing under UK rules.</p>
+                </div>
+                <button type="button" class="btn-close" onclick="closeAccountancyBooks()"><i data-lucide="x"></i></button>
+            </div>
+            <div id="acct-books-error" class="acct-books-error" hidden role="alert"></div>
+            <div class="acct-workspace-body">
+                <section class="acct-workspace-section" aria-labelledby="acct-books-checks-heading">
+                    <h4 id="acct-books-checks-heading">UK filing checks</h4>
+                    <p>Companies Act registered office, ECCTA identity verification, PSC register, and Companies House codes.</p>
+                    <div id="acct-books-checks" class="acct-check-grid"></div>
+                    <div class="acct-verify-row">
+                        <div>
+                            <label for="acct-books-identity">Identity verification</label>
+                            <select id="acct-books-identity" class="select-filter">
+                                <option value="Not started">Not started</option>
+                                <option value="In progress">In progress</option>
+                                <option value="Verified">Verified</option>
+                                <option value="Failed">Failed</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="acct-books-psc">PSC verification</label>
+                            <select id="acct-books-psc" class="select-filter">
+                                <option value="Not started">Not started</option>
+                                <option value="In progress">In progress</option>
+                                <option value="Verified">Verified</option>
+                                <option value="Update required">Update required</option>
+                            </select>
+                        </div>
+                        <button type="button" class="btn-secondary btn-table" id="acct-books-save-verify" onclick="saveAccountancyVerification()">Save checks</button>
+                    </div>
+                    <div id="acct-books-issues" class="acct-issue-list"></div>
+                </section>
+                <section class="acct-workspace-section" aria-labelledby="acct-books-statements-heading">
+                    <h4 id="acct-books-statements-heading">Bank statements</h4>
+                    <p>Upload the period statements, then post each line into the cash book.</p>
+                    <div id="acct-books-statements" class="acct-statement-list"></div>
+                    <form id="acct-books-upload-form" class="acct-upload-form" onsubmit="uploadAccountancyBankStatement(event)">
+                        <input type="file" id="acct-books-file" accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.zip" required>
+                        <button type="submit" class="btn-secondary btn-table" id="acct-books-upload-btn">Upload statement</button>
+                        <span id="acct-books-upload-status" class="acct-upload-status" role="status"></span>
+                    </form>
+                </section>
+                <section class="acct-workspace-section" aria-labelledby="acct-books-cash-heading">
+                    <h4 id="acct-books-cash-heading">Cash book</h4>
+                    <p>FRS 105 headings for micro-entity accounts. Receipts are positive; costs and drawings are payments out.</p>
+                    <form id="acct-books-entry-form" class="acct-entry-form" onsubmit="submitAccountancyBookEntry(event)">
+                        <input type="date" id="acct-books-entry-date" class="select-filter" required>
+                        <input type="text" id="acct-books-entry-desc" class="select-filter" maxlength="200" placeholder="Statement narrative" required>
+                        <select id="acct-books-entry-category" class="select-filter" onchange="document.getElementById('acct-books-entry-direction').value = accountancyOutflowCategory(this.value) ? 'out' : 'in'">
+                            <option value="Turnover">Turnover</option>
+                            <option value="Other income">Other income</option>
+                            <option value="Cost of sales">Cost of sales</option>
+                            <option value="Staff costs">Staff costs</option>
+                            <option value="Other operating charges">Other operating charges</option>
+                            <option value="Tax">Tax</option>
+                            <option value="Dividends / drawings">Dividends / drawings</option>
+                            <option value="Bank charges">Bank charges</option>
+                            <option value="Director loan">Director loan</option>
+                            <option value="VAT">VAT</option>
+                            <option value="Other">Other</option>
+                        </select>
+                        <input type="number" id="acct-books-entry-amount" class="select-filter" step="0.01" min="0.01" placeholder="Amount" required>
+                        <select id="acct-books-entry-direction" class="select-filter">
+                            <option value="in">In</option>
+                            <option value="out">Out</option>
+                        </select>
+                        <button type="submit" class="btn-primary btn-table" id="acct-books-entry-submit">Add line</button>
+                    </form>
+                    <div id="acct-books-totals" class="acct-totals"></div>
+                    <div class="data-table-container acct-books-table-wrap">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Description</th>
+                                    <th>Heading</th>
+                                    <th>Amount</th>
+                                    <th>Source</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody id="acct-books-entries-body"></tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+            <div class="acct-workspace-footer">
+                <button type="button" class="btn-secondary" onclick="closeAccountancyBooks()">Close</button>
+                <button type="button" class="btn-primary" id="acct-books-file-btn" onclick="fileAccountsFromBooks()">File accounts</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="modal-document-preview" class="modal-overlay document-preview-overlay" style="z-index:1200;" onclick="if(event.target===this) closeDocumentPreview()">
+        <div class="modal-card document-preview-card" role="dialog" aria-modal="true" aria-labelledby="document-preview-title">
+            <div class="document-preview-toolbar">
+                <div class="document-preview-toolbar-left">
+                    <button type="button" class="document-preview-ql-close" onclick="closeDocumentPreview()" aria-label="Close preview"></button>
+                    <h3 id="document-preview-title">Document</h3>
+                </div>
+                <div class="document-preview-toolbar-right">
+                    <div class="document-preview-zoom" id="document-preview-zoom" hidden>
+                        <button type="button" id="document-preview-zoom-out" class="document-preview-zoom-btn" onclick="zoomDocumentPreview(-1)" aria-label="Zoom out">−</button>
+                        <span id="document-preview-zoom-label" class="document-preview-zoom-label">100%</span>
+                        <button type="button" id="document-preview-zoom-in" class="document-preview-zoom-btn" onclick="zoomDocumentPreview(1)" aria-label="Zoom in">+</button>
+                        <button type="button" id="document-preview-rotate" class="document-preview-zoom-btn document-preview-rotate-btn" onclick="rotateDocumentPreview()" aria-label="Rotate">
+                            <i data-lucide="rotate-cw"></i>
+                        </button>
+                    </div>
+                    <a id="document-preview-download" class="document-preview-open-btn" href="#">Download</a>
+                </div>
+            </div>
+            <div id="document-preview-body" class="document-preview-body"></div>
+        </div>
+    </div>
+
+    <div id="global-search-results" class="global-search-results" hidden></div>
+    <script src="/static/js/app.js?v=148.0"></script>
 </body>
 </html>
