@@ -4307,15 +4307,22 @@ def validate_uploaded_document(original_name, file_bytes, require_bytes=False, u
 
 
 def store_client_document_file(client_id, order_id, ext, file_bytes):
+    cid = str(client_id) if (client_id is not None and str(client_id).strip() != '' and str(client_id).strip() != 'None') else 'unassigned'
     order_folder = str(order_id or 'general')
     storage_root = os.path.abspath(STORAGE_DIR)
-    client_dir = os.path.abspath(os.path.join(STORAGE_DIR, 'clients', str(client_id), 'orders', order_folder, 'documents'))
-    os.makedirs(client_dir, exist_ok=True)
+    client_dir = os.path.abspath(os.path.join(STORAGE_DIR, 'clients', cid, 'orders', order_folder, 'documents'))
+    try:
+        os.makedirs(client_dir, exist_ok=True)
+    except Exception as exc:
+        return None, f"Storage directory error: {exc}"
     target_path = os.path.abspath(os.path.join(client_dir, f"{uuid.uuid4().hex}{ext}"))
     if not target_path.startswith(storage_root):
         return None, 'Path traversal attempt blocked'
-    with open(target_path, 'wb') as handle:
-        handle.write(file_bytes)
+    try:
+        with open(target_path, 'wb') as handle:
+            handle.write(file_bytes)
+    except Exception as exc:
+        return None, f"Failed to save document file: {exc}"
     return target_path, None
 
 
