@@ -5338,10 +5338,21 @@ def extract_document_text_and_metadata(filename, b64_content):
     ext = os.path.splitext(filename_clean)[1].lower()
     
     raw_text = ''
-    try:
-        raw_text = file_bytes.decode('utf-8', errors='ignore')
-    except Exception:
-        raw_text = ''
+    if ext == '.pdf':
+        try:
+            import io
+            from pypdf import PdfReader
+            reader = PdfReader(io.BytesIO(file_bytes))
+            pages_text = [page.extract_text() or '' for page in reader.pages]
+            raw_text = "\n".join(pages_text)
+        except Exception:
+            raw_text = ''
+            
+    if not raw_text.strip():
+        try:
+            raw_text = file_bytes.decode('utf-8', errors='ignore')
+        except Exception:
+            raw_text = ''
         
     combined_text = f"{filename_clean}\n{raw_text}"
     
@@ -5357,9 +5368,17 @@ def extract_document_text_and_metadata(filename, b64_content):
         category = 'Certificate of Incorporation'
         
     person_name = None
-    name_match = re.search(r'(?:Name|Director|Client|Customer|Holder|Mr|Mrs|Ms|Dr)\.?\s*[:\-]?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})', combined_text)
+    name_match = re.search(r'(?:Subscriber|Name of subscriber|Name of each subscriber|Director|Name|Client|Customer|Holder|Mr|Mrs|Ms|Dr)\.?\s*[:\-]?\s*([A-Za-z]+(?:\s+[A-Za-z]+){1,4})', combined_text, re.IGNORECASE)
     if name_match:
-        person_name = name_match.group(1).strip()
+        raw_matched_name = name_match.group(1).strip()
+        clean_words = []
+        stop_keywords = {'dob', 'date', 'bank', 'statement', 'company', 'no', 'number', 'ltd', 'limited', 'inc', 'corp'}
+        for word in raw_matched_name.split():
+            if word.lower() in stop_keywords:
+                break
+            clean_words.append(word)
+        if clean_words:
+            person_name = ' '.join(w.capitalize() for w in clean_words)
     else:
         ignore_words = {'bank', 'statement', 'passport', 'cnic', 'id', 'proof', 'address', 'doc', 'docx', 'pdf', 'png', 'jpg', 'jpeg', 'certificate', 'incorporation', 'utility', 'bill', 'ltd', 'limited', 'company'}
         cleaned_fn = re.sub(r'[\._\-\(\)\[\]]', ' ', filename_clean)
@@ -5375,12 +5394,12 @@ def extract_document_text_and_metadata(filename, b64_content):
         dob = dob_match.group(1).strip()
 
     company_number = None
-    comp_num_match = re.search(r'(?:Company No|Company Number|Co\.? No\.?|Registration No|Reg No)\.?\s*[:\-]?\s*([A-Za-z0-9]{6,8})', combined_text, re.IGNORECASE)
+    comp_num_match = re.search(r'(?:Company Number|Company No|Co\.? No\.?|Registration No|Reg No)?\s*[:\-]?\s*([0-9]{8}|[A-Za-z]{2}[0-9]{6})', combined_text, re.IGNORECASE)
     if comp_num_match:
         company_number = normalize_company_number(comp_num_match.group(1))
 
     company_name = None
-    comp_name_match = re.search(r'([A-Za-z0-9\s\,\.\&\-]{3,60}\s+(?:LTD|LIMITED|LLP|PLC|HOLDINGS|SERVICES|SOLUTIONS))', combined_text, re.IGNORECASE)
+    comp_name_match = re.search(r'([A-Za-z0-9\s\,\.\&\-]{2,60}\s+(?:LTD|LIMITED|LLP|PLC|HOLDINGS|SERVICES|SOLUTIONS))', combined_text, re.IGNORECASE)
     if comp_name_match:
         company_name = comp_name_match.group(1).strip()
 
