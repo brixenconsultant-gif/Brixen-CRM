@@ -49,3 +49,10 @@
 ## 4. Automated Test Suite Verification
 - **Run Test Suite**: `python3 seed_db.py && python3 test_app.py`
 - **Current Status**: **100% Passed (19/19 direct system & regression tests)**.
+
+---
+
+## 5. Primary Architecture Directive: CRM Portal Native Feature Development
+
+- **Rule**: All future features, UI modules, intake tools, document filing pipelines, analytics, customer tools, and staff management workflows MUST be developed directly inside the Brixen CRM Portal (`portal.brixenconsultants.com`) codebase (`app.py`, `templates/index.html`, `static/js/app.js`).
+- **Purpose**: Eliminates the need to update or re-upload the WordPress plugin (`brixen-crm-sync.zip`) for new developments. The WordPress plugin remains a fixed, stable, 1-time setup event bridge for user registration, WooCommerce checkouts, and signed SSO redirects.

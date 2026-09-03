@@ -117,6 +117,7 @@ def run_tests():
     assert 'id="client-sidebar" class="sidebar" hidden' in body
     assert 'id="view-admin-services"' in body
     assert 'id="view-admin-invoices"' in body
+    assert 'value="Partial Paid"' in body
     assert 'id="view-admin-accountancy"' in body
     assert 'data-view="admin-accountancy"' in body
     assert 'id="modal-accountancy-books"' in body
@@ -189,8 +190,15 @@ def run_tests():
     assert 'Personal 11 dijits Code' in js_src
     assert 'Live records are checked when you open this page.' in js_src
     assert 'savePendingCompanyName' in js_src
-    assert 'The client portal shows the same name.' in html_src
+    assert 'Type a name to check Companies House' in html_src
+    assert 'portfolioDirectorNames' in js_src
+    assert 'id="portfolio-detail-owner-label">Director</span>' in html_src
+    assert 'data-tab="support"' not in html_src
+    assert 'id="portfolio-detail-activity"' in html_src
+    assert 'company.sic_activities' in js_src
+    assert 'looksLikeUkCompanyNumber(company && company.company_number)' in js_src
     assert 'portfolio-rename-form' in css_src
+    assert 'searchCompaniesHouseForRename' in js_src
     assert 'Activation code</label>' not in js_src
     assert 'openAccountancyBooks' in js_src
     assert 'data-accountancy-action' in js_src
@@ -207,8 +215,31 @@ def run_tests():
     assert 'hide-order-finance' in js_src
     assert 'data-admin-revenue' in html_src
     assert 'revenue-chart-card" data-admin-revenue' in html_src
-    assert '<th>Director</th>' in html_src
-    assert 'app.js?v=148.0' in html_src
+    assert '<th>Owner</th>' in html_src
+    assert 'app.js?v=173.0' in html_src
+    assert 'emailStaffOrderPaymentDetails' in js_src
+    assert 'styles.css?v=113.0' in html_src
+    assert 'portfolio-rename-form[hidden]' in css_src
+    assert 'id="portal-home-hello"' in html_src
+    assert 'id="portal-home-skel"' in html_src
+    assert 'Needs Your Attention' in js_src
+    assert 'data-company-reg-filter="attention"' in html_src
+    assert 'portfolioAttentionIssues' in js_src
+    assert 'updatePortfolioAttentionBanner' in js_src
+    assert 'portfolio-attention-banner' in css_src
+    assert 'emailAdminInvoice' in js_src
+    assert 'Send invoice' in html_src
+    assert 'resetClientDashboardView' in js_src
+    assert 'openUploadDocumentModal' in js_src
+    assert 'data.user_name || currentUser' not in js_src
+    assert 'id="modal-edit-invoice"' in html_src
+    assert 'openEditInvoiceModal' in js_src
+    assert 'openInvoiceDocument' in js_src
+    assert 'View invoice' in js_src
+    assert 'id="edit-invoice-timing"' in html_src
+    assert 'id="staff-order-pay-plan"' in html_src
+    assert 'Pay first — deposit now' in html_src
+    assert 'saveStaffOrderPaymentPlan' in js_src
     assert 'file-accounts-company-locked' in html_src
     assert 'setFileAccountsCompanyLocked' in js_src
     assert 'data-order-finance' in html_src
@@ -257,6 +288,8 @@ def run_tests():
     assert 'data-view="admin-companies"' in admin_sidebar
     assert 'id="btn-add-company"' in html_src
     assert 'id="modal-create-company"' in html_src
+    assert 'creates a company card only' in html_src
+    assert 'The company card stays' in html_src
     assert 'create-company-new-client' in html_src
     assert 'syncCreateCompanyClientMode' in js_src
     assert 'openCreateCompanyModal' in js_src
@@ -441,10 +474,36 @@ def run_tests():
     status, headers, dash_res = make_request('/api/client/dashboard', cookie=f"session_token={token}")
     assert status == "200 OK"
     assert dash_res['status'] == 'success'
+    assert dash_res['user_name'] == 'James Harrington'
+    assert dash_res.get('greeting') in ('Good morning', 'Good afternoon', 'Good evening')
     assert all(o.get('user_id') == uid for o in dash_res.get('active_orders') or [])
     assert all('notes' not in o for o in dash_res.get('active_orders') or [])
     assert all(c.get('id') for c in dash_res.get('companies') or [])
+    assert all('authentication_code' not in c for c in dash_res.get('companies') or [])
+    assert 'documents_count' in dash_res
+    assert isinstance(dash_res.get('pending_actions'), list)
+    assert dash_res['pending_actions_count'] == len(dash_res['pending_actions'])
+    assert all('review_notes' not in d for d in dash_res.get('recent_documents') or [])
+    assert all('file_path' not in d for d in dash_res.get('recent_documents') or [])
+    assert all(d.get('user_id') == uid for d in dash_res.get('recent_documents') or [])
     print(f"✓ WSGI GET /api/client/dashboard -> Hero: '{dash_res['user_name']}', Comps: {dash_res['total_companies']} ({dash_res['uk_companies']} UK, {dash_res['intl_companies']} International), Active Orders: {dash_res['active_orders_count']}")
+
+    status, headers, dash_unauth = make_request('/api/client/dashboard')
+    assert status == "401 Unauthorized"
+
+    status, headers, vic_login = make_request('/api/auth/login', method='POST', body={'email': 'v.smith@vantagecyber.co.uk', 'password': 'ClientPass123!'})
+    vic_token = extract_session_token(headers)
+    vic_user = query_db("SELECT id FROM users WHERE email = 'v.smith@vantagecyber.co.uk';", one=True)
+    status, headers, vic_dash = make_request('/api/client/dashboard', cookie=f"session_token={vic_token}")
+    assert status == "200 OK"
+    assert vic_dash['user_name'] == 'Victoria Smith'
+    james_company_ids = {c['id'] for c in dash_res.get('companies') or []}
+    vic_company_ids = {c['id'] for c in vic_dash.get('companies') or []}
+    assert james_company_ids and vic_company_ids
+    assert james_company_ids.isdisjoint(vic_company_ids)
+    assert all(o.get('user_id') == vic_user['id'] for o in vic_dash.get('active_orders') or [])
+    assert all(o.get('user_id') != uid for o in vic_dash.get('active_orders') or [])
+    print("✓ Client dashboard isolation -> James and Victoria see only their own companies, orders, and name")
 
     # 7. Test Admin Login & Order Status Change
     status, headers, adm_res = make_request('/api/auth/login', method='POST', body={'email': 'admin@brixenconsultant.co.uk', 'password': 'AdminPass123!'})
@@ -696,7 +755,250 @@ def run_tests():
     assert lines[0]['category_name'] == 'Address Services'
     assert lines[0]['category_id'] == '55'
     assert lines[0]['quantity'] == 1
+    wc_invoice = query_db("SELECT * FROM invoices WHERE order_id = ?;", (wc_order_id,), one=True)
+    assert wc_invoice, 'website orders must create an invoice'
+    assert abs(float(wc_invoice.get('total') or 0) - 24.00) < 0.01
+    assert wc_invoice.get('status') == 'Pending'
+    guest_invoice = query_db("SELECT * FROM invoices WHERE order_id = ?;", (guest_ord['id'],), one=True)
+    assert guest_invoice, 'guest checkout must still create an invoice'
+    assert guest_invoice.get('status') == 'Pending'
     print("✓ WooCommerce product/category mapping -> line item, customer, and company preserved.")
+    print("✓ Website orders create invoices for Invoices Manager")
+    status, headers, inv_paid = make_request(
+        f"/api/admin/invoices/{wc_invoice['id']}",
+        method='PUT',
+        body={'status': 'Paid', 'payment_method': 'GBP(Bank Transfer)'},
+        cookie=f"session_token={adm_comp_token}",
+    )
+    assert status == "200 OK", inv_paid
+    assert inv_paid.get('invoice', {}).get('status') == 'Paid'
+    paid_note = query_db(
+        "SELECT title, type FROM notifications WHERE user_id = ? AND type = 'payment_received' ORDER BY id DESC LIMIT 1;",
+        (james['id'],),
+        one=True,
+    )
+    assert paid_note and paid_note.get('title') in ('Payment received', 'Advance payment received')
+    client_inv_denied = make_request(
+        f"/api/admin/invoices/{wc_invoice['id']}",
+        method='PUT',
+        body={'status': 'Pending'},
+        cookie=f"session_token={token}",
+    )[0]
+    assert client_inv_denied == "403 Forbidden"
+    print("✓ Staff can mark an invoice Paid and the client is emailed")
+    connector_order = execute_db(
+        """
+        INSERT INTO orders (order_number, user_id, service_name, price, vat, total, status, progress_percent, owner_name, owner_form_email)
+        VALUES ('#WC-NAFEESA1', ?, 'VAT Registration', 30, 0, 30, 'Processing', 20, 'Muhib Ul Nabi', 'rabexauk@gmail.com');
+        """,
+        (james['id'],),
+    )
+    status, headers, connector_list = make_request('/api/admin/invoices', cookie=f"session_token={adm_comp_token}")
+    assert status == "200 OK", connector_list
+    connector_inv = next(
+        row for row in (connector_list.get('invoices') or [])
+        if row.get('order_number') == '#WC-NAFEESA1'
+    )
+    assert connector_inv.get('client_name') == 'Muhib Ul Nabi'
+    assert connector_inv.get('owner_name') == 'Muhib Ul Nabi'
+    assert connector_inv.get('client_email') == 'rabexauk@gmail.com'
+    assert connector_inv.get('owner_form_email') == 'rabexauk@gmail.com'
+    assert connector_inv.get('client_email') != james['email']
+    assert connector_inv.get('client_name') != james['full_name']
+    assert connector_inv.get('payment_timing') == 'After work'
+    status, headers, connector_paid = make_request(
+        f"/api/admin/invoices/{connector_inv['id']}",
+        method='PUT',
+        body={'status': 'Paid'},
+        cookie=f"session_token={adm_comp_token}",
+    )
+    assert status == "200 OK", connector_paid
+    outbox = query_db(
+        "SELECT recipient, subject FROM email_outbox WHERE recipient = 'rabexauk@gmail.com' ORDER BY id DESC LIMIT 1;",
+        one=True,
+    )
+    assert outbox and 'Payment received' in str(outbox.get('subject') or '')
+    paid_html = query_db(
+        "SELECT body_html FROM email_outbox WHERE recipient = 'rabexauk@gmail.com' ORDER BY id DESC LIMIT 1;",
+        one=True,
+    )
+    assert paid_html and 'Download invoice' in str(paid_html.get('body_html') or '')
+    assert '/invoice/' in str(paid_html.get('body_html') or '')
+    status, headers, inv_pdf = make_request(
+        f"/api/admin/invoices/{connector_inv['id']}/document",
+        cookie=f"session_token={adm_comp_token}",
+    )
+    assert status == "200 OK", inv_pdf
+    header_map = {str(k).lower(): v for k, v in (headers or {}).items()}
+    assert header_map.get('content-type', '').startswith('application/pdf')
+    assert 'attachment' in (header_map.get('content-disposition') or '')
+    assert 'Invoice ' in (header_map.get('content-disposition') or '')
+    assert '.pdf' in (header_map.get('content-disposition') or '')
+    assert 'Invoice%20' in (header_map.get('content-disposition') or '') or 'Invoice ' in (header_map.get('content-disposition') or '')
+    assert isinstance(inv_pdf, (bytes, bytearray))
+    assert inv_pdf.startswith(b'%PDF')
+    inv_text = inv_pdf.decode('latin-1', 'replace')
+    assert 'INVOICE' in inv_text
+    assert '17314564' in inv_text
+    assert '57 Wellesley Road' in inv_text
+    assert 'ZB941411' in inv_text
+    assert 'Brixen Consultants' in inv_text
+    assert '32546658' in inv_text
+    assert '04-06-05' in inv_text
+    assert 'PK42UNIL0109000343170125' in inv_text
+    assert 'Bank name' in inv_text
+    assert 'pay.tide.co' in inv_text
+    assert 'Muhib Ul Nabi' in inv_text
+    assert 'rabexauk@gmail.com' in inv_text
+    assert 'SC855741' not in inv_text
+    assert 'Butterbiggins' not in inv_text
+    assert 'Glasgow' not in inv_text
+    assert 'Payment methods' in inv_text
+    pub = app_mod.invoice_public_document_url(connector_inv['id'])
+    parsed = urllib.parse.urlparse(pub)
+    assert 'Invoice-' in parsed.path or 'Invoice%20' in parsed.path or 'Invoice' in urllib.parse.unquote(parsed.path)
+    pub_path = parsed.path if not parsed.query else f"{parsed.path}?{parsed.query}"
+    status, headers, pub_pdf = make_request(pub_path)
+    assert status == "200 OK"
+    pub_map = {str(k).lower(): v for k, v in (headers or {}).items()}
+    assert pub_map.get('content-type', '').startswith('application/pdf')
+    assert 'attachment' in (pub_map.get('content-disposition') or '')
+    assert 'Invoice ' in (pub_map.get('content-disposition') or '') or 'Invoice%20' in (pub_map.get('content-disposition') or '')
+    assert isinstance(pub_pdf, (bytes, bytearray)) and pub_pdf.startswith(b'%PDF')
+    assert '17314564' in pub_pdf.decode('latin-1', 'replace')
+    assert 'Muhib Ul Nabi' in pub_pdf.decode('latin-1', 'replace')
+    status, headers, bad_link = make_request(f"/invoice/{connector_inv['id']}?expires=1&signature=bad")
+    assert status.startswith('403')
+    status, headers, client_doc = make_request(
+        f"/api/client/invoices/{wc_invoice['id']}/document",
+        cookie=f"session_token={token}",
+    )
+    assert status == "200 OK"
+    assert isinstance(client_doc, (bytes, bytearray)) and client_doc.startswith(b'%PDF')
+    assert '17314564' in client_doc.decode('latin-1', 'replace')
+    status, headers, anon_doc = make_request(f"/api/admin/invoices/{connector_inv['id']}/document")
+    assert status in ("401 Unauthorized", "403 Forbidden")
+    print("✓ Invoices and paid emails use the company owner, not the website signup")
+    print("✓ Invoice document downloads as PDF with current company details")
+    status, headers, deposit_saved = make_request(
+        f"/api/admin/invoices/{connector_inv['id']}",
+        method='PUT',
+        body={'status': 'Pending', 'payment_timing': 'Deposit', 'deposit_amount': 15, 'amount_paid': 0, 'payment_method': 'GBP(Bank Transfer)'},
+        cookie=f"session_token={adm_comp_token}",
+    )
+    assert status == "200 OK", deposit_saved
+    assert deposit_saved.get('invoice', {}).get('payment_timing') == 'Deposit'
+    assert abs(float(deposit_saved.get('invoice', {}).get('deposit_amount') or 0) - 15) < 0.01
+    status, headers, deposit_pdf = make_request(
+        f"/api/admin/invoices/{connector_inv['id']}/document",
+        cookie=f"session_token={adm_comp_token}",
+    )
+    assert status == "200 OK"
+    deposit_text = deposit_pdf.decode('latin-1', 'replace') if isinstance(deposit_pdf, (bytes, bytearray)) else str(deposit_pdf)
+    assert 'Deposit now' in deposit_text
+    assert '32546658' in deposit_text
+    status, headers, deposit_paid = make_request(
+        f"/api/admin/invoices/{connector_inv['id']}",
+        method='PUT',
+        body={'payment_timing': 'Deposit', 'deposit_amount': 15, 'amount_paid': 15},
+        cookie=f"session_token={adm_comp_token}",
+    )
+    assert status == "200 OK", deposit_paid
+    assert deposit_paid.get('invoice', {}).get('status') == 'Partial Paid'
+    assert deposit_paid.get('invoice', {}).get('display_status') == 'Partial Paid'
+    status, headers, named_partial = make_request(
+        f"/api/admin/invoices/{connector_inv['id']}",
+        method='PUT',
+        body={'status': 'Partial Paid', 'amount_paid': 15},
+        cookie=f"session_token={adm_comp_token}",
+    )
+    assert status == "200 OK", named_partial
+    assert named_partial.get('invoice', {}).get('status') == 'Partial Paid'
+    assert named_partial.get('invoice', {}).get('display_status') == 'Partial Paid'
+    assert abs(float(deposit_paid.get('invoice', {}).get('amount_due') or 0) - 15) < 0.01
+    deposit_mail = query_db(
+        "SELECT subject FROM email_outbox WHERE recipient = 'rabexauk@gmail.com' ORDER BY id DESC LIMIT 1;",
+        one=True,
+    )
+    assert deposit_mail and 'Deposit received' in str(deposit_mail.get('subject') or '')
+    status, headers, pkr_doc = make_request(
+        f"/api/admin/invoices/{connector_inv['id']}",
+        method='PUT',
+        body={'payment_method': 'PKR(Bank Transfer)'},
+        cookie=f"session_token={adm_comp_token}",
+    )
+    assert status == "200 OK"
+    status, headers, pkr_pdf = make_request(
+        f"/api/admin/invoices/{connector_inv['id']}/document",
+        cookie=f"session_token={adm_comp_token}",
+    )
+    pkr_html = pkr_pdf.decode('latin-1', 'replace') if isinstance(pkr_pdf, (bytes, bytearray)) else str(pkr_pdf)
+    assert 'PK42UNIL0109000343170125' in pkr_html
+    assert 'UBL' in pkr_html
+    assert '32546658' in pkr_html
+    assert '04-06-05' in pkr_html
+    assert '£' in pkr_html
+    assert 'If you pay from Pakistan' in pkr_html
+    assert '× 370.00 = Rs' in pkr_html
+    assert 'Amount due' in pkr_html
+    assert 'Rs 0.00' not in pkr_html
+    status, headers, pay_mail = make_request(
+        f"/api/admin/invoices/{connector_inv['id']}",
+        method='PUT',
+        body={'send_payment_details': True},
+        cookie=f"session_token={adm_comp_token}",
+    )
+    assert status == "200 OK", pay_mail
+    details_outbox = query_db(
+        "SELECT subject, body_html, body_text FROM email_outbox WHERE recipient = 'rabexauk@gmail.com' ORDER BY id DESC LIMIT 1;",
+        one=True,
+    )
+    details_blob = f"{details_outbox.get('subject') or ''} {details_outbox.get('body_html') or ''} {details_outbox.get('body_text') or ''}"
+    details_html = str(details_outbox.get('body_html') or '')
+    details_subject = str(details_outbox.get('subject') or '')
+    assert 'Invoice' in details_subject
+    assert 'Brixen Consultants' in details_subject
+    assert 'Payment details —' not in details_subject
+    assert 'Thanks for your order - your invoice' not in details_subject
+    assert '32546658' in details_blob
+    assert '04-06-05' in details_blob
+    assert 'PK42UNIL0109000343170125' in details_blob
+    assert 'Pay now in £' not in details_html
+    assert 'Pay in GBP' in details_html
+    assert 'Pay in PKR' in details_html
+    assert 'Thank you for your order' in details_html
+    assert 'Hi Muhib Ul Nabi,' in details_html
+    assert '👋' not in details_html
+    assert 'Hello Brixen Consultant' not in details_html
+    assert 'Hi Brixen Consultant' not in details_html
+    assert 'rabexauk@gmail.com' in details_html
+    assert 'You may settle this invoice using either the GBP or PKR' in details_html
+    assert 'Pay using the GBP or PKR account below' not in details_html
+    assert 'Need help?' in details_html
+    assert 'Contact Support' not in details_html
+    assert 'Download invoice' in details_html
+    assert '/invoice/' in details_html
+    assert 'Invoice summary' in details_html
+    assert 'Subtotal' in details_html
+    assert 'Total' in details_html
+    assert 'Amount due' in details_html
+    assert '#003971' in details_html
+    assert '#c5a572' in details_html
+    assert '#f3efe8' in details_html
+    assert '#1d1d1f' in details_html
+    assert '#6e6e73' in details_html
+    assert '#006cff' not in details_html
+    assert '#28a745' not in details_html
+    assert '#007bff' not in details_html
+    assert 'font-size:20px' in details_html
+    assert 'Account number' in details_html
+    assert 'Brixen Consultants' in details_html
+    assert '-apple-system' in details_html
+    assert 'brixen-logo.png' in details_html
+    assert 'border-radius:999px' not in details_html
+    assert '🧾' not in details_html
+    assert '🔗' not in details_html
+    print("✓ Staff can take a deposit and invoices show GBP or PKR account details")
 
     formation_payload = {
         'event_id': 'evt_wc_formation_gul_1',
@@ -836,7 +1138,7 @@ def run_tests():
             'email': 'client1@acmecorp.co.uk',
             'company_name': 'DENTY LIMITED',
             'service_name': 'Digital Package',
-            'price': 52.99,
+            'price': 53,
             'total': 63.59,
             'status': 'Processing',
             'line_items': [{
@@ -1095,6 +1397,7 @@ def run_tests():
     bella_row = next(row for row in (bella_list.get('companies') or []) if int(row.get('id')) == int(bella_id))
     assert bella_row['company_number'] == '16620111'
     assert bella_row['is_registered'] is True
+    assert bella_row.get('owner_name') == 'Nafeesa Ishfaq'
     assert bella_list.get('companies_house_synced') == 1
     stored_bella = query_db("SELECT company_number, name, director FROM companies WHERE id = ?;", (bella_id,), one=True)
     assert stored_bella['company_number'] == '16620111'
@@ -1110,7 +1413,7 @@ def run_tests():
     execute_db(
         """
         INSERT INTO orders (order_number, user_id, company_id, service_name, price, vat, total, status, progress_percent, checkout_form_json)
-        VALUES ('#WC-16100', ?, ?, 'Digital Package', 52.99, 10.60, 63.59, 'Processing', 20, ?);
+        VALUES ('#WC-16100', ?, ?, 'Digital Package', 53, 10.59, 63.59, 'Processing', 20, ?);
         """,
         (james['id'], congrats_id, json.dumps([
             {'label': 'Desired company name', 'value': 'Form Email Ltd'},
@@ -1252,6 +1555,7 @@ def run_tests():
     assert status == "200 OK", form_acct
     form_row = next(row for row in (form_acct.get('companies') or []) if int(row.get('id')) == int(congrats_id))
     assert form_row.get('director') == 'Nafeesa Ishfaq'
+    assert form_row.get('owner_name') == 'Nafeesa Ishfaq'
     assert form_row.get('director_email') == 'bellaandrosso@gmail.com'
     assert form_row.get('client_name') == 'Nafeesa Ishfaq'
     assert form_row.get('client_email') == 'bellaandrosso@gmail.com'
@@ -1274,7 +1578,7 @@ def run_tests():
     execute_db(
         """
         INSERT INTO orders (order_number, user_id, company_id, service_name, price, vat, total, status, progress_percent, checkout_form_json)
-        VALUES ('#WC-16100999', ?, ?, 'Digital Package', 52.99, 10.60, 63.59, 'Processing', 20, ?);
+        VALUES ('#WC-16100999', ?, ?, 'Digital Package', 53, 10.59, 63.59, 'Processing', 20, ?);
         """,
         (james['id'], placeholder_id, json.dumps([
             {'label': 'Desired company name', 'value': 'PLACEHOLDER SYNC LTD'},
@@ -1318,6 +1622,200 @@ def run_tests():
     stored_ph = query_db("SELECT director FROM companies WHERE id = ?;", (placeholder_id,), one=True)
     assert stored_ph['director'] == 'Amina Khan'
     print("✓ Accountancy replaces placeholder directors with Companies House names and keeps the company form email")
+    ch_fill_company = execute_db(
+        """
+        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status)
+        VALUES (?, 'Rank Rays LTD', '17208527', 'Active', '', 'Muhammad Shakeel', 'United Kingdom', 'Digital Package', 'Good Standing');
+        """,
+        (james['id'],),
+    )
+    ch_fill_order = execute_db(
+        """
+        INSERT INTO orders (order_number, user_id, company_id, service_name, price, vat, total, status, progress_percent, owner_name, owner_form_email, checkout_form_json)
+        VALUES ('#WC-17208527', ?, ?, 'Digital Package', 53, 10.59, 63.59, 'Processing', 20, 'Muhammad Shakeel', 'shakeel.rehmat@gmail.com', ?);
+        """,
+        (james['id'], ch_fill_company, json.dumps([
+            {'label': 'Company Name', 'value': 'Rank Rays LTD'},
+            {'label': 'Company Number', 'value': '17208527'},
+            {'label': 'Billing address', 'value': '85 Dunstall Hill, London, WV6 0SR, GB'},
+            {'label': 'Email (form)', 'value': 'shakeel.rehmat@gmail.com'},
+        ])),
+    )
+    execute_db(
+        """
+        INSERT INTO company_owners (order_id, company_id, full_name, form_email, source)
+        VALUES (?, ?, 'Muhammad Shakeel', 'shakeel.rehmat@gmail.com', 'formation_form');
+        """,
+        (ch_fill_order, ch_fill_company),
+    )
+    class FakeRankRaysCh:
+        def __init__(self, payload):
+            self.payload = payload
+            self.headers = {'Content-Type': 'application/json'}
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def read(self):
+            return json.dumps(self.payload).encode('utf-8')
+    def fake_rank_rays_ch(req, timeout=None):
+        url = req.full_url if hasattr(req, 'full_url') else req.get_full_url()
+        if '/officers' in url:
+            return FakeRankRaysCh({'items': [
+                {'name': 'SHAKEEL, Muhammad', 'officer_role': 'director'},
+                {'name': 'ALI, Sara', 'officer_role': 'director'},
+                {'name': 'OLD, Resigned', 'officer_role': 'director', 'resigned_on': '2024-01-01'},
+                {'name': 'SECRETARY LTD', 'officer_role': 'corporate-secretary'},
+            ]})
+        if '/company/17208527' in url:
+            return FakeRankRaysCh({
+                'company_name': 'RANK RAYS LTD',
+                'company_number': '17208527',
+                'company_status': 'active',
+                'date_of_creation': '2025-11-03',
+                'sic_codes': ['73110'],
+                'registered_office_address': {
+                    'address_line_1': '71-75 Shelton Street',
+                    'address_line_2': 'Covent Garden',
+                    'locality': 'London',
+                    'postal_code': 'WC2H 9JQ',
+                    'country': 'United Kingdom',
+                },
+            })
+        return FakeRankRaysCh({'items': []})
+    app_mod._CH_REGISTERED_SYNC_BLOCKED = False
+    with patch('app.urllib.request.urlopen', side_effect=fake_rank_rays_ch):
+        status, headers, filled_order = make_request(
+            f'/api/client/orders/{ch_fill_order}',
+            cookie=f"session_token={adm_comp_token}",
+        )
+    assert status == "200 OK", filled_order
+    filled_map = {
+        str(field.get('label') or ''): str(field.get('value') or '')
+        for field in (filled_order.get('order', {}).get('checkout_form') or [])
+    }
+    assert filled_map.get('Company Name') == 'Rank Rays LTD'
+    assert filled_map.get('Billing address') == '85 Dunstall Hill, London, WV6 0SR, GB'
+    assert '71-75 Shelton Street' in (filled_map.get('Registered address') or '')
+    assert filled_map.get('SIC code') == '73110'
+    assert filled_map.get('Incorporation date') == '2025-11-03'
+    assert filled_map.get('Company status') == 'Active'
+    assert filled_order.get('order', {}).get('company_owner', {}).get('full_name') == 'Muhammad Shakeel'
+    stored_fill = query_db("SELECT reg_office, inc_date, sic_codes FROM companies WHERE id = ?;", (ch_fill_company,), one=True)
+    assert '71-75 Shelton Street' in str(stored_fill.get('reg_office') or '')
+    assert stored_fill.get('inc_date') == '2025-11-03'
+    assert '73110' in str(stored_fill.get('sic_codes') or '')
+    from app import sic_activities_from_codes, fetch_companies_house_active_directors
+    sic_items = sic_activities_from_codes(stored_fill.get('sic_codes'))
+    assert sic_items and sic_items[0]['code'] == '73110'
+    assert 'advertising' in (sic_items[0].get('description') or '').lower()
+    app_mod._CH_REGISTERED_SYNC_BLOCKED = False
+    with patch('app.urllib.request.urlopen', side_effect=fake_rank_rays_ch):
+        directors = fetch_companies_house_active_directors('17208527')
+        assert directors == ['Muhammad Shakeel', 'Sara Ali']
+        status, headers, filled_company = make_request(
+            f"/api/admin/companies/{ch_fill_company}",
+            cookie=f"session_token={adm_comp_token}",
+        )
+    assert status == "200 OK", filled_company
+    assert filled_company.get('company', {}).get('directors') == ['Muhammad Shakeel', 'Sara Ali']
+    assert 'Muhammad Shakeel' in (filled_company.get('company', {}).get('director') or '')
+    assert 'Sara Ali' in (filled_company.get('company', {}).get('director') or '')
+    print("✓ Opening an order fills blank Companies House details and leaves existing owner/billing data")
+    vat_unlinked = execute_db(
+        """
+        INSERT INTO orders (order_number, user_id, company_id, service_name, price, vat, total, status, progress_percent, owner_name, owner_form_email, checkout_form_json)
+        VALUES ('#WC-VAT15296', ?, NULL, 'VAT Registration', 0, 0, 0, 'Completed', 100, 'Muhammad Shakeel', 'shakeel.rehmat@gmail.com', ?);
+        """,
+        (james['id'], json.dumps([
+            {'label': 'Company Name', 'value': 'Rank Rays LTD'},
+            {'label': 'Company Number', 'value': '17208527'},
+            {'label': 'Email (form)', 'value': 'shakeel.rehmat@gmail.com'},
+        ])),
+    )
+    status, headers, vat_list = make_request(
+        '/api/admin/orders?search=WC-VAT15296',
+        cookie=f"session_token={adm_comp_token}",
+    )
+    assert status == "200 OK", vat_list
+    vat_row = next(row for row in (vat_list.get('orders') or []) if int(row.get('id')) == int(vat_unlinked))
+    assert vat_row.get('company_name') == 'Rank Rays LTD'
+    linked_vat = query_db("SELECT company_id FROM orders WHERE id = ?;", (vat_unlinked,), one=True)
+    assert linked_vat.get('company_id') == ch_fill_company
+    print("✓ Orders table shows the form company name for VAT orders and links the Companies House card")
+    class FakePreCrmCh:
+        def __init__(self, payload):
+            self.payload = payload
+            self.headers = {'Content-Type': 'application/json'}
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def read(self):
+            return json.dumps(self.payload).encode('utf-8')
+    def fake_precrm_ch(req, timeout=None):
+        url = req.full_url if hasattr(req, 'full_url') else req.get_full_url()
+        if '/officers' in url and '18881234' in url:
+            return FakePreCrmCh({'items': [{'name': 'AHMED, Sara', 'officer_role': 'director'}]})
+        if '/company/18881234' in url:
+            return FakePreCrmCh({
+                'company_name': 'PRECRM ACCESS LTD',
+                'company_number': '18881234',
+                'company_status': 'active',
+                'date_of_creation': '2022-04-18',
+                'registered_office_address': {
+                    'address_line_1': '10 Downing Street',
+                    'locality': 'London',
+                    'postal_code': 'SW1A 2AA',
+                    'country': 'United Kingdom',
+                },
+            })
+        return FakePreCrmCh({'items': []})
+    app_mod._CH_REGISTERED_SYNC_BLOCKED = False
+    with patch('app.urllib.request.urlopen', side_effect=fake_precrm_ch):
+        status, headers, precrm_ok = make_request(
+            '/api/admin/companies', method='POST',
+            body={
+                'client_id': james['id'],
+                'name': 'PRECRM ACCESS LTD',
+                'company_number': '18881234',
+            },
+            cookie=f"session_token={adm_comp_token}",
+        )
+    assert status == "200 OK", precrm_ok
+    precrm_company = precrm_ok.get('company') or {}
+    assert precrm_company.get('company_number') == '18881234'
+    assert precrm_company.get('director') == 'Sara Ahmed'
+    assert '10 Downing Street' in str(precrm_company.get('reg_office') or '')
+    assert precrm_company.get('inc_date') == '2022-04-18'
+    precrm_order = execute_db(
+        """
+        INSERT INTO orders (order_number, user_id, company_id, service_name, price, vat, total, status, progress_percent, owner_name, checkout_form_json)
+        VALUES ('#CRM-PRECRM1', ?, ?, 'Historical Registration', 0, 0, 0, 'Completed', 100, 'Sara Ahmed', ?);
+        """,
+        (james['id'], precrm_company.get('id'), json.dumps([
+            {'label': 'Company Name', 'value': 'PRECRM ACCESS LTD'},
+            {'label': 'Company Number', 'value': '18881234'},
+        ])),
+    )
+    with patch('app.urllib.request.urlopen', side_effect=fake_precrm_ch):
+        status, headers, precrm_del = make_request(
+            f'/api/admin/orders/{precrm_order}', method='DELETE',
+            cookie=f"session_token={adm_comp_token}",
+        )
+    assert status == "200 OK", precrm_del
+    assert precrm_del.get('company_kept') is True
+    assert query_db("SELECT id FROM orders WHERE id = ?;", (precrm_order,), one=True) is None
+    kept = query_db(
+        "SELECT name, company_number, director, reg_office, inc_date FROM companies WHERE id = ?;",
+        (precrm_company.get('id'),),
+        one=True,
+    )
+    assert kept is not None
+    assert kept.get('company_number') == '18881234'
+    assert kept.get('director') == 'Sara Ahmed'
+    assert '10 Downing Street' in str(kept.get('reg_office') or '')
+    print("✓ Historical companies pull Companies House data without an order, and deleting a dummy order keeps the card")
     assert app_mod.email_belongs_to_person('shakeel.rehmat@gmail.com', 'Muhammad Shakeel')
     assert not app_mod.email_belongs_to_person('hananmuhammad468@gmail.com', 'Hasnat Mazhar')
     recent_id = execute_db(
@@ -1330,7 +1828,7 @@ def run_tests():
     execute_db(
         """
         INSERT INTO orders (order_number, user_id, company_id, service_name, price, vat, total, status, progress_percent, checkout_form_json)
-        VALUES ('#WC-17428024', ?, ?, 'Digital Package', 52.99, 10.60, 63.59, 'Processing', 20, ?);
+        VALUES ('#WC-17428024', ?, ?, 'Digital Package', 53, 10.59, 63.59, 'Processing', 20, ?);
         """,
         (james['id'], recent_id, json.dumps([{'label': 'Email (form)', 'value': 'recent24h@example.com'}])),
     )
@@ -1480,7 +1978,7 @@ def run_tests():
             'wordpress_user_id': 'wp_user_101',
             'email': 'client1@acmecorp.co.uk',
             'service_name': 'Digital Package',
-            'price': 52.99,
+            'price': 53,
             'total': 63.59,
             'status': 'Processing',
         }
@@ -1557,9 +2055,10 @@ def run_tests():
     assert status == "200 OK", import_ok
     assert import_ok.get('imported') == 1
     assert import_ok['results'][0]['name'] == 'WEBFILL TEST LIMITED'
-    imported_row = query_db("SELECT name, company_number, package FROM companies WHERE company_number = '99112233';", one=True)
+    imported_row = query_db("SELECT name, company_number, package, registered_email FROM companies WHERE company_number = '99112233';", one=True)
     assert imported_row['name'] == 'WEBFILL TEST LIMITED'
     assert imported_row['package'] == 'WebFiling Import'
+    assert imported_row['registered_email'] == james['email']
     print("✓ WebFiling company numbers import live Companies House records into registered company cards")
 
     import base64 as posted_b64
@@ -1636,7 +2135,7 @@ def run_tests():
     rename_order_id = execute_db(
         """
         INSERT INTO orders (order_number, user_id, company_id, service_name, price, vat, total, status, progress_percent, checkout_form_json)
-        VALUES ('#WC-RENAME-16088', ?, ?, 'Digital Package', 52.99, 10.60, 63.59, 'Processing', 20, ?);
+        VALUES ('#WC-RENAME-16088', ?, ?, 'Digital Package', 53, 10.59, 63.59, 'Processing', 20, ?);
         """,
         (james['id'], rename_id, json.dumps([{'label': 'Desired company name', 'value': 'Old Checkout Name Ltd'}])),
     )
@@ -1652,7 +2151,7 @@ def run_tests():
         body={'name': 'Should Not Change Ltd'}
     )
     assert status == "400 Bad Request"
-    assert 'already registered' in (rename_registered.get('message') or '').lower()
+    assert 'companies house record' in (rename_registered.get('message') or '').lower()
     status, headers, rename_blank = make_request(
         f"/api/admin/companies/{rename_id}", method='PUT',
         cookie=f"session_token={adm_comp_token}",
@@ -1671,7 +2170,6 @@ def run_tests():
     stored_rename = query_db("SELECT name, company_number, ch_checked_at FROM companies WHERE id = ?;", (rename_id,), one=True)
     assert stored_rename['name'] == 'New Desired Name Ltd'
     assert stored_rename['company_number'] == 'REG-16088'
-    assert not stored_rename['ch_checked_at']
     status, headers, client_renamed = make_request('/api/client/companies', cookie=f"session_token={token}")
     assert status == "200 OK", client_renamed
     client_row = next(row for row in (client_renamed.get('companies') or []) if int(row.get('id')) == int(rename_id))
@@ -1953,6 +2451,11 @@ def run_tests():
     assert 'src="cid:brixen-favicon"' not in activity_html
     assert 'cid:brixen-favicon' not in activity_html
     assert '✅ Identity verification is complete' in activity_html
+    assert 'Hi James Example,' in activity_html
+    assert '👋' not in activity_html
+    assert 'border-radius:999px' not in activity_html
+    assert '✅' in activity_html
+    assert '-apple-system' in activity_html
     assert 'border-radius:980px' in activity_html
     assert 'padding:7px 14px' in activity_html
     assert app_mod.classify_product_activity('Annual Compliance Filing') == 'accounts'
@@ -1980,6 +2483,103 @@ def run_tests():
     assert '17314564' not in celeb_html
     assert 'Wellesley' not in celeb_html
     assert not app_mod.inline_images_for_html(celeb_html)
+    assert app_mod.invoice_email_greeting_name(
+        {'owner_name': 'Ayesha Khan', 'full_name': 'Brixen Consultant', 'company_name': 'Khan Trading Ltd'},
+        {'owner_name': 'Ayesha Khan'},
+        {'full_name': 'Brixen Consultant'},
+    ) == 'Ayesha Khan'
+    assert app_mod.invoice_email_greeting_name(
+        {'full_name': 'Brixen Consultant'},
+        {},
+        {'full_name': 'Brixen Consultant'},
+    ) == 'there'
+    inv_subject, inv_text, inv_html = app_mod.build_client_notification_email(
+        {'full_name': 'Brixen Consultant', 'email': 'staff@example.com'},
+        'Invoice',
+        app_mod.invoice_payment_request_copy(),
+        layout='invoice',
+        greeting_name='Ayesha Khan',
+        subject='Invoice INV-2044 — Brixen Consultants',
+        cta_label='Download invoice',
+        cta_url='https://portal.brixenconsultants.com/invoice/2044/1/abc/Invoice%20INV-2044.pdf',
+        invoice_receipt={
+            'kicker': 'Thank you for your order',
+            'title': 'Invoice',
+            'date': '1 September 2026',
+            'invoice_number': 'INV-2044',
+            'order_number': '#WC-2044',
+            'customer_email': 'ayesha@example.com',
+            'items': [{'description': 'VAT Registration', 'quantity': 1, 'unit_price': 30, 'amount': 30}],
+            'subtotal': '£30.00',
+            'tax': '£0.00',
+            'show_tax': False,
+            'total': '£30.00',
+            'amount_due': '£30.00',
+            'amount_paid': '£0.00',
+            'show_due': True,
+            'show_paid': False,
+            'fully_paid': False,
+            'include_bank': True,
+            'gbp': dict(app_mod.INVOICE_BANK_GBP),
+            'pkr': dict(app_mod.INVOICE_BANK_PKR),
+            'fx': {},
+            'support_email': 'contact@brixenconsultants.com',
+        },
+    )
+    assert inv_subject == 'Invoice INV-2044 — Brixen Consultants'
+    assert 'Hi Ayesha Khan,' in inv_html
+    assert '👋' not in inv_html
+    assert 'ayesha@example.com' in inv_html
+    assert 'Hello Brixen Consultant' not in inv_html
+    assert 'Hi Brixen Consultant' not in inv_html
+    assert 'Invoice INV-2044' in inv_html
+    assert 'Order #WC-2044' in inv_html
+    assert 'VAT Registration' in inv_html
+    assert 'Qty 1' in inv_html
+    assert 'Pay in GBP' in inv_html
+    assert 'Pay in PKR' in inv_html
+    assert 'Need help?' in inv_html
+    assert 'Contact Support' not in inv_html
+    assert 'Pay now in £' not in inv_html
+    assert 'Download invoice' in inv_html
+    assert '/invoice/2044/' in inv_html
+    assert 'Invoice%20INV-2044.pdf' in inv_html or 'Invoice INV-2044.pdf' in inv_html
+    assert 'font-size:20px' in inv_html
+    assert '#003971' in inv_html
+    assert '#f3efe8' in inv_html
+    assert '#006cff' not in inv_html
+    assert '#28a745' not in inv_html
+    assert 'width:48%' not in inv_html
+    assert 'border-radius:999px' not in inv_html
+    assert '-apple-system' in inv_html
+    assert 'Brixen Consultants' in inv_html
+    paid_html = app_mod.invoice_receipt_html(
+        {
+            'kicker': 'Thank you for your order',
+            'title': 'Payment received',
+            'date': '1 September 2026',
+            'invoice_number': 'INV-2045',
+            'items': [{'description': 'VAT Registration', 'quantity': 1, 'amount': 30}],
+            'subtotal': '£30.00',
+            'show_tax': False,
+            'total': '£30.00',
+            'amount_paid': '£30.00',
+            'amount_due': '£0.00',
+            'show_due': False,
+            'show_paid': True,
+            'fully_paid': True,
+            'include_bank': False,
+            'support_email': 'contact@brixenconsultants.com',
+        },
+        'Ayesha Khan',
+        'Thank you. Your payment for this completed work is in.',
+        'https://example.com/static/img/brixen-logo.png',
+        app_mod.apple_email_button_html('https://example.com/invoice', 'Download invoice'),
+        'footer',
+    )
+    assert 'Amount due' not in paid_html
+    assert '>Paid<' in paid_html
+    assert 'Pay in GBP' not in paid_html
     mime_msg, envelope_from = app_mod.build_outbound_email(
         'contact@brixenconsultants.com',
         'Congratulations — Example Holdings Ltd is registered',
@@ -2126,7 +2726,7 @@ def run_tests():
     snap_order_id = execute_db(
         """
         INSERT INTO orders (order_number, user_id, company_id, service_name, price, vat, total, status, progress_percent, woocommerce_order_id, checkout_form_json)
-        VALUES ('#WC-16289', ?, ?, 'Digital Package', 52.99, 10.60, 63.59, 'Completed', 100, '16289', ?);
+        VALUES ('#WC-16289', ?, ?, 'Digital Package', 53, 10.59, 63.59, 'Completed', 100, '16289', ?);
         """,
         (james['id'], typo_snap, snap_form),
     )
@@ -2157,7 +2757,7 @@ def run_tests():
             'email': 'client1@acmecorp.co.uk',
             'company_name': 'SNAPKARTT LTD',
             'service_name': 'Digital Package',
-            'price': 52.99,
+            'price': 53,
             'total': 63.59,
             'status': 'Processing',
             'line_items': [{
@@ -2199,7 +2799,7 @@ def run_tests():
     love_order_id = execute_db(
         """
         INSERT INTO orders (order_number, user_id, company_id, service_name, price, vat, total, status, progress_percent, woocommerce_order_id, checkout_form_json)
-        VALUES ('#WC-16310', ?, ?, 'Digital Package', 52.99, 10.60, 63.59, 'Completed', 100, '16310', ?);
+        VALUES ('#WC-16310', ?, ?, 'Digital Package', 53, 10.59, 63.59, 'Completed', 100, '16310', ?);
         """,
         (james['id'], rabexa_id, json.dumps([
             {'label': 'Desired company name', 'value': 'RABEXA LTD'},
@@ -2263,6 +2863,7 @@ def run_tests():
     )
     assert status == "200 OK", new_client_company
     assert new_client_company.get('company', {}).get('name') == 'PRE CRM LTD'
+    assert new_client_company.get('company', {}).get('registered_email') == 'precrm.owner@example.com'
     new_client_user = query_db(
         "SELECT id, role, full_name, email FROM users WHERE LOWER(email) = ?;",
         ('precrm.owner@example.com',),
@@ -2308,16 +2909,16 @@ def run_tests():
             'wordpress_user_id': 'wp_user_101',
             'email': 'client1@acmecorp.co.uk',
             'service_name': 'Registered Office Address',
-            'price': 49.99,
-            'total': 59.99,
+            'price': 50,
+            'total': 60,
             'status': 'Processing',
             'line_items': [
                 {
                     'product_name': 'Registered Office Address',
                     'category': 'Address Services',
                     'quantity': 1,
-                    'unit_price': 49.99,
-                    'line_total': 49.99,
+                    'unit_price': 50,
+                    'line_total': 50,
                 }
             ],
             'attachments': [
@@ -2729,7 +3330,13 @@ def run_tests():
     assert sso_res['status'] == 'success'
     assert extract_session_token(headers)
     assert 'token' not in sso_res
-    print("✓ WP SSO Bridge Exchange -> Valid signed SSO succeeded")
+    status, headers, sso_get = make_request(
+        f"/api/v1/auth/sso?wordpress_user_id={sso_wp_id}&email={sso_email}&timestamp={now_ts}&signature={valid_sig}"
+    )
+    assert status == "302 Found"
+    assert headers.get('Location') == '/#dashboard'
+    assert extract_session_token(headers)
+    print("✓ WP SSO Bridge Exchange -> Valid signed SSO succeeded (POST + GET redirect to dashboard)")
 
     status, headers, unsigned_sso = make_request(
         '/api/v1/auth/sso',
@@ -3831,6 +4438,251 @@ def run_tests():
     status, headers, expired_check = make_request('/api/client/orders', cookie=f"session_token={token}")
     assert status == "401 Unauthorized"
     print(f"✓ P1 Session Revocation Check -> Revoked session rejected with 401 Unauthorized.")
+
+    # ==================================================
+    # AUTOMATION TASK #001: CLIENT DOCUMENT DELIVERY WORKFLOW TESTS
+    # ==================================================
+    # 1. Admin Auth & Setup
+    st, hd, adm_res = make_request('/api/auth/login', method='POST', body={'email': 'admin@brixenconsultant.co.uk', 'password': 'AdminPass123!'})
+    assert st == "200 OK"
+    task1_admin_tok = extract_session_token(hd)
+    client_a = query_db("SELECT * FROM users WHERE email = 'client1@acmecorp.co.uk';", one=True)
+    client_b = query_db("SELECT * FROM users WHERE email = 'david@nexusbiotech.co.uk';", one=True)
+    assert client_a and client_b
+    st, hd, client_a_login = make_request('/api/auth/login', method='POST', body={'email': client_a['email'], 'password': 'ClientPass123!'})
+    assert st == "200 OK"
+    client_a_tok = extract_session_token(hd)
+    st, hd, client_b_login = make_request('/api/auth/login', method='POST', body={'email': client_b['email'], 'password': 'ClientPass123!'})
+    assert st == "200 OK"
+    client_b_tok = extract_session_token(hd)
+
+    import base64 as t1_b64
+    t1_pdf_content = b"%PDF-1.4 Task 001 Test Delivery Document Content"
+    t1_b64_data = t1_b64.b64encode(t1_pdf_content).decode('utf-8')
+    comp_a = query_db("SELECT * FROM companies WHERE user_id = ? ORDER BY id ASC;", (client_a['id'],), one=True)
+    ord_a = query_db("SELECT * FROM orders WHERE user_id = ? ORDER BY id ASC;", (client_a['id'],), one=True)
+
+    # 2. Admin Document Upload (Client Visible = 1)
+    st, hd, doc_vis_res = make_request('/api/admin/documents', method='POST', cookie=f"session_token={task1_admin_tok}", body={
+        'client_id': client_a['id'],
+        'company_id': comp_a['id'] if comp_a else None,
+        'order_id': ord_a['id'] if ord_a else None,
+        'name': 'Articles_of_Association_Task001.pdf',
+        'category': 'Company Documents',
+        'client_message': 'Please review your uploaded Articles of Association.',
+        'file_content_base64': t1_b64_data,
+        'client_visible': True
+    })
+    assert st == "200 OK", doc_vis_res
+    assert doc_vis_res['status'] == 'success'
+    vis_doc = doc_vis_res['document']
+    assert vis_doc['client_visible'] == 1
+    assert vis_doc['user_id'] == client_a['id']
+    assert doc_vis_res.get('notification_created') is True
+
+    # 3. Non-Client Visible Document Upload (Client Visible = 0)
+    st, hd, doc_hid_res = make_request('/api/admin/documents', method='POST', cookie=f"session_token={task1_admin_tok}", body={
+        'client_id': client_a['id'],
+        'name': 'Internal_Compliance_Memo_Task001.pdf',
+        'category': 'Compliance',
+        'file_content_base64': t1_b64_data,
+        'client_visible': False
+    })
+    assert st == "200 OK", doc_hid_res
+    hid_doc = doc_hid_res['document']
+    assert hid_doc['client_visible'] == 0
+
+    # 4. Client A Lists Documents (See visible, hide internal)
+    st, hd, client_a_docs = make_request('/api/client/documents', cookie=f"session_token={client_a_tok}")
+    assert st == "200 OK"
+    client_a_doc_ids = [d['id'] for d in client_a_docs.get('documents') or []]
+    assert vis_doc['id'] in client_a_doc_ids
+    assert hid_doc['id'] not in client_a_doc_ids
+
+    # 5. Client B Cross-Access List Isolation (Client B cannot see Client A's document)
+    st, hd, client_b_docs = make_request('/api/client/documents', cookie=f"session_token={client_b_tok}")
+    assert st == "200 OK"
+    client_b_doc_ids = [d['id'] for d in client_b_docs.get('documents') or []]
+    assert vis_doc['id'] not in client_b_doc_ids
+    assert hid_doc['id'] not in client_b_doc_ids
+
+    # 6. Client A Downloads Visible Document
+    st, hd, dl_vis_bytes = make_request(f"/api/client/documents/{vis_doc['id']}/download", cookie=f"session_token={client_a_tok}")
+    assert st == "200 OK"
+    assert dl_vis_bytes == t1_pdf_content
+
+    # 7. Client A Download Protection (Hidden Document -> 403 Forbidden)
+    st, hd, dl_hid_res = make_request(f"/api/client/documents/{hid_doc['id']}/download", cookie=f"session_token={client_a_tok}")
+    assert st == "403 Forbidden"
+
+    # 8. Client B Download Protection (Cross-Client -> 403 Forbidden)
+    st, hd, dl_cross_res = make_request(f"/api/client/documents/{vis_doc['id']}/download", cookie=f"session_token={client_b_tok}")
+    assert st == "403 Forbidden"
+
+    # 9. In-App Notification Check
+    t1_note = query_db("SELECT * FROM notifications WHERE user_id = ? AND type = 'document_uploaded' ORDER BY id DESC;", (client_a['id'],), one=True)
+    assert t1_note is not None
+    assert t1_note['title'] == 'New document available'
+    assert 'Brixen Consultants has uploaded a new document to your client portal' in t1_note['message']
+
+    # 10. Transactional Email Outbox Check
+    t1_email = query_db("SELECT * FROM email_outbox WHERE recipient = ? ORDER BY id DESC;", (client_a['email'],), one=True)
+    assert t1_email is not None
+    assert 'A new document is available in your Brixen client portal' in t1_email['subject']
+    assert 'Articles_of_Association_Task001.pdf' in (t1_email['body_html'] or t1_email['body_text'])
+
+    # 11. Activity Audit Log Check
+    t1_audit = query_db("SELECT * FROM activity_logs WHERE entity_type = 'documents' AND entity_id = ?;", (str(vis_doc['id']),), one=True)
+    assert t1_audit is not None
+    assert t1_audit['action'] == 'DOCUMENT_UPLOAD'
+
+    # 12. Security Validation Checks
+    st, hd, err_invalid_client = make_request('/api/admin/documents', method='POST', cookie=f"session_token={task1_admin_tok}", body={'client_id': 999999, 'name': 'Fail.pdf', 'file_content_base64': t1_b64_data})
+    assert st == "404 Not Found"
+
+    st, hd, err_unauth_client = make_request('/api/admin/documents', method='POST', cookie=f"session_token={client_a_tok}", body={'client_id': client_a['id'], 'name': 'Fail.pdf', 'file_content_base64': t1_b64_data})
+    assert st == "403 Forbidden"
+
+    print("✓ AUTOMATION TASK #001: Client Document Delivery Workflow verified 100%")
+
+    assert app_mod.is_companies_house_default_address(
+        '15203368 - COMPANIES HOUSE DEFAULT ADDRESS, Cardiff, CF14 8LH'
+    )
+    assert not app_mod.is_companies_house_default_address(
+        '71-75 Shelton Street, Covent Garden, London, WC2H 9JQ'
+    )
+    luminavest_issues = app_mod.companies_house_attention_issues({
+        'reg_office': 'PO Box 4385, 15203368 - COMPANIES HOUSE DEFAULT ADDRESS, Cardiff, CF14 8LH',
+        'accounts_next_due': '2026-07-31',
+        'accounts_overdue': True,
+        'confirmation_next_due': '2027-07-09',
+        'confirmation_overdue': False,
+        'status': 'Active',
+        'status_detail': 'active-proposal-to-strike-off',
+    }, today=datetime.date(2026, 9, 3))
+    luminavest_codes = [item['code'] for item in luminavest_issues]
+    assert luminavest_codes == ['accounts_overdue', 'default_address', 'strike_off']
+    pending_cs = app_mod.companies_house_attention_issues({
+        'confirmation_next_due': '2026-09-03',
+        'confirmation_overdue': False,
+    }, today=datetime.date(2026, 9, 3))
+    assert any(item['code'] == 'confirmation_pending' for item in pending_cs)
+    future_cs = app_mod.companies_house_attention_issues({
+        'confirmation_next_due': '2027-07-09',
+        'confirmation_overdue': False,
+    }, today=datetime.date(2026, 9, 3))
+    assert future_cs == []
+    assert app_mod.companies_house_status_value('active', 'active-proposal-to-strike-off') == 'Strike off proposed'
+    preview_subject, preview_text, preview_html = app_mod.build_companies_house_attention_email(
+        {'full_name': 'Muhammad Huzaifa Sheikh', 'email': 'brixenconsultant@gmail.com'},
+        {'name': 'LUMINAVEST LTD', 'company_number': '15203368'},
+        luminavest_issues,
+        greeting_name='Muhammad Huzaifa Sheikh',
+    )
+    assert 'Action needed for LUMINAVEST LTD at Companies House' in preview_subject
+    assert 'Attention required' in preview_html
+    assert 'Accounts overdue' in preview_html
+    assert 'default address' in preview_html.lower()
+    assert 'strike' in preview_html.lower()
+    assert '⚠️' in preview_html
+    assert 'Hi Muhammad Huzaifa Sheikh,' in preview_html
+    assert '👋' not in preview_html
+    assert 'border-radius:999px' not in preview_html
+    assert 'Action required' in preview_html or 'Attention required' in preview_html
+    assert 'border-radius:980px' in preview_html
+    assert 'bgcolor="#003971"' in preview_html
+    assert 'View on Companies House' in preview_html
+    assert 'Open Client Panel' in preview_html
+    assert '15203368' in preview_html
+    assert '-apple-system' in preview_html
+    attention_client = query_db("SELECT id, email, full_name FROM users WHERE role = 'CLIENT' ORDER BY id ASC LIMIT 1;", one=True)
+    attention_company_id = execute_db(
+        """
+        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status)
+        VALUES (?, 'ATTENTION DEMO LTD', '15990001', 'Active', '2024-01-01', 'Alex Director',
+                'PO Box 4385, COMPANIES HOUSE DEFAULT ADDRESS, Cardiff, CF14 8LH', 'Standard Corporate', 'Good Standing');
+        """,
+        (attention_client['id'],),
+    )
+    captured_attention = []
+    original_attention_send = app_mod.EmailService.send_notification_email
+    def capture_attention_email(recipient_email, subject, body_text, body_html=None, inline_images=None):
+        captured_attention.append({
+            'to': recipient_email,
+            'subject': subject,
+            'text': body_text,
+            'html': body_html,
+        })
+        return True, 'Delivered'
+    app_mod.EmailService.send_notification_email = staticmethod(capture_attention_email)
+    try:
+        first = app_mod.persist_companies_house_filing_state(
+            {'id': attention_company_id, 'user_id': attention_client['id'], 'name': 'ATTENTION DEMO LTD', 'company_number': '15990001',
+             'director': 'Alex Director', 'reg_office': 'PO Box 4385, COMPANIES HOUSE DEFAULT ADDRESS, Cardiff, CF14 8LH'},
+            {
+                'company_number': '15990001',
+                'name': 'ATTENTION DEMO LTD',
+                'status': 'Strike off proposed',
+                'status_detail': 'active-proposal-to-strike-off',
+                'reg_office': 'PO Box 4385, COMPANIES HOUSE DEFAULT ADDRESS, Cardiff, CF14 8LH',
+                'accounts_next_due': '2026-07-31',
+                'accounts_overdue': True,
+                'confirmation_next_due': '2026-08-01',
+                'confirmation_overdue': True,
+                'confirmation_pending': True,
+            },
+        )
+        assert {item['code'] for item in first} == {'accounts_overdue', 'confirmation_pending', 'default_address', 'strike_off'}
+        assert len(captured_attention) == 1
+        assert 'ATTENTION DEMO LTD' in captured_attention[0]['subject']
+        assert 'Confirmation statement' in (captured_attention[0]['html'] or '')
+        second = app_mod.notify_companies_house_attention(attention_company_id, first)
+        assert second.get('email_status') == 'Already sent'
+        assert len(captured_attention) == 1
+        stored_attention = query_db(
+            "SELECT ch_attention_json, accounts_overdue, confirmation_overdue, status, ch_alert_fingerprint FROM companies WHERE id = ?;",
+            (attention_company_id,),
+            one=True,
+        )
+        assert int(stored_attention.get('accounts_overdue') or 0) == 1
+        assert int(stored_attention.get('confirmation_overdue') or 0) == 1
+        assert stored_attention.get('status') == 'Strike off proposed'
+        assert 'accounts_overdue' in (stored_attention.get('ch_alert_fingerprint') or '')
+        public_attention = app_mod.public_client_company(query_db(
+            f"SELECT {app_mod.COMPANY_LIST_SELECT} FROM companies WHERE id = ?;",
+            (attention_company_id,),
+            one=True,
+        ))
+        assert public_attention.get('needs_attention') is True
+        assert len(public_attention.get('attention') or []) >= 3
+    finally:
+        app_mod.EmailService.send_notification_email = original_attention_send
+    # ==================================================
+    # AUTOMATION TASK: SMART DOCUMENT INTAKE WORKFLOW TESTS
+    # ==================================================
+    import base64 as stk_b64
+    stk_bank_pdf = b"%PDF-1.4 Name: James Harrington DOB: 12/05/1984 Bank Statement Company No: 12345678 JAMES HARRINGTON LTD"
+    stk_id_pdf = b"%PDF-1.4 Passport Name: James Harrington DOB: 12/05/1984 ID Document"
+    
+    st, hd, intake_res = make_request('/api/admin/documents/intake/process', method='POST', cookie=f"session_token={task1_admin_tok}", body={
+        'files': [
+            {'file_name': 'Bank_Statement_James_Harrington_LTD.pdf', 'file_content_base64': stk_b64.b64encode(stk_bank_pdf).decode('utf-8')},
+            {'file_name': 'Passport_James_Harrington.pdf', 'file_content_base64': stk_b64.b64encode(stk_id_pdf).decode('utf-8')},
+        ]
+    })
+    assert st == "200 OK", intake_res
+    assert intake_res['status'] == 'success'
+    assert intake_res['client']['full_name'] == 'James Harrington'
+    assert len(intake_res['filed_documents']) == 2
+    assert intake_res['filed_documents'][0]['category'] == 'Bank statement'
+    assert intake_res['filed_documents'][1]['category'] == 'ID Document'
+
+    # Security check: Client role denied access
+    st, hd, err_client_intake = make_request('/api/admin/documents/intake/process', method='POST', cookie=f"session_token={client_a_tok}", body={
+        'files': [{'file_name': 'Test.pdf', 'file_content_base64': stk_b64.b64encode(stk_bank_pdf).decode('utf-8')}]
+    })
+    assert st == "403 Forbidden"
+    print("✓ AUTOMATION TASK: Smart Document Intake & Auto-Filing Workflow verified 100%")
 
     print("\n==================================================")
     print("ALL HYPETEX WSGI & AUDIT FIX TESTS PASSED! (100%)")

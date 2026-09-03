@@ -3,7 +3,7 @@
  * Plugin Name: Brixen Consultants CRM & WooCommerce Sync
  * Plugin URI: https://brixenconsultants.com
  * Description: Official integration plugin for Brixen Consultants connecting WordPress User Registration and WooCommerce Checkout to the Brixen CRM & Client Portal.
- * Version: 1.2.5
+ * Version: 1.6.0
  * Author: Brixen Consultants Engineering Team
  * Author URI: https://brixenconsultants.com
  * License: Proprietary
@@ -19,6 +19,8 @@ if (!defined('ABSPATH')) {
 require_once plugin_dir_path(__FILE__) . 'class-brixen-webhook-sender.php';
 require_once plugin_dir_path(__FILE__) . 'class-brixen-bulk-sync.php';
 require_once plugin_dir_path(__FILE__) . 'class-brixen-client-documents.php';
+require_once plugin_dir_path(__FILE__) . 'class-brixen-client-dashboard.php';
+require_once plugin_dir_path(__FILE__) . 'class-brixen-portal-sso.php';
 
 class Brixen_CRM_Sync_Plugin {
 
@@ -61,7 +63,9 @@ class Brixen_CRM_Sync_Plugin {
         add_action('template_redirect', array($this, 'serve_brand_icons'), 0);
         add_action('init', array($this, 'ensure_brand_icon_files'), 1);
 
-        // Messages & Files: show CRM posted documents on the website client panel
+        // Signed SSO: website login and /client-panel/ → portal.brixenconsultants.com
+        Brixen_CRM_Portal_SSO::init();
+        // Legacy WC documents tab (shortcode still works; account pages redirect to portal)
         Brixen_CRM_Client_Documents::init();
     }
 
@@ -843,27 +847,16 @@ class Brixen_CRM_Sync_Plugin {
      */
     public function render_portal_sso_button() {
         if (!is_user_logged_in()) {
-            return '<a href="' . esc_url(wp_login_url()) . '" class="button button-primary">Log In to Access Portal</a>';
+            $login = wp_login_url(function_exists('wc_get_page_permalink') ? wc_get_page_permalink('myaccount') : home_url('/client-panel/'));
+            return '<a href="' . esc_url($login) . '" class="button button-primary">Log In to Access Portal</a>';
         }
 
-        $user = wp_get_current_user();
-        $user_id = (string) $user->ID;
-        $email = $user->user_email;
-        $crm_url = rtrim(Brixen_CRM_Webhook_Sender::get_crm_url(), '/');
-        $secret = Brixen_CRM_Webhook_Sender::get_webhook_secret();
+        $sso_url = brixen_crm_portal_sso_url();
+        if ($sso_url === '') {
+            return '<p class="brixen-portal-sso-unconfigured">' . esc_html__('Client portal SSO is not configured yet. Ask Brixen support to connect your website account.', 'brixen-crm-sync') . '</p>';
+        }
 
-        $timestamp = time();
-        $payload_str = $user_id . '|' . $email . '|' . $timestamp;
-        $signature = hash_hmac('sha256', $payload_str, $secret);
-
-        $sso_url = add_query_arg(array(
-            'wordpress_user_id' => $user_id,
-            'email'             => $email,
-            'timestamp'         => $timestamp,
-            'signature'         => $signature,
-        ), $crm_url . '/api/v1/auth/sso');
-
-        return '<a href="' . esc_url($sso_url) . '" target="_blank" class="button button-primary brixen-portal-sso-btn" style="background:#003971; color:#fff; border-radius:9999px; padding:10px 24px; font-weight:700; text-decoration:none; display:inline-block;">Access Brixen Client Portal &rarr;</a>';
+        return '<a href="' . esc_url($sso_url) . '" class="button button-primary brixen-portal-sso-btn" style="background:#003971; color:#fff; border-radius:9999px; padding:10px 24px; font-weight:700; text-decoration:none; display:inline-block;">Access Brixen Client Portal &rarr;</a>';
     }
 }
 

@@ -32,3 +32,4 @@ venv/
 *.swp
 *.tmp
 crm.log
+tmp-inv/

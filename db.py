@@ -13,6 +13,27 @@ try:
 except ImportError:
     from argon2.exceptions import InvalidHash as InvalidHashError
 
+def _load_env_file():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    for fname in ('.env.production', '.env'):
+        fpath = os.path.join(base_dir, fname)
+        if os.path.exists(fpath):
+            try:
+                with open(fpath, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#') and '=' in line:
+                            k, v = line.split('=', 1)
+                            k = k.strip()
+                            v = v.strip().strip("'").strip('"')
+                            if k and k not in os.environ:
+                                os.environ[k] = v
+            except Exception:
+                pass
+            break
+
+_load_env_file()
+
 DB_PATH = os.environ.get('DATABASE_URL') or os.path.join(os.path.dirname(__file__), 'hypetex.db')
 SCHEMA_PATH = os.path.join(os.path.dirname(__file__), 'schema.sql')
 
@@ -97,6 +118,64 @@ def init_db():
     ensure_schema()
 
 
+def migrate_invoice_partial_paid_status(conn):
+    """Allow Partial Paid on existing invoice tables that still use the old CHECK."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='invoices'"
+    ).fetchone()
+    if not row:
+        return
+    create_sql = row[0] or ''
+    if 'Partial Paid' not in create_sql:
+        cols = {info[1] for info in conn.execute("PRAGMA table_info(invoices)").fetchall()}
+        copy_cols = [
+            name for name in (
+                'id', 'invoice_number', 'order_id', 'user_id', 'amount', 'tax', 'total',
+                'status', 'due_date', 'paid_at', 'payment_method', 'payment_timing',
+                'deposit_amount', 'amount_paid', 'created_at',
+            )
+            if name in cols
+        ]
+        col_sql = ', '.join(copy_cols)
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.executescript("""
+            CREATE TABLE invoices_status_mig (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                invoice_number TEXT UNIQUE NOT NULL,
+                order_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                amount REAL NOT NULL,
+                tax REAL NOT NULL,
+                total REAL NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('Paid', 'Pending', 'Partial Paid', 'Overdue', 'Cancelled')),
+                due_date DATE NOT NULL,
+                paid_at TIMESTAMP,
+                payment_method TEXT DEFAULT 'Credit Card (Stripe)',
+                payment_timing TEXT NOT NULL DEFAULT 'After work',
+                deposit_amount REAL NOT NULL DEFAULT 0,
+                amount_paid REAL NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+        """)
+        conn.execute(
+            f"INSERT INTO invoices_status_mig ({col_sql}) SELECT {col_sql} FROM invoices"
+        )
+        conn.execute("DROP TABLE invoices")
+        conn.execute("ALTER TABLE invoices_status_mig RENAME TO invoices")
+        conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute(
+        """
+        UPDATE invoices
+        SET status = 'Partial Paid'
+        WHERE status = 'Pending'
+          AND COALESCE(amount_paid, 0) > 0.004
+          AND COALESCE(amount_paid, 0) + 0.004 < COALESCE(total, 0)
+        """
+    )
+
+
 def ensure_schema():
     """Additive, non-destructive columns/tables for existing local databases."""
     conn = get_db()
@@ -162,6 +241,22 @@ def ensure_schema():
         conn.execute("ALTER TABLE orders ADD COLUMN owner_name TEXT")
     if 'owner_form_email' not in order_cols:
         conn.execute("ALTER TABLE orders ADD COLUMN owner_form_email TEXT")
+    invoice_cols = {row[1] for row in conn.execute("PRAGMA table_info(invoices)").fetchall()}
+    if 'payment_timing' not in invoice_cols:
+        conn.execute("ALTER TABLE invoices ADD COLUMN payment_timing TEXT NOT NULL DEFAULT 'After work'")
+        conn.execute(
+            """
+            UPDATE invoices
+            SET payment_timing = 'Advance'
+            WHERE payment_method IN ('Website Charge', 'Credit Card (Stripe)');
+            """
+        )
+    if 'deposit_amount' not in invoice_cols:
+        conn.execute("ALTER TABLE invoices ADD COLUMN deposit_amount REAL NOT NULL DEFAULT 0")
+    if 'amount_paid' not in invoice_cols:
+        conn.execute("ALTER TABLE invoices ADD COLUMN amount_paid REAL NOT NULL DEFAULT 0")
+        conn.execute("UPDATE invoices SET amount_paid = total WHERE status = 'Paid'")
+    migrate_invoice_partial_paid_status(conn)
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS company_owners (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -202,6 +297,24 @@ def ensure_schema():
         conn.execute("ALTER TABLE companies ADD COLUMN ch_checked_at TIMESTAMP")
     if 'registration_notified_at' not in company_cols:
         conn.execute("ALTER TABLE companies ADD COLUMN registration_notified_at TIMESTAMP")
+    if 'sic_codes' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN sic_codes TEXT")
+    if 'registered_email' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN registered_email TEXT")
+    if 'accounts_next_due' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN accounts_next_due DATE")
+    if 'accounts_overdue' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN accounts_overdue INTEGER NOT NULL DEFAULT 0")
+    if 'confirmation_next_due' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN confirmation_next_due DATE")
+    if 'confirmation_overdue' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN confirmation_overdue INTEGER NOT NULL DEFAULT 0")
+    if 'ch_attention_json' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN ch_attention_json TEXT")
+    if 'ch_alert_fingerprint' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN ch_alert_fingerprint TEXT")
+    if 'ch_alert_sent_at' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN ch_alert_sent_at TIMESTAMP")
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS company_accounts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

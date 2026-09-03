@@ -16,7 +16,11 @@ class Brixen_CRM_Webhook_Sender {
      * Get CRM base URL from WP options or env.
      */
     public static function get_crm_url() {
-        return get_option('brixen_crm_url', '');
+        $url = get_option('brixen_crm_url', '');
+        if (empty($url)) {
+            $url = 'https://portal.brixenconsultants.com';
+        }
+        return $url;
     }
 
     /**

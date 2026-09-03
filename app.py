@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import re
+import gzip
 import urllib.parse
 import urllib.request
 import urllib.error
@@ -749,6 +750,7 @@ def strip_order_finance(row):
     for key in (
         'price', 'vat', 'total', 'payment_mode', 'payment_status',
         'unit_price', 'line_total', 'amount', 'tax', 'payment_method',
+        'deposit_amount', 'amount_paid', 'amount_due',
     ):
         out.pop(key, None)
     return out
@@ -934,6 +936,21 @@ ORDER_PAYMENT_MODES = (
     'GBP(Bank Transfer)',
     'Website Charge',
 )
+INVOICE_STATUSES = ('Paid', 'Pending', 'Partial Paid', 'Overdue', 'Cancelled')
+INVOICE_PAYMENT_TIMINGS = ('Advance', 'Deposit', 'After work')
+INVOICE_BANK_GBP = {
+    'currency': 'GBP',
+    'account_name': 'Brixen Consultants LTD',
+    'account_number': '32546658',
+    'sort_code': '04-06-05',
+    'pay_url': 'https://pay.tide.co/pay/f2dfe046-691c-49a5-8b58-340c6c23453c',
+}
+INVOICE_BANK_PKR = {
+    'currency': 'PKR',
+    'account_name': 'BRIXEN CONSULTANTS',
+    'bank_name': 'UBL',
+    'iban': 'PK42UNIL0109000343170125',
+}
 
 
 def can_delete_orders(user):
@@ -1113,7 +1130,9 @@ def email_favicon_html():
     )
 
 
-def email_document_head_html(title):
+def email_document_head_html(title, extra_css=''):
+    css = str(extra_css or '').strip()
+    style = f'  <style type="text/css">{css}</style>\n' if css else ''
     return (
         '<head>\n'
         '  <meta charset="utf-8">\n'
@@ -1121,6 +1140,7 @@ def email_document_head_html(title):
         '  <meta name="color-scheme" content="light">\n'
         '  <meta name="supported-color-schemes" content="light">\n'
         f'{email_favicon_html()}\n'
+        f'{style}'
         f'  <title>{html_escape(title)}</title>\n'
         '</head>'
     )
@@ -1187,8 +1207,90 @@ def apple_email_button_html(url, label, background='#003971'):
     )
 
 
-def key_points_html(points, navy):
+def email_tone_from_context(*, layout='', badge='', headline='', alert_label='', message='', extra=''):
+    blob = f"{layout} {badge} {headline} {alert_label} {message} {extra}".lower()
+    if any(token in blob for token in (
+        'attention', 'overdue', 'action needed', 'warning', 'strike-off', 'strike off',
+        'urgent', 'default address', 'fix that', 'alert', 'proposal to strike',
+    )):
+        return 'alert'
+    if 'invoice' in blob or 'payment details' in blob or 'payment requested' in blob or str(layout or '').lower() == 'invoice':
+        if any(token in blob for token in ('paid', 'payment received', 'deposit received')):
+            return 'success'
+        return 'payment'
+    if any(token in blob for token in (
+        'complete', 'completed', 'is done', 'verified', 'congratulations', 'registered',
+        'uploaded', 'filed', 'success', 'great news', 'ready',
+    )):
+        return 'success'
+    return 'info'
+
+
+EMAIL_TONE_META = {
+    'alert': {
+        'label': 'Action required',
+        'accent': '#b45309',
+        'hero_copy': 'Please review the details below.',
+    },
+    'payment': {
+        'label': 'Payment',
+        'accent': '#003971',
+        'hero_copy': 'Your invoice is ready to download.',
+    },
+    'success': {
+        'label': 'Update complete',
+        'accent': '#047857',
+        'hero_copy': 'An update from Brixen Consultants.',
+    },
+    'info': {
+        'label': 'Account update',
+        'accent': '#003971',
+        'hero_copy': 'An update on your account.',
+    },
+}
+
+
+def email_tone_meta(tone):
+    return EMAIL_TONE_META.get(str(tone or 'info').lower()) or EMAIL_TONE_META['info']
+
+
+def email_hero_header_html(headline, *, tone='info', badge='', navy='#003971', gold='#c5a572', title_size='26px', wordmark_url=None):
+    meta = email_tone_meta(tone)
     navy = html_escape(navy or '#003971')
+    gold = html_escape(gold or '#c5a572')
+    title = html_escape(str(headline or meta['label']).strip() or meta['label'])
+    chip = html_escape(str(badge or meta['label']).strip() or meta['label'])
+    support = html_escape(meta['hero_copy'])
+    size = html_escape(str(title_size or '26px'))
+    mark = html_escape(str(wordmark_url or wordmark_image_src()).strip())
+    return f"""
+          <tr>
+            <td align="center" bgcolor="{navy}" style="padding:28px 32px 32px;background-color:{navy};background-image:radial-gradient(circle at 50% 120%, rgba(197,165,114,0.28), transparent 62%);">
+              <p style="margin:0;font-family:{EMAIL_FONT_STACK};font-size:13px;line-height:1.3;letter-spacing:0.08em;text-transform:uppercase;font-weight:700;color:{gold};">
+                <font color="{gold}">Brixen Consultants</font>
+              </p>
+              <p style="margin:14px 0 0;font-family:{EMAIL_FONT_STACK};font-size:12px;line-height:1.3;letter-spacing:0.04em;text-transform:uppercase;color:#ffffff;">
+                <font color="#ffffff">{chip}</font>
+              </p>
+              <p style="margin:10px 0 0;font-family:{EMAIL_FONT_STACK};font-size:{size};line-height:1.25;letter-spacing:-0.03em;font-weight:700;color:#ffffff;">
+                <font color="#ffffff">{title}</font>
+              </p>
+              <p style="margin:10px 0 0;font-family:{EMAIL_FONT_STACK};font-size:14px;line-height:1.45;letter-spacing:-0.016em;color:#d7e0ea;">
+                <font color="#d7e0ea">{support}</font>
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td align="center" bgcolor="#ffffff" style="padding:24px 24px 8px;background:#ffffff;">
+              <img src="{mark}" alt="Brixen Consultants" width="120" style="display:block;margin:0 auto;border:0;outline:none;text-decoration:none;width:120px;height:auto;">
+            </td>
+          </tr>"""
+
+
+def key_points_html(points, navy, *, tone='info'):
+    navy = html_escape(navy or '#003971')
+    meta = email_tone_meta(tone)
+    accent = html_escape(meta['accent'] if tone == 'alert' else navy)
     rows = []
     for index, point in enumerate(points or []):
         text = str(point or '').strip()
@@ -1197,12 +1299,456 @@ def key_points_html(points, navy):
         top = '14px' if index else '0'
         rows.append(
             f'<p style="margin:{top} 0 0;font-family:{EMAIL_FONT_STACK};font-size:17px;line-height:1.45;'
-            f'letter-spacing:-0.022em;font-weight:600;color:{navy};">{html_escape(text)}</p>'
+            f'letter-spacing:-0.022em;font-weight:600;color:{accent};">{html_escape(text)}</p>'
         )
     return ''.join(rows)
 
 
-def registration_offers_html(navy, wa_href=None):
+def email_facts_text(sections):
+    lines = []
+    for section in sections or []:
+        title = str((section or {}).get('title') or '').strip()
+        if title:
+            if lines:
+                lines.append('')
+            lines.append(title)
+        for label, value in (section or {}).get('rows') or []:
+            label = str(label or '').strip()
+            value = str(value or '').strip()
+            if not label and not value:
+                continue
+            lines.append(f'{label}: {value}' if label else value)
+    return '\n'.join(lines)
+
+
+def email_facts_html(sections, navy='#003971', gold='#c5a572'):
+    navy = html_escape(navy or '#003971')
+    gold = html_escape(gold or '#c5a572')
+    parts = []
+    for index, section in enumerate(sections or []):
+        title = str((section or {}).get('title') or '').strip()
+        rows = (section or {}).get('rows') or []
+        usable = []
+        for label, value in rows:
+            label = str(label or '').strip()
+            value = str(value or '').strip()
+            if label or value:
+                usable.append((label, value))
+        if not title and not usable:
+            continue
+        top = '6px' if index == 0 else '22px'
+        block = []
+        if title:
+            block.append(
+                f'<p style="margin:{top} 0 8px;font-family:{EMAIL_FONT_STACK};font-size:12px;line-height:1.3;'
+                f'letter-spacing:0.12em;text-transform:uppercase;color:{gold};"><font color="{gold}">{html_escape(title)}</font></p>'
+            )
+            top = '0'
+        block.append(
+            f'<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" '
+            f'style="margin:{top} 0 0;border-collapse:collapse;">'
+        )
+        for row_index, (label, value) in enumerate(usable):
+            rule = 'border-top:1px solid #eee8dc;' if row_index else 'border-top:0;'
+            block.append(
+                '<tr><td style="padding:11px 0;' + rule + 'vertical-align:top;">'
+                f'<p style="margin:0 0 4px;font-family:{EMAIL_FONT_STACK};font-size:11px;line-height:1.3;'
+                f'letter-spacing:0.08em;text-transform:uppercase;color:{gold};"><font color="{gold}">{html_escape(label)}</font></p>'
+                f'<p style="margin:0;font-family:{EMAIL_FONT_STACK};font-size:16px;line-height:1.45;'
+                f'letter-spacing:-0.022em;font-weight:600;color:{navy};word-break:break-word;">'
+                f'<font color="{navy}">{html_escape(value)}</font></p>'
+                '</td></tr>'
+            )
+        block.append('</table>')
+        parts.append(''.join(block))
+    return ''.join(parts)
+
+
+BRIXEN_EMAIL_BRAND = {
+    'navy': '#003971',
+    'gold': '#c5a572',
+    'ivory': '#f3efe8',
+    'white': '#ffffff',
+    'ink': '#1d1d1f',
+    'muted': '#6e6e73',
+    'line': '#d2d2d7',
+}
+
+_INTERNAL_INVOICE_GREETING_NAMES = frozenset({
+    'brixen',
+    'brixen consultant',
+    'brixen consultants',
+    'brixen consultants ltd',
+    'brixen consultants limited',
+    'the brixen consultants team',
+})
+
+
+def is_internal_invoice_greeting(name):
+    text = re.sub(r'\s+', ' ', str(name or '').strip()).lower()
+    if not text:
+        return True
+    if text in _INTERNAL_INVOICE_GREETING_NAMES:
+        return True
+    return text.startswith('brixen consultant')
+
+
+def invoice_email_greeting_name(order=None, invoice=None, client=None):
+    company_name = (order or {}).get('company_name') or (invoice or {}).get('company_name')
+    connector = real_order_connector(order) if order else {}
+    candidates = (
+        connector.get('owner_name'),
+        (invoice or {}).get('owner_name'),
+        (order or {}).get('owner_name'),
+        (client or {}).get('full_name'),
+        (order or {}).get('full_name'),
+        (order or {}).get('client_name'),
+        (invoice or {}).get('client_name'),
+    )
+    for name in candidates:
+        text = str(name or '').strip()
+        if not text:
+            continue
+        if is_internal_invoice_greeting(text):
+            continue
+        if looks_like_placeholder_director(text, company_name):
+            continue
+        return text
+    return 'there'
+
+
+def invoice_payment_request_copy(*, include_gbp=True, include_pkr=True):
+    if include_gbp and include_pkr:
+        settle = (
+            'You may settle this invoice using either the GBP or PKR payment details provided below.'
+        )
+    else:
+        settle = 'Please use the payment details below to settle your invoice.'
+    return (
+        'Thank you for your order with Brixen Consultants.\n\n'
+        'Your invoice details are below.\n\n'
+        f'{settle}'
+    )
+
+
+def invoice_request_email_subject(invoice=None, order=None):
+    company = brand_settings()['company_name']
+    invoice_number = str((invoice or {}).get('invoice_number') or '').strip()
+    order_number = str((order or {}).get('order_number') or '').strip()
+    if invoice_number:
+        return f"Invoice {invoice_number} — {company}"
+    if order_number:
+        return f"Invoice {order_number} — {company}"
+    return f"Invoice — {company}"
+
+
+def invoice_receipt_payload(order, invoice=None, *, include_bank=False):
+    invoice = invoice or {}
+    order = order or {}
+    money = invoice_money_state(invoice)
+    items = invoice_line_items_for_document(invoice)
+    if not items:
+        items = [{
+            'description': str(order.get('service_name') or invoice.get('service_name') or 'Professional services').strip() or 'Professional services',
+            'quantity': 1,
+            'amount': invoice.get('amount') or money['total'],
+        }]
+    try:
+        subtotal = float(invoice.get('amount') or 0)
+    except (TypeError, ValueError):
+        subtotal = 0.0
+    try:
+        tax = float(invoice.get('tax') or 0)
+    except (TypeError, ValueError):
+        tax = 0.0
+    if subtotal <= 0.004 and money['total']:
+        subtotal = max(0.0, round(money['total'] - tax, 2))
+    connector = real_order_connector(order) if order else {}
+    fx = None
+    if include_bank and invoice_client_is_in_pakistan(invoice):
+        fx = invoice_pakistan_fx_note(money['amount_due'] if money['amount_due'] > 0.004 else money['total'])
+    created = invoice.get('created_at') or invoice.get('due_date') or order.get('created_at')
+    fully_paid = bool(money.get('fully_paid'))
+    show_due = float(money.get('amount_due') or 0) > 0.004
+    show_paid = float(money.get('amount_paid') or 0) > 0.004
+    if fully_paid:
+        title = 'Payment received'
+    elif show_paid:
+        title = 'Deposit received' if money.get('timing') == 'Deposit' else 'Invoice'
+    else:
+        title = 'Invoice'
+    customer_name = invoice_email_greeting_name(order, invoice)
+    customer_email = str(
+        connector.get('owner_form_email') or invoice.get('owner_form_email') or order.get('email') or ''
+    ).strip()
+    return {
+        'kicker': 'Thank you for your order',
+        'title': title,
+        'date': format_invoice_email_datetime(created),
+        'invoice_number': str(invoice.get('invoice_number') or '').strip(),
+        'order_number': str(order.get('order_number') or '').strip(),
+        'customer_name': customer_name,
+        'customer_email': customer_email,
+        'status_label': 'Paid' if fully_paid else ('Amount due' if show_due else str(money.get('display_status') or '')),
+        'items': items,
+        'subtotal': format_invoice_money(subtotal),
+        'tax': format_invoice_money(tax),
+        'show_tax': tax > 0.004,
+        'total': format_invoice_money(money['total']),
+        'amount_due': format_invoice_money(money['amount_due']),
+        'amount_paid': format_invoice_money(money['amount_paid']),
+        'show_due': show_due,
+        'show_paid': show_paid,
+        'fully_paid': fully_paid,
+        'include_bank': include_bank,
+        'include_gbp': include_bank,
+        'include_pkr': include_bank,
+        'gbp': dict(INVOICE_BANK_GBP),
+        'pkr': dict(INVOICE_BANK_PKR),
+        'fx': fx or {},
+        'owner_name': customer_name,
+        'owner_email': customer_email,
+        'support_email': (brand_settings().get('support_email') or 'contact@brixenconsultants.com'),
+    }
+
+
+def format_invoice_email_datetime(raw):
+    text = str(raw or '').strip()
+    dt = None
+    if text:
+        for candidate, fmt in (
+            (text[:19], '%Y-%m-%d %H:%M:%S'),
+            (text[:16], '%Y-%m-%d %H:%M'),
+            (text[:10], '%Y-%m-%d'),
+        ):
+            try:
+                dt = datetime.datetime.strptime(candidate, fmt)
+                break
+            except ValueError:
+                continue
+    if dt is None:
+        dt = datetime.datetime.now()
+    return f"{dt.day} {dt.strftime('%B %Y')}"
+
+
+def invoice_receipt_money_row(label, value, *, muted=False, strong=False):
+    navy = BRIXEN_EMAIL_BRAND['navy']
+    ink = BRIXEN_EMAIL_BRAND['ink']
+    muted_color = BRIXEN_EMAIL_BRAND['muted']
+    color = muted_color if muted else (navy if strong else ink)
+    size = '16px' if strong else '14px'
+    weight = '700' if strong else ('400' if muted else '500')
+    pad = '8px' if strong else '5px'
+    return (
+        '<tr>'
+        f'<td style="padding:{pad} 12px {pad} 0;font-family:{EMAIL_FONT_STACK};font-size:{size};line-height:1.4;'
+        f'font-weight:{weight};color:{color};"><font color="{color}">{html_escape(label)}</font></td>'
+        f'<td align="right" style="padding:{pad} 0;font-family:{EMAIL_FONT_STACK};font-size:{size};line-height:1.4;'
+        f'font-weight:{weight};color:{color};white-space:nowrap;"><font color="{color}">{html_escape(value)}</font></td>'
+        '</tr>'
+    )
+
+
+def invoice_receipt_item_row(item):
+    ink = BRIXEN_EMAIL_BRAND['ink']
+    muted = BRIXEN_EMAIL_BRAND['muted']
+    name = str((item or {}).get('description') or '').strip() or 'Service'
+    try:
+        qty = int((item or {}).get('quantity') or 1) or 1
+    except (TypeError, ValueError):
+        qty = 1
+    amount = format_invoice_money((item or {}).get('amount'))
+    unit = (item or {}).get('unit_price')
+    meta_parts = [f'Qty {qty}']
+    try:
+        unit_value = float(unit)
+    except (TypeError, ValueError):
+        unit_value = None
+    if unit_value is not None and (qty != 1 or unit_value > 0.004):
+        meta_parts.append(format_invoice_money(unit_value))
+    meta = ' · '.join(meta_parts)
+    return (
+        '<tr>'
+        f'<td style="padding:9px 12px 9px 0;vertical-align:top;font-family:{EMAIL_FONT_STACK};">'
+        f'<p style="margin:0;font-size:14px;line-height:1.4;font-weight:500;color:{ink};"><font color="{ink}">{html_escape(name)}</font></p>'
+        f'<p style="margin:3px 0 0;font-size:12px;line-height:1.35;color:{muted};"><font color="{muted}">{html_escape(meta)}</font></p>'
+        '</td>'
+        f'<td align="right" valign="top" style="padding:9px 0;white-space:nowrap;font-family:{EMAIL_FONT_STACK};'
+        f'font-size:14px;line-height:1.4;font-weight:500;color:{ink};"><font color="{ink}">{html_escape(amount)}</font></td>'
+        '</tr>'
+    )
+
+
+def invoice_receipt_field(label, value):
+    if not str(value or '').strip():
+        return ''
+    ink = BRIXEN_EMAIL_BRAND['ink']
+    muted = BRIXEN_EMAIL_BRAND['muted']
+    return (
+        f'<p style="margin:0 0 2px;font-family:{EMAIL_FONT_STACK};font-size:12px;line-height:1.35;color:{muted};">'
+        f'<font color="{muted}">{html_escape(label)}</font></p>'
+        f'<p style="margin:0 0 12px;font-family:{EMAIL_FONT_STACK};font-size:14px;line-height:1.4;font-weight:500;color:{ink};word-break:break-word;">'
+        f'<font color="{ink}">{html_escape(value)}</font></p>'
+    )
+
+
+def invoice_receipt_pay_card(title, fields_html):
+    navy = BRIXEN_EMAIL_BRAND['navy']
+    ivory = BRIXEN_EMAIL_BRAND['ivory']
+    return (
+        f'<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 12px;">'
+        f'<tr><td class="invoice-pad" bgcolor="{ivory}" style="padding:16px 16px 4px;background-color:{ivory};">'
+        f'<p style="margin:0 0 12px;font-family:{EMAIL_FONT_STACK};font-size:12px;line-height:1.3;font-weight:700;color:{navy};">'
+        f'<font color="{navy}">{html_escape(title)}</font></p>'
+        f'{fields_html}'
+        f'</td></tr></table>'
+    )
+
+
+def invoice_receipt_html(receipt, greeting_html, message_html, wordmark_url, cta_html, footer_html):
+    navy = BRIXEN_EMAIL_BRAND['navy']
+    gold = BRIXEN_EMAIL_BRAND['gold']
+    ivory = BRIXEN_EMAIL_BRAND['ivory']
+    ink = BRIXEN_EMAIL_BRAND['ink']
+    muted = BRIXEN_EMAIL_BRAND['muted']
+    line = BRIXEN_EMAIL_BRAND['line']
+    receipt = receipt or {}
+    item_rows = [invoice_receipt_item_row(item) for item in (receipt.get('items') or [])]
+    items_html = ''.join(item_rows) or invoice_receipt_item_row({
+        'description': 'Professional services',
+        'quantity': 1,
+        'amount': receipt.get('total') or '£0.00',
+    })
+    totals = [invoice_receipt_money_row('Subtotal', receipt.get('subtotal') or '£0.00', muted=True)]
+    if receipt.get('show_tax'):
+        totals.append(invoice_receipt_money_row('VAT', receipt.get('tax') or '£0.00', muted=True))
+    if receipt.get('show_paid') and not receipt.get('fully_paid'):
+        totals.append(invoice_receipt_money_row('Paid', receipt.get('amount_paid') or '£0.00', muted=True))
+    totals.append(
+        f'<tr><td colspan="2" style="padding:8px 0 0;border-top:1px solid {line};font-size:0;line-height:0;">&nbsp;</td></tr>'
+    )
+    totals.append(invoice_receipt_money_row('Total', receipt.get('total') or '£0.00', strong=True))
+    if receipt.get('fully_paid'):
+        totals.append(invoice_receipt_money_row('Paid', receipt.get('amount_paid') or receipt.get('total') or '£0.00', strong=True))
+    elif receipt.get('show_due'):
+        totals.append(invoice_receipt_money_row('Amount due', receipt.get('amount_due') or '£0.00', strong=True))
+    meta_bits = []
+    if receipt.get('date'):
+        meta_bits.append(str(receipt.get('date')))
+    if receipt.get('invoice_number'):
+        meta_bits.append(f"Invoice {receipt['invoice_number']}")
+    if receipt.get('order_number'):
+        meta_bits.append(f"Order {receipt['order_number']}")
+    meta_html = html_escape('  ·  '.join(meta_bits))
+    invoice_tone = 'success' if receipt.get('fully_paid') else 'payment'
+    details = ''
+    if receipt.get('include_bank'):
+        gbp = receipt.get('gbp') or {}
+        pkr = receipt.get('pkr') or {}
+        fx = receipt.get('fx') or {}
+        gbp_html = invoice_receipt_pay_card('Pay in GBP', ''.join([
+            invoice_receipt_field('Account name', gbp.get('account_name')),
+            invoice_receipt_field('Account number', gbp.get('account_number')),
+            invoice_receipt_field('Sort code', gbp.get('sort_code')),
+        ]))
+        pkr_fields = [
+            invoice_receipt_field('Account name', pkr.get('account_name')),
+            invoice_receipt_field('Bank name', pkr.get('bank_name')),
+            invoice_receipt_field('IBAN', pkr.get('iban')),
+        ]
+        if fx.get('pkr_display') or fx.get('math'):
+            pkr_fields.append(invoice_receipt_field(
+                'Amount payable in PKR',
+                fx.get('pkr_display') or fx.get('math'),
+            ))
+        pkr_html = invoice_receipt_pay_card('Pay in PKR', ''.join(pkr_fields))
+        details = f"""
+          <tr>
+            <td class="invoice-pad" style="padding:18px 24px 4px;background:#ffffff;">
+              <p style="margin:0 0 10px;font-family:{EMAIL_FONT_STACK};font-size:13px;line-height:1.35;font-weight:700;color:{navy};"><font color="{navy}">Payment details</font></p>
+              {gbp_html}
+              {pkr_html}
+            </td>
+          </tr>"""
+    extra_css = (
+        '@media only screen and (max-width:620px){'
+        '.invoice-shell{width:100%!important;max-width:100%!important;}'
+        '.invoice-pad{padding-left:18px!important;padding-right:18px!important;}'
+        '}'
+    )
+    return f"""<!DOCTYPE html>
+<html lang="en">
+{email_document_head_html(str(receipt.get('title') or 'Invoice'), extra_css)}
+<body style="margin:0;padding:0;background:{ivory};font-family:{EMAIL_FONT_STACK};color:{ink};-webkit-font-smoothing:antialiased;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="{ivory}" style="background:{ivory};padding:20px 10px;">
+    <tr>
+      <td align="center">
+        <table class="invoice-shell" role="presentation" width="560" cellspacing="0" cellpadding="0" border="0" bgcolor="#ffffff" style="width:560px;max-width:560px;background:#ffffff;border-radius:18px;overflow:hidden;">
+          {email_hero_header_html(
+              receipt.get('title') or 'Invoice',
+              tone=invoice_tone,
+              badge=receipt.get('kicker') or ('Payment received' if receipt.get('fully_paid') else 'Invoice'),
+              navy=navy,
+              gold=gold,
+              title_size='20px',
+              wordmark_url=wordmark_url,
+          )}
+          <tr>
+            <td class="invoice-pad" align="center" style="padding:0 24px 10px;background:#ffffff;">
+              <p style="margin:0;font-family:{EMAIL_FONT_STACK};font-size:12px;line-height:1.45;color:{muted};"><font color="{muted}">{meta_html}</font></p>
+            </td>
+          </tr>
+          <tr>
+            <td class="invoice-pad" align="left" style="padding:4px 24px 14px;background:#ffffff;">
+              <p style="margin:0;font-family:{EMAIL_FONT_STACK};font-size:16px;line-height:1.45;letter-spacing:-0.022em;font-weight:400;color:{ink};"><font color="{ink}">Hi {greeting_html},</font></p>
+              {f'<p style="margin:4px 0 0;font-family:{EMAIL_FONT_STACK};font-size:13px;line-height:1.4;color:{muted};"><font color="{muted}">{html_escape(receipt.get("customer_email"))}</font></p>' if str(receipt.get('customer_email') or '').strip() else ''}
+              <p style="margin:8px 0 0;font-family:{EMAIL_FONT_STACK};font-size:14px;line-height:1.5;color:{muted};"><font color="{muted}">{message_html}</font></p>
+            </td>
+          </tr>
+          <tr>
+            <td class="invoice-pad" style="padding:4px 24px 6px;background:#ffffff;">
+              <p style="margin:0 0 8px;font-family:{EMAIL_FONT_STACK};font-size:13px;line-height:1.35;font-weight:700;color:{navy};"><font color="{navy}">Invoice summary</font></p>
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-top:1px solid {line};">
+                {items_html}
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td class="invoice-pad" style="padding:0 24px 8px;background:#ffffff;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                {''.join(totals)}
+              </table>
+            </td>
+          </tr>
+          {details}
+          <tr>
+            <td class="invoice-pad" align="left" style="padding:10px 24px 6px;background:#ffffff;">
+              <p style="margin:0;font-family:{EMAIL_FONT_STACK};font-size:13px;line-height:1.35;font-weight:700;color:{navy};"><font color="{navy}">Need help?</font></p>
+              <p style="margin:6px 0 0;font-family:{EMAIL_FONT_STACK};font-size:13px;line-height:1.5;color:{muted};">
+                <font color="{muted}">If you have any questions about this invoice or your order, contact Brixen Consultants support.</font>
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td class="invoice-pad" align="center" style="padding:12px 24px 22px;background:#ffffff;">
+              {cta_html}
+            </td>
+          </tr>
+          <tr>
+            <td align="center" bgcolor="{navy}" style="padding:28px 24px 24px;background-color:{navy};color:#ffffff;">
+              {footer_html}
+            </td>
+          </tr>
+          <tr><td bgcolor="{gold}" style="height:3px;line-height:3px;font-size:0;background-color:{gold};">&nbsp;</td></tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
+
+
+def registration_offers_html(navy, wa_href):
     navy = html_escape(navy or '#003971')
     gold = '#c5a572'
     whatsapp_url = registration_whatsapp_url(wa_href)
@@ -1293,9 +1839,13 @@ def build_client_notification_email(
     alert_label='Important notification',
     cta_label='Open Client Panel',
     cta_url=None,
+    extra_cta_label=None,
+    extra_cta_url=None,
     detail_title=None,
     detail_value=None,
     extra_message=None,
+    email_sections=None,
+    invoice_receipt=None,
     footer_note='This is a transactional email from Brixen Consultants Ltd about your account. It is not a marketing message.',
     layout='activity',
     greeting_name=None,
@@ -1308,6 +1858,10 @@ def build_client_notification_email(
     message_text = (message or '').strip()
     message_html = html_escape(message_text).replace('\n', '<br>')
     extra = (extra_message or '').strip()
+    sections = [section for section in (email_sections or []) if section]
+    if sections and not extra:
+        extra = email_facts_text(sections)
+    invoice_layout = str(layout or '').strip().lower() == 'invoice'
     if str(layout or '').strip().lower() == 'celebration' and not extra:
         extra = registration_next_steps_text()
     panel_url = cta_url or client_website_url()
@@ -1334,6 +1888,8 @@ def build_client_notification_email(
         body_text += "\nDownload your certificate of incorporation.\n"
         body_text += f"\nWhatsApp for a free consultation:\n{registration_whatsapp_url('https://wa.me/' + phone_digits)}\n"
     body_text += f"\n{cta_label}:\n{panel_url}\n"
+    if (not invoice_layout) and extra_cta_label and extra_cta_url:
+        body_text += f"\n{extra_cta_label}:\n{extra_cta_url}\n"
     body_text += build_email_footer_text(brand, brand['support_email'], phone_display, footer_note)
 
     footer_html = build_email_footer_html(
@@ -1421,55 +1977,71 @@ def build_client_notification_email(
 </html>"""
         return email_subject, body_text, body_html
 
-    navy = primary or '#003971'
+    navy = '#003971'
     gold = '#c5a572'
-    points = [line.strip() for line in extra.splitlines() if line.strip()]
-    if detail_title and detail_value:
+    if invoice_layout and invoice_receipt:
+        # Invoice emails: one CTA only — download this invoice PDF (no Pay now / Contact Support).
+        cta_html = apple_email_button_html(panel_url, cta_label, navy) if cta_label and panel_url else ''
+        body_html = invoice_receipt_html(
+            invoice_receipt,
+            client_name,
+            message_html,
+            wordmark_url,
+            cta_html,
+            footer_html,
+        )
+        return email_subject, body_text, body_html
+
+    points = [line.strip() for line in extra.splitlines() if line.strip()] if not sections else []
+    if not invoice_layout and detail_title and detail_value:
         detail_line = f"{detail_title}: {detail_value}"
         if detail_value not in extra and detail_line not in points:
             points.append(f"📌 {detail_line}")
-    title_line = html_escape(str(badge or headline or 'Account update').strip())
-    points_block = key_points_html(points, navy)
+    tone = email_tone_from_context(
+        layout=layout,
+        badge=badge,
+        headline=headline,
+        alert_label=alert_label,
+        message=message_text,
+        extra=extra,
+    )
+    hero_title = str(headline or badge or 'Account update').strip()
+    chip = str(badge or email_tone_meta(tone)['label']).strip()
+    facts_block = email_facts_html(sections, navy, gold) if sections else key_points_html(points, navy, tone=tone)
+    support_note = (
+        'If you did not expect this email, reply to contact@brixenconsultants.com and we will help straight away.'
+        if tone == 'alert'
+        else 'Need help? Reply to this email or contact the Brixen Consultants team.'
+    )
     body_html = f"""<!DOCTYPE html>
 <html lang="en">
 {email_document_head_html(email_subject)}
 <body style="margin:0;padding:0;background:#f3efe8;font-family:{EMAIL_FONT_STACK};color:#1d1d1f;-webkit-font-smoothing:antialiased;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#f3efe8" style="background:#f3efe8;padding:36px 12px;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#f3efe8" style="background:#f3efe8;padding:28px 12px;">
     <tr>
       <td align="center">
-        <table role="presentation" width="560" cellspacing="0" cellpadding="0" border="0" bgcolor="#ffffff" style="width:560px;max-width:560px;background:#ffffff;">
-          <tr><td style="height:3px;line-height:3px;font-size:0;background:{gold};">&nbsp;</td></tr>
+        <table role="presentation" width="560" cellspacing="0" cellpadding="0" border="0" bgcolor="#ffffff" style="width:560px;max-width:560px;background:#ffffff;border-radius:18px;overflow:hidden;">
+          {email_hero_header_html(hero_title, tone=tone, badge=chip, navy=navy, gold=gold, wordmark_url=wordmark_url)}
           <tr>
-            <td align="center" style="padding:32px 40px 10px;background:#ffffff;">
-              <img src="{wordmark_url}" alt="Brixen Consultants" width="148" style="display:block;margin:0 auto;border:0;outline:none;text-decoration:none;width:148px;height:auto;">
+            <td align="left" style="padding:8px 36px 8px;background:#ffffff;">
+              <p style="margin:0;font-family:{EMAIL_FONT_STACK};font-size:17px;line-height:1.45;letter-spacing:-0.022em;font-weight:400;color:#1d1d1f;">Hi {client_name},</p>
+              <p style="margin:14px 0 0;font-family:{EMAIL_FONT_STACK};font-size:16px;line-height:1.55;letter-spacing:-0.022em;color:#6e6e73;">{message_html}</p>
             </td>
           </tr>
           <tr>
-            <td align="center" style="padding:14px 40px 6px;background:#ffffff;">
-              <table role="presentation" width="56" cellspacing="0" cellpadding="0" border="0" align="center">
-                <tr><td style="height:1px;line-height:1px;font-size:0;background:{gold};">&nbsp;</td></tr>
-              </table>
+            <td align="left" style="padding:10px 28px 8px;background:#ffffff;">
+              {facts_block}
             </td>
           </tr>
           <tr>
-            <td align="center" style="padding:6px 40px 4px;background:#ffffff;">
-              <p style="margin:0;font-family:{EMAIL_FONT_STACK};font-size:16px;line-height:1.4;letter-spacing:-0.022em;color:#1d1d1f;">{title_line}</p>
-            </td>
-          </tr>
-          <tr>
-            <td align="left" style="padding:22px 40px 8px;background:#ffffff;">
-              <p style="margin:0;font-family:{EMAIL_FONT_STACK};font-size:17px;line-height:1.47;letter-spacing:-0.022em;color:#1d1d1f;">Hi {client_name},</p>
-              <p style="margin:16px 0 0;font-family:{EMAIL_FONT_STACK};font-size:16px;line-height:1.47;letter-spacing:-0.022em;color:#6e6e73;">{message_html}</p>
-            </td>
-          </tr>
-          <tr>
-            <td align="left" style="padding:18px 40px 8px;background:#ffffff;">
-              {points_block}
-            </td>
-          </tr>
-          <tr>
-            <td align="center" style="padding:22px 40px 28px;background:#ffffff;">
+            <td align="center" style="padding:18px 36px 10px;background:#ffffff;">
               {apple_email_button_html(panel_url, cta_label, navy)}
+              {('<div style="height:12px;line-height:12px;font-size:0;">&nbsp;</div>' + apple_email_button_html(extra_cta_url, extra_cta_label, navy)) if extra_cta_url and extra_cta_label else ''}
+            </td>
+          </tr>
+          <tr>
+            <td align="left" style="padding:8px 36px 28px;background:#ffffff;">
+              <p style="margin:0;font-family:{EMAIL_FONT_STACK};font-size:13px;line-height:1.5;color:#86868b;">{html_escape(support_note)}</p>
             </td>
           </tr>
           <tr>
@@ -1487,23 +2059,27 @@ def build_client_notification_email(
     return email_subject, body_text, body_html
 
 
-def build_client_document_email(client, doc_name, client_message=None):
+def build_client_document_email(client, doc_name, client_message=None, company_name=None, order_number=None):
     doc_name = doc_name or 'Document'
-    extra_lines = [f'📄 {doc_name}']
+    extra_lines = [f'Document:\n📄 {doc_name}']
+    if company_name:
+        extra_lines.append(f'Company:\n{company_name}')
+    if order_number:
+        extra_lines.append(f'Order:\n{order_number}')
     note = (client_message or '').strip()
     if note:
-        extra_lines.append(note)
-    message = 'A new file is now available in your secure client area on our website.'
+        extra_lines.append(f'Message:\n{note}')
+    message = 'Brixen Consultants has uploaded a new document to your client portal.'
     return build_client_notification_email(
         client,
-        'New document ready for you',
+        'A new document is available in your Brixen client portal',
         message,
-        subject=f"New document ready: {doc_name} — {brand_settings()['company_name']}",
+        subject=f"New document ready: A new document is available in your Brixen client portal — {doc_name}",
         badge='Documents uploaded',
         cta_label='View in Messages & Files',
         cta_url=client_website_url(),
-        extra_message='\n'.join(extra_lines),
-        footer_note='This is a transactional email from Brixen Consultants Ltd because a document was added to your account.',
+        extra_message='\n\n'.join(extra_lines),
+        footer_note='This is a transactional email from Brixen Consultants Ltd because a document was added to your portal account.',
         layout='activity',
     )
 
@@ -1545,9 +2121,13 @@ def notify_client(
     email_html=None,
     cta_label=None,
     cta_url=None,
+    extra_cta_label=None,
+    extra_cta_url=None,
     detail_title=None,
     detail_value=None,
     extra_message=None,
+    email_sections=None,
+    invoice_receipt=None,
     footer_note=None,
     email_to=None,
     badge=None,
@@ -1573,9 +2153,13 @@ def notify_client(
             'subject': email_subject,
             'cta_label': cta_label,
             'cta_url': cta_url,
+            'extra_cta_label': extra_cta_label,
+            'extra_cta_url': extra_cta_url,
             'detail_title': detail_title,
             'detail_value': detail_value,
             'extra_message': extra_message,
+            'email_sections': email_sections,
+            'invoice_receipt': invoice_receipt,
             'badge': badge,
             'alert_label': alert_label,
             'layout': layout or 'activity',
@@ -1592,7 +2176,16 @@ def notify_client(
     else:
         email_subject = email_subject or f"{title} — {brand_settings()['company_name']}"
 
-    recipient = str(email_to or '').strip() or client_rec.get('email')
+    if email_to is None:
+        recipient = client_rec.get('email')
+    else:
+        recipient = str(email_to).strip()
+        if not recipient:
+            return {
+                'notification_created': True,
+                'email_sent': False,
+                'email_status': 'No company owner email',
+            }
     sent, status = EmailService.send_notification_email(
         recipient,
         email_subject,
@@ -1638,8 +2231,16 @@ def notify_activity_done(
     ntype='activity',
     link='/documents',
     cta_label='Open Client Panel',
+    cta_url=None,
+    extra_cta_label=None,
+    extra_cta_url=None,
     detail_title=None,
     detail_value=None,
+    email_to=None,
+    greeting_name=None,
+    layout='activity',
+    email_sections=None,
+    invoice_receipt=None,
 ):
     lines = [str(point).strip() for point in (points or []) if str(point).strip()]
     extra = '\n'.join(lines)
@@ -1652,11 +2253,17 @@ def notify_activity_done(
         email_subject=subject,
         email_headline=headline,
         extra_message=extra or None,
+        email_sections=email_sections,
+        invoice_receipt=invoice_receipt,
         cta_label=cta_label,
-        cta_url=client_website_url(),
+        cta_url=cta_url or client_website_url(),
+        extra_cta_label=extra_cta_label,
+        extra_cta_url=extra_cta_url,
         detail_title=detail_title,
         detail_value=detail_value,
-        layout='activity',
+        email_to=email_to,
+        greeting_name=greeting_name,
+        layout=layout or 'activity',
         footer_note='This email is about an update on your Brixen Consultants service.',
     )
 
@@ -1732,27 +2339,154 @@ def notify_product_completed(order):
     )
 
 
-def notify_payment_received(order):
+def payment_notify_email_for_order(order):
+    return real_order_connector(order).get('owner_form_email') or ''
+
+
+def notify_payment_received(order, invoice=None):
     if not order:
         return {'notification_created': False, 'email_sent': False, 'email_status': 'No order'}
+    connector = real_order_connector(order)
     service = str(order.get('service_name') or 'Your order').strip()
     number = str(order.get('order_number') or '').strip()
-    points = ['✅ Payment received', f'🧾 {service}']
-    if number:
-        points.append(f'📦 Order {number}')
-    points.append('🛠️ Our team will start the work')
+    invoice_number = str((invoice or {}).get('invoice_number') or '').strip()
+    money = invoice_money_state(invoice or {})
+    currency = money['currency']
+    timing = money['timing']
+    remaining = money['amount_due']
+    deposit = remaining > 0.004
+    if deposit:
+        title = 'Deposit received'
+        headline = 'We’ve received your deposit'
+        message = 'Thank you. Your deposit is in. The remaining balance is due when the work is done.'
+    elif timing == 'Advance':
+        title = 'Advance payment received'
+        headline = 'We’ve received your advance payment'
+        message = 'Thank you. Your advance payment is in and we will start this order.'
+    else:
+        title = 'Payment received'
+        headline = 'We’ve received your payment'
+        message = 'Thank you. Your payment for this completed work is in.'
+    email_to = connector.get('owner_form_email') or ''
+    invoice_url = ''
+    if invoice and invoice.get('id'):
+        invoice_url = invoice_public_document_url(invoice['id'])
     return notify_activity_done(
         order,
-        title='Payment received',
-        headline='We’ve received your payment',
-        message='Thank you. Your payment is in and we will start this order.',
-        points=points,
-        subject=f"Payment received — {number or service} — {brand_settings()['company_name']}",
+        title=title,
+        headline=headline,
+        message=message,
+        points=[],
+        subject=f"{title} — {invoice_number or number or service} — {brand_settings()['company_name']}",
         ntype='payment_received',
-        link='/orders',
-        cta_label='Track your order',
-        detail_title='Order',
-        detail_value=number or service,
+        link='/invoices',
+        cta_label='Download invoice' if invoice_url else 'Track your order',
+        cta_url=invoice_url or None,
+        detail_title='Invoice' if invoice_number else 'Order',
+        detail_value=invoice_number or number or service,
+        email_to=email_to,
+        greeting_name=invoice_email_greeting_name(order, invoice),
+        layout='invoice',
+        email_sections=invoice_email_sections(order, invoice, include_bank=False),
+        invoice_receipt=invoice_receipt_payload(order, invoice, include_bank=False),
+    )
+
+
+def payment_account_points():
+    gbp = INVOICE_BANK_GBP
+    pkr = INVOICE_BANK_PKR
+    return [
+        f'GBP — {gbp["account_name"]}',
+        f'Account number {gbp["account_number"]} · Sort code {gbp["sort_code"]}',
+        gbp['pay_url'],
+        f'PKR — {pkr["account_name"]}',
+        f'Bank name {pkr["bank_name"]}',
+        f'IBAN {pkr["iban"]}',
+    ]
+
+
+def invoice_email_sections(order, invoice=None, *, include_bank=False):
+    money = invoice_money_state(invoice or {})
+    currency = money['currency']
+    invoice_number = str((invoice or {}).get('invoice_number') or '').strip()
+    service = str((order or {}).get('service_name') or 'Your order').strip()
+    number = str((order or {}).get('order_number') or '').strip()
+    summary = []
+    due = float(money.get('amount_due') or 0)
+    if include_bank or due > 0.004:
+        summary.append(('Amount due', format_invoice_money(money['amount_due'], currency)))
+    else:
+        summary.append(('Amount', format_invoice_money(money['total'], currency)))
+    if invoice_number:
+        summary.append(('Invoice', f"{invoice_number} — {format_invoice_money(money['total'], currency)}"))
+    if include_bank and money['timing'] == 'Deposit' and money['deposit_amount']:
+        summary.append(('Deposit now', format_invoice_money(money['deposit_amount'], currency)))
+    if (not include_bank) and float(money.get('amount_paid') or 0) > 0.004:
+        summary.append(('Paid', format_invoice_money(money['amount_paid'], currency)))
+    if service:
+        summary.append(('Service', service))
+    if number:
+        summary.append(('Order', number))
+    sections = [{'title': 'Invoice', 'rows': summary}]
+    if not include_bank:
+        return sections
+    gbp = INVOICE_BANK_GBP
+    pkr = INVOICE_BANK_PKR
+    sections.append({
+        'title': 'Pay in GBP',
+        'rows': [
+            ('Account name', gbp['account_name']),
+            ('Account number', gbp['account_number']),
+            ('Sort code', gbp['sort_code']),
+        ],
+    })
+    pkr_rows = [
+        ('Account name', pkr['account_name']),
+        ('Bank name', pkr['bank_name']),
+        ('IBAN', pkr['iban']),
+    ]
+    if invoice_client_is_in_pakistan(invoice or {}):
+        fx = invoice_pakistan_fx_note(due)
+        if fx:
+            pkr_rows.append(('If you pay from Pakistan', fx['math']))
+            pkr_rows.append(('Send to UBL', fx['pkr_display']))
+    sections.append({'title': 'Pay in PKR', 'rows': pkr_rows})
+    return sections
+
+
+def notify_payment_requested(order, invoice=None):
+    if not order:
+        return {'notification_created': False, 'email_sent': False, 'email_status': 'No order'}
+    connector = real_order_connector(order)
+    service = str(order.get('service_name') or 'Your order').strip()
+    number = str(order.get('order_number') or '').strip()
+    invoice_number = str((invoice or {}).get('invoice_number') or '').strip()
+    money = invoice_money_state(invoice or {})
+    due = money['amount_due']
+    if due <= 0.004:
+        return {'notification_created': False, 'email_sent': False, 'email_status': 'Nothing due'}
+    email_to = connector.get('owner_form_email') or ''
+    if not invoice or not invoice.get('id'):
+        return {'notification_created': False, 'email_sent': False, 'email_status': 'No invoice'}
+    invoice_url = invoice_public_document_url(invoice['id'])
+    return notify_activity_done(
+        order,
+        title='Invoice',
+        headline='Invoice',
+        message=invoice_payment_request_copy(include_gbp=True, include_pkr=True),
+        points=[],
+        subject=invoice_request_email_subject(invoice, order),
+        ntype='payment_requested',
+        link='/invoices',
+        cta_label='Download invoice',
+        cta_url=invoice_url,
+        detail_title='Invoice' if invoice_number else 'Order',
+        detail_value=invoice_number or number or service,
+        email_to=email_to,
+        greeting_name=invoice_email_greeting_name(order, invoice),
+        layout='invoice',
+        email_sections=invoice_email_sections(order, invoice, include_bank=True),
+        invoice_receipt=invoice_receipt_payload(order, invoice, include_bank=True),
     )
 
 
@@ -2076,7 +2810,159 @@ def normalize_compliance_field(value, max_len=40):
     return text, None
 
 
-def public_client_company(row, deadlines=None, for_staff=False):
+def parse_sic_codes(raw):
+    if isinstance(raw, (list, tuple)):
+        parts = [str(item or '') for item in raw]
+    else:
+        parts = re.split(r'[,;/|\n]+', str(raw or ''))
+    codes = []
+    seen = set()
+    for part in parts:
+        code = re.sub(r'[^A-Za-z0-9]', '', str(part or '').strip())
+        if code.isdigit() and len(code) == 4:
+            code = code.zfill(5)
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        codes.append(code)
+    return codes
+
+
+_SIC_LABELS_CACHE = None
+SIC_LABELS_GZ = (
+    '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'
+)
+
+
+def sic_code_labels():
+    global _SIC_LABELS_CACHE
+    if _SIC_LABELS_CACHE is None:
+        labels = {}
+        blob = str(SIC_LABELS_GZ or '').strip()
+        if blob and blob != 'SIC_LABELS_GZ_PLACEHOLDER':
+            try:
+                labels = json.loads(gzip.decompress(base64.b64decode(blob)))
+            except Exception:
+                labels = {}
+        _SIC_LABELS_CACHE = labels if isinstance(labels, dict) else {}
+    return _SIC_LABELS_CACHE
+
+
+def sic_activities_from_codes(raw):
+    labels = sic_code_labels()
+    items = []
+    for code in parse_sic_codes(raw):
+        lookup = code.zfill(5) if code.isdigit() else code
+        items.append({
+            'code': lookup,
+            'description': str(labels.get(lookup) or labels.get(code) or '').strip(),
+        })
+    return items
+
+
+def companies_house_email_from_data(data):
+    if not isinstance(data, dict):
+        return ''
+    for key in ('registered_email_address', 'registered_email', 'email', 'contact_email'):
+        value = str(data.get(key) or '').strip().lower()
+        if is_usable_form_email(value):
+            return value
+    return ''
+
+
+def normalize_registered_email(value):
+    text = str(value or '').strip().lower()
+    if not text:
+        return '', None
+    if not is_usable_form_email(text) or not STAFF_EMAIL_RE.match(text):
+        return None, 'Enter a valid registered email'
+    return text, None
+
+
+def client_account_email(user_id):
+    if not user_id:
+        return ''
+    row = query_db("SELECT email FROM users WHERE id = ?;", (user_id,), one=True)
+    email = str((row or {}).get('email') or '').strip()
+    return email if is_usable_form_email(email) else ''
+
+
+def registered_email_for_client(client, extras=None):
+    extras = extras if isinstance(extras, dict) else {}
+    for value in (
+        extras.get('registered_email'),
+        extras.get('new_client_email'),
+        extras.get('client_email'),
+        (client or {}).get('email'),
+    ):
+        email = str(value or '').strip()
+        if is_usable_form_email(email):
+            return email
+    return client_account_email((client or {}).get('id'))
+
+
+def resolve_company_registered_email(company):
+    stored = str((company or {}).get('registered_email') or '').strip()
+    if is_usable_form_email(stored):
+        return stored
+    form_email = company_form_email((company or {}).get('id'))
+    if is_usable_form_email(form_email):
+        return form_email
+    user_id = (company or {}).get('user_id')
+    name = (company or {}).get('name')
+    if user_id and name:
+        extras = query_db(
+            """
+            SELECT owner_form_email, checkout_form_json
+            FROM orders
+            WHERE user_id = ?
+            ORDER BY id DESC;
+            """,
+            (user_id,),
+        ) or []
+        for row in extras:
+            raw = row.get('checkout_form_json')
+            fields = []
+            if raw:
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        fields = parsed
+                except (TypeError, ValueError):
+                    fields = []
+            if not fields:
+                continue
+            if not order_matches_company_name(company_name_from_checkout_fields(fields), name):
+                continue
+            profile = owner_profile_from_fields(fields)
+            if is_usable_form_email(profile.get('form_email')):
+                return str(profile.get('form_email') or '').strip()
+            if is_usable_form_email(row.get('owner_form_email')):
+                return str(row.get('owner_form_email') or '').strip()
+    client_email = str((company or {}).get('client_email') or '').strip()
+    if is_usable_form_email(client_email):
+        return client_email
+    return client_account_email(user_id)
+
+
+def persist_company_registered_email(company, ch_email=None):
+    company_id = (company or {}).get('id')
+    if not company_id:
+        return False
+    email = str(ch_email or company.get('registered_email') or '').strip().lower()
+    if not is_usable_form_email(email):
+        email = str(resolve_company_registered_email(company) or '').strip().lower()
+    if not is_usable_form_email(email):
+        return False
+    current = str((company or {}).get('registered_email') or '').strip()
+    if current.lower() == email:
+        return False
+    execute_db("UPDATE companies SET registered_email = ? WHERE id = ?;", (email, company_id))
+    company['registered_email'] = email
+    return True
+
+
+def public_client_company(row, deadlines=None, for_staff=False, resolve_owner=False):
     if not row:
         return None
     src = dict(row)
@@ -2097,8 +2983,38 @@ def public_client_company(row, deadlines=None, for_staff=False):
         'utr_number': str(src.get('utr_number') or '').strip(),
         'identity_verified': str(src.get('identity_verified') or 'Not started').strip() or 'Not started',
         'psc_verified': str(src.get('psc_verified') or 'Not started').strip() or 'Not started',
+        'sic_codes': str(src.get('sic_codes') or '').strip(),
+        'sic_activities': sic_activities_from_codes(src.get('sic_codes')),
+        'registered_email': str(src.get('registered_email') or '').strip(),
         'deadlines': list(deadlines or []),
     }
+    if not payload['registered_email']:
+        payload['registered_email'] = resolve_company_registered_email(src)
+    directors = []
+    if (
+        resolve_owner
+        and looks_like_uk_company_number(src.get('company_number'))
+        and not is_pending_company_number(src.get('company_number'))
+    ):
+        live_directors = fetch_companies_house_active_directors(src.get('company_number'))
+        if live_directors:
+            directors = sync_company_directors_from_list(src.get('id'), live_directors)
+    if not directors:
+        directors = company_directors_list(src)
+    if not directors:
+        single = registered_company_owner_name(src, resolve_owner=False)
+        if single:
+            directors = [single]
+    payload['directors'] = directors
+    display_directors = ' · '.join(directors)
+    payload['owner_name'] = display_directors
+    if display_directors:
+        payload['director'] = display_directors
+    attention = company_attention_issues(src)
+    payload['attention'] = attention
+    payload['needs_attention'] = bool(attention)
+    payload['accounts_next_due'] = companies_house_iso_date(src.get('accounts_next_due'))
+    payload['confirmation_next_due'] = companies_house_iso_date(src.get('confirmation_next_due'))
     if for_staff:
         payload['authentication_code'] = str(src.get('authentication_code') or '').strip()
         payload['activation_code'] = str(src.get('activation_code') or '').strip()
@@ -2138,7 +3054,16 @@ UK_POSTCODE_RE = re.compile(r'\b[A-Z]{1,2}[0-9][A-Z0-9]?\s*[0-9][A-Z]{2}\b', re.
 COMPANY_STAFF_SELECT = (
     "id, name, company_number, status, inc_date, director, reg_office, package, account_status, "
     "created_at, user_id, utr_number, authentication_code, activation_code, "
-    "identity_verified, identity_verified_at, psc_verified, psc_verified_at"
+    "identity_verified, identity_verified_at, psc_verified, psc_verified_at, "
+    "sic_codes, registered_email, accounts_next_due, accounts_overdue, "
+    "confirmation_next_due, confirmation_overdue, ch_attention_json, "
+    "ch_alert_fingerprint, ch_alert_sent_at"
+)
+COMPANY_LIST_SELECT = (
+    "id, name, company_number, status, inc_date, director, reg_office, package, account_status, "
+    "created_at, user_id, utr_number, identity_verified, psc_verified, "
+    "sic_codes, registered_email, accounts_next_due, accounts_overdue, "
+    "confirmation_next_due, confirmation_overdue, ch_attention_json"
 )
 
 
@@ -2149,7 +3074,7 @@ def normalize_pending_company_name(name):
     return text, None
 
 
-def rename_pending_company(company_id, name):
+def rename_pending_company(company_id, name, companies_house_number=None):
     current = query_db(f"SELECT {COMPANY_STAFF_SELECT} FROM companies WHERE id = ?;", (company_id,), one=True)
     if not current:
         return None, 'Company not found'
@@ -2158,17 +3083,57 @@ def rename_pending_company(company_id, name):
     text, error = normalize_pending_company_name(name)
     if error:
         return None, error
-    if str(current.get('name') or '').strip().lower() == text.lower():
-        return current, None
-    clash = match_company_for_client(current.get('user_id'), text)
-    if clash and int(clash) != int(company_id):
-        return None, 'This client already has a company with that name'
+    if str(current.get('name') or '').strip().lower() != text.lower():
+        clash = match_company_for_client(current.get('user_id'), text)
+        if clash and int(clash) != int(company_id):
+            return None, 'This client already has a company with that name'
     execute_db(
         "UPDATE companies SET name = ?, ch_checked_at = NULL WHERE id = ?;",
         (text, company_id),
     )
     sync_company_name_onto_linked_orders(company_id, text)
+    ch_number = normalize_company_number(companies_house_number)
+    if ch_number and looks_like_uk_company_number(ch_number):
+        profile, _profile_err = fetch_companies_house_profile(ch_number)
+        payload = profile or {'company_number': ch_number, 'name': text}
+        if apply_companies_house_profile_to_company(company_id, payload):
+            notify_company_registered(company_id)
+    else:
+        company_row = query_db(
+            "SELECT id, name, company_number, director, user_id, ch_checked_at FROM companies WHERE id = ?;",
+            (company_id,),
+            one=True,
+        )
+        if company_row:
+            sync_pending_company_from_companies_house(company_row)
     return query_db(f"SELECT {COMPANY_STAFF_SELECT} FROM companies WHERE id = ?;", (company_id,), one=True), None
+
+
+def relink_company_from_companies_house(company_id, name, companies_house_number):
+    current = query_db(f"SELECT {COMPANY_STAFF_SELECT} FROM companies WHERE id = ?;", (company_id,), one=True)
+    if not current:
+        return None, 'Company not found'
+    if is_pending_company_number(current.get('company_number')):
+        return None, 'Use Save name on pending companies instead.'
+    ch_number = normalize_company_number(companies_house_number)
+    if not ch_number or not looks_like_uk_company_number(ch_number):
+        return None, 'Select the official Companies House record first.'
+    text, error = normalize_pending_company_name(name)
+    if error:
+        return None, error
+    profile, profile_err = fetch_companies_house_profile(ch_number)
+    if not profile:
+        return None, profile_err or 'Could not load that Companies House record.'
+    if normalize_company_name_key(text) != normalize_company_name_key(profile.get('name')):
+        return None, 'The name must match the selected Companies House record.'
+    if not apply_companies_house_profile_to_company(company_id, profile):
+        return None, 'That Companies House number is already linked to another company card.'
+    company_row = query_db(f"SELECT {COMPANY_STAFF_SELECT} FROM companies WHERE id = ?;", (company_id,), one=True)
+    if company_row:
+        sync_registered_company_from_companies_house(company_row)
+        sync_company_name_onto_linked_orders(company_id, company_row.get('name'))
+        company_row = query_db(f"SELECT {COMPANY_STAFF_SELECT} FROM companies WHERE id = ?;", (company_id,), one=True)
+    return company_row, None
 
 
 def update_company_compliance(company_id, data):
@@ -2223,6 +3188,12 @@ def update_company_compliance(company_id, data):
         else:
             sets.append('psc_verified_at = ?')
             params.append(None)
+    if 'registered_email' in data:
+        email, email_err = normalize_registered_email(data.get('registered_email'))
+        if email_err:
+            return None, email_err
+        sets.append('registered_email = ?')
+        params.append(email or None)
     if sets:
         params.append(company_id)
         execute_db(f"UPDATE companies SET {', '.join(sets)} WHERE id = ?;", params)
@@ -2580,6 +3551,7 @@ def company_books_workspace(company_id, period_end=None, for_client=False):
             'company_number': company.get('company_number'),
             'director': people['director'],
             'director_email': people['director_email'],
+            'owner_name': people['owner_name'],
             'client_name': people['client_name'],
             'client_email': people['client_email'],
             'client_id': company.get('user_id'),
@@ -2774,6 +3746,7 @@ def list_accountancy_rows(user_id=None, for_client=False):
             'inc_date': company.get('inc_date'),
             'director': people['director'],
             'director_email': people['director_email'],
+            'owner_name': people['owner_name'],
             'client_name': people['client_name'],
             'client_email': people['client_email'],
             'client_id': company.get('user_id'),
@@ -2984,6 +3957,176 @@ def public_document(row, for_client=False):
     if not for_client:
         out['review_notes'] = src.get('review_notes')
     return out
+
+
+def client_greeting_label(now=None):
+    hour = (now or datetime.datetime.now()).hour
+    if hour < 12:
+        return 'Good morning'
+    if hour < 17:
+        return 'Good afternoon'
+    return 'Good evening'
+
+
+def build_client_pending_actions(uid):
+    actions = []
+    invoices = query_db(
+        """
+        SELECT i.id, i.invoice_number, i.status, i.total, i.order_id, o.order_number, o.service_name
+        FROM invoices i
+        LEFT JOIN orders o ON i.order_id = o.id
+        WHERE i.user_id = ? AND i.status IN ('Pending', 'Partial Paid', 'Overdue')
+        ORDER BY CASE i.status WHEN 'Overdue' THEN 0 WHEN 'Partial Paid' THEN 1 ELSE 2 END, i.due_date ASC
+        LIMIT 4;
+        """,
+        (uid,),
+    ) or []
+    for inv in invoices:
+        status = inv.get('status') or 'Pending'
+        number = inv.get('invoice_number') or 'Invoice'
+        if status == 'Overdue':
+            title = 'Payment overdue'
+            detail = f"{number} is overdue. Please settle the remaining balance."
+        elif status == 'Partial Paid':
+            title = 'Payment pending'
+            detail = f"{number} is partially paid. A balance is still outstanding."
+        else:
+            title = 'Payment pending'
+            detail = f"{number} is awaiting payment."
+        actions.append({
+            'kind': 'payment',
+            'icon': 'credit-card',
+            'title': title,
+            'detail': detail,
+            'action_label': 'Download invoice',
+            'view': 'client-invoices',
+            'order_id': None,
+            'document_id': None,
+        })
+
+    awaiting_orders = query_db(
+        """
+        SELECT id, order_number, service_name, status
+        FROM orders
+        WHERE user_id = ?
+          AND status IN ('Pending', 'Pending Verification')
+          AND service_name NOT LIKE '%Proxy%'
+          AND service_name NOT LIKE '%Registered Agent%'
+        ORDER BY created_at DESC
+        LIMIT 4;
+        """,
+        (uid,),
+    ) or []
+    for order in awaiting_orders:
+        service = (order.get('service_name') or 'your order').strip()
+        number = order.get('order_number') or 'Order'
+        if order.get('status') == 'Pending Verification':
+            title = 'Information required'
+            detail = f"{number} needs information before we can continue {service}."
+        else:
+            title = 'Order awaiting action'
+            detail = f"{number} is waiting for your next step on {service}."
+        actions.append({
+            'kind': 'order',
+            'icon': 'shopping-bag',
+            'title': title,
+            'detail': detail,
+            'action_label': 'View Order',
+            'view': None,
+            'order_id': order.get('id'),
+            'document_id': None,
+        })
+
+    docs = query_db(
+        """
+        SELECT id, name, status, company_id
+        FROM documents
+        WHERE user_id = ? AND client_visible = 1 AND status IN ('Requires Update', 'Rejected')
+        ORDER BY created_at DESC
+        LIMIT 3;
+        """,
+        (uid,),
+    ) or []
+    for doc in docs:
+        name = doc.get('name') or 'Document'
+        if doc.get('status') == 'Rejected':
+            detail = f"{name} was not accepted. Please upload a replacement."
+        else:
+            detail = f"Please upload the requested document for your order."
+        actions.append({
+            'kind': 'document',
+            'icon': 'file-warning',
+            'title': 'Document required',
+            'detail': detail,
+            'action_label': 'View document',
+            'view': 'client-documents',
+            'order_id': None,
+            'document_id': doc.get('id'),
+        })
+
+    overdue_addr = query_db(
+        "SELECT COUNT(*) as c FROM addresses WHERE user_id = ? AND expiry_date < date('now') AND status != 'Active';",
+        (uid,),
+        one=True,
+    )
+    if overdue_addr and overdue_addr.get('c'):
+        count = int(overdue_addr['c'])
+        actions.append({
+            'kind': 'compliance',
+            'icon': 'calendar-clock',
+            'title': 'Compliance deadline approaching',
+            'detail': f"{count} registered address {'service has' if count == 1 else 'services have'} expired and need{'s' if count == 1 else ''} renewal.",
+            'action_label': 'View addresses',
+            'view': 'client-addresses',
+            'order_id': None,
+            'document_id': None,
+        })
+
+    failed_id = query_db(
+        """
+        SELECT name FROM companies
+        WHERE user_id = ? AND identity_verified = 'Failed'
+        ORDER BY created_at DESC
+        LIMIT 2;
+        """,
+        (uid,),
+    ) or []
+    for company in failed_id:
+        cname = company.get('name') or 'your company'
+        actions.append({
+            'kind': 'information',
+            'icon': 'shield-alert',
+            'title': 'Information required',
+            'detail': f"Identity verification failed for {cname}. Please contact support.",
+            'action_label': 'Contact Support',
+            'view': 'client-support',
+            'order_id': None,
+            'document_id': None,
+        })
+
+    psc_due = query_db(
+        """
+        SELECT name FROM companies
+        WHERE user_id = ? AND psc_verified = 'Update required'
+        ORDER BY created_at DESC
+        LIMIT 2;
+        """,
+        (uid,),
+    ) or []
+    for company in psc_due:
+        cname = company.get('name') or 'your company'
+        actions.append({
+            'kind': 'information',
+            'icon': 'users',
+            'title': 'Information required',
+            'detail': f"PSC details need an update for {cname}.",
+            'action_label': 'View company',
+            'view': 'client-companies',
+            'order_id': None,
+            'document_id': None,
+        })
+
+    return actions[:6]
 
 
 ALLOWED_DOCUMENT_EXTS = ('.pdf', '.png', '.jpg', '.jpeg', '.doc', '.docx', '.zip')
@@ -3341,12 +4484,12 @@ def resolve_client_document_links(client_id, company_id, order_id):
     return {'client': client, 'company': company, 'order': order}, None
 
 
-def notify_client_document_uploaded(client, doc_name, client_message=None):
+def notify_client_document_uploaded(client, doc_name, client_message=None, company_name=None, order_number=None):
     extra = (client_message or '').strip()
-    message = 'A new document is ready in your Brixen account. Please sign in on the website to view it.'
+    message = 'Brixen Consultants has uploaded a new document to your client portal. Log in to view and download it.'
     if extra:
         message = f"{message} {extra}"
-    subject, email_text, email_html = build_client_document_email(client, doc_name, client_message)
+    subject, email_text, email_html = build_client_document_email(client, doc_name, client_message, company_name=company_name, order_number=order_number)
     return notify_client(
         client,
         'New document available',
@@ -3379,6 +4522,24 @@ def public_line_item(row, for_client=False, include_finance=True):
             'category_id': src.get('category_id'),
         })
     return item
+
+
+def normalize_retail_price(amount):
+    """Round up to the next whole pound when the price ends in 9 (159.99->160, 149->150)."""
+    try:
+        value = round(float(amount or 0), 2)
+    except (TypeError, ValueError):
+        return 0.0
+    if value <= 0:
+        return value
+    import math
+    cents = int(round(value * 100))
+    pounds_whole = int(value)
+    if cents % 10 == 9:
+        return float(math.ceil(value))
+    if value == pounds_whole and pounds_whole % 10 == 9:
+        return float(pounds_whole + 1)
+    return value
 
 
 def parse_line_items_from_payload(o_data):
@@ -3417,6 +4578,10 @@ def parse_line_items_from_payload(o_data):
                 total = float(total) if total is not None else None
             except (TypeError, ValueError):
                 total = None
+            if unit is not None:
+                unit = normalize_retail_price(unit)
+            if total is not None:
+                total = normalize_retail_price(total)
             parsed.append({
                 'woocommerce_product_id': item.get('product_id') or item.get('woocommerce_product_id'),
                 'woocommerce_variation_id': item.get('variation_id') or item.get('woocommerce_variation_id'),
@@ -3462,6 +4627,10 @@ def replace_order_line_items(order_id, items, order_price=None, order_total=None
             unit = round(float(order_price) / count, 2)
         if total is None and order_total is not None:
             total = round(float(order_total) / count, 2)
+        if unit is not None:
+            unit = normalize_retail_price(unit)
+        if total is not None:
+            total = normalize_retail_price(total)
         execute_db("""
             INSERT INTO order_line_items (
                 order_id, woocommerce_product_id, woocommerce_variation_id, sku,
@@ -3557,6 +4726,68 @@ def match_company_for_client(client_id, company_name, exclude_id=None):
         elif company_name_keys_are_near_duplicate(key, needle):
             near.append(row)
     return _pick_company_match(same) or _pick_company_match(near)
+
+
+def parse_order_checkout_fields(row):
+    raw = (row or {}).get('checkout_form_json')
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, dict)]
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if isinstance(parsed, list):
+        return [item for item in parsed if isinstance(item, dict)]
+    return []
+
+
+def match_company_for_client_by_number(client_id, company_number):
+    number = normalize_company_number(company_number)
+    if not looks_like_uk_company_number(number) or is_pending_company_number(number):
+        return None
+    if client_id:
+        row = query_db(
+            "SELECT id FROM companies WHERE user_id = ? AND UPPER(REPLACE(COALESCE(company_number,''), ' ', '')) = ?;",
+            (client_id, number),
+            one=True,
+        )
+        if row:
+            return row['id']
+    row = query_db(
+        "SELECT id FROM companies WHERE UPPER(REPLACE(COALESCE(company_number,''), ' ', '')) = ? LIMIT 1;",
+        (number,),
+        one=True,
+    )
+    return row['id'] if row else None
+
+
+def ensure_order_company_link(order_row, fields=None):
+    order_id = (order_row or {}).get('id')
+    current_id = (order_row or {}).get('company_id')
+    if current_id:
+        return current_id
+    if not order_id:
+        return None
+    fields = fields if fields is not None else parse_order_checkout_fields(order_row)
+    user_id = (order_row or {}).get('user_id')
+    number = checkout_form_company_number(fields)
+    name = company_name_from_checkout_fields(fields)
+    company_id = match_company_for_client_by_number(user_id, number) if number else None
+    if not company_id and name:
+        company_id = match_company_for_client(user_id, name)
+    if company_id:
+        attach_order_to_company(order_id, company_id)
+        return company_id
+    return None
+
+
+def order_display_company_name(row):
+    name = str((row or {}).get('company_name') or '').strip()
+    if name:
+        return name
+    return company_name_from_checkout_fields(parse_order_checkout_fields(row))
 
 
 def attach_order_to_company(order_id, company_id):
@@ -4091,6 +5322,120 @@ def parse_company_number_list(text):
     return numbers
 
 
+def extract_document_text_and_metadata(filename, b64_content):
+    file_bytes, decode_err = decode_document_base64(b64_content)
+    if decode_err or not file_bytes:
+        return {'error': decode_err or 'Empty file'}
+    
+    filename_clean = (filename or 'document.pdf').strip()
+    ext = os.path.splitext(filename_clean)[1].lower()
+    
+    raw_text = ''
+    try:
+        raw_text = file_bytes.decode('utf-8', errors='ignore')
+    except Exception:
+        raw_text = ''
+        
+    combined_text = f"{filename_clean}\n{raw_text}"
+    
+    category = 'Company Documents'
+    lower_text = combined_text.lower()
+    if any(k in lower_text for k in ('statement', 'bank', 'account', 'balance', 'hsbc', 'barclays', 'lloyds', 'natwest', 'tide', 'revolut', 'monzo')):
+        category = 'Bank statement'
+    elif any(k in lower_text for k in ('passport', 'cnic', 'id card', 'driving licence', 'identity', 'driving license')):
+        category = 'ID Document'
+    elif any(k in lower_text for k in ('utility', 'bill', 'council tax', 'tenancy', 'proof of address', 'water', 'electric')):
+        category = 'Proof of Address'
+    elif any(k in lower_text for k in ('certificate of incorporation', 'companies house', 'incorporation', 'articles of association', 'utr', 'vat', 'annual return', 'confirmation statement')):
+        category = 'Certificate of Incorporation'
+        
+    person_name = None
+    name_match = re.search(r'(?:Name|Director|Client|Customer|Holder|Mr|Mrs|Ms|Dr)\.?\s*[:\-]?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})', combined_text)
+    if name_match:
+        person_name = name_match.group(1).strip()
+    else:
+        fn_words = re.findall(r'[A-Z][a-z]+', filename_clean.replace('_', ' ').replace('-', ' '))
+        if len(fn_words) >= 2:
+            person_name = ' '.join(fn_words[:3])
+
+    dob = None
+    dob_match = re.search(r'(?:DOB|Date of Birth|Birth Date|Born)\.?\s*[:\-]?\s*(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2}|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{2,4})', combined_text, re.IGNORECASE)
+    if dob_match:
+        dob = dob_match.group(1).strip()
+
+    company_number = None
+    comp_num_match = re.search(r'(?:Company No|Company Number|Co\.? No\.?|Registration No|Reg No)\.?\s*[:\-]?\s*([A-Za-z0-9]{6,8})', combined_text, re.IGNORECASE)
+    if comp_num_match:
+        company_number = normalize_company_number(comp_num_match.group(1))
+
+    company_name = None
+    comp_name_match = re.search(r'([A-Z0-9\s\,\.\&\-]{3,60}\s+(?:LTD|LIMITED|LLP|PLC|HOLDINGS|SERVICES|SOLUTIONS))', combined_text, re.IGNORECASE)
+    if comp_name_match:
+        company_name = comp_name_match.group(1).strip()
+
+    return {
+        'file_bytes': file_bytes,
+        'filename': filename_clean,
+        'ext': ext,
+        'category': category,
+        'extracted_name': person_name,
+        'extracted_dob': dob,
+        'extracted_company_number': company_number,
+        'extracted_company_name': company_name,
+    }
+
+
+def auto_import_companies_house_from_intake(company_name, company_number, client_user_id=None):
+    ch_num = normalize_company_number(company_number) if company_number else None
+    if not ch_num and company_name:
+        matches, _err = search_companies_house(company_name)
+        if matches and len(matches) > 0:
+            ch_num = matches[0].get('company_number')
+            
+    uid = client_user_id or 1
+    if not ch_num:
+        if company_name:
+            existing_by_name = query_db("SELECT * FROM companies WHERE lower(name) = lower(?);", (company_name.strip(),), one=True)
+            if existing_by_name:
+                if client_user_id and not existing_by_name.get('user_id'):
+                    execute_db("UPDATE companies SET user_id = ? WHERE id = ?;", (client_user_id, existing_by_name['id']))
+                return query_db("SELECT * FROM companies WHERE id = ?;", (existing_by_name['id'],), one=True)
+            comp_id = execute_db("""
+                INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, created_at, updated_at)
+                VALUES (?, ?, ?, 'Active', DATE('now'), 'Director', 'United Kingdom', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+            """, (uid, company_name.strip(), f"REG-{secrets.token_hex(4).upper()}"))
+            return query_db("SELECT * FROM companies WHERE id = ?;", (comp_id,), one=True)
+        return None
+        
+    existing = query_db("SELECT * FROM companies WHERE company_number = ?;", (ch_num,), one=True)
+    if existing:
+        if client_user_id and not existing.get('user_id'):
+            execute_db("UPDATE companies SET user_id = ? WHERE id = ?;", (client_user_id, existing['id']))
+        return query_db("SELECT * FROM companies WHERE id = ?;", (existing['id'],), one=True)
+        
+    profile, err = fetch_companies_house_profile(ch_num)
+    if profile:
+        comp_id = execute_db("""
+            INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 'Director', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+        """, (
+            uid,
+            profile.get('name') or company_name or 'Companies House Entity',
+            ch_num,
+            profile.get('status') or 'Active',
+            profile.get('incorporation_date') or '2026-01-01',
+            profile.get('registered_address') or 'United Kingdom'
+        ))
+        apply_companies_house_profile_to_company(comp_id, profile)
+        return query_db("SELECT * FROM companies WHERE id = ?;", (comp_id,), one=True)
+        
+    comp_id = execute_db("""
+        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, created_at, updated_at)
+        VALUES (?, ?, ?, 'Active', DATE('now'), 'Director', 'United Kingdom', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+    """, (uid, company_name or f"Company #{ch_num}", ch_num))
+    return query_db("SELECT * FROM companies WHERE id = ?;", (comp_id,), one=True)
+
+
 def companies_house_registered_office(address):
     if not isinstance(address, dict):
         return 'United Kingdom'
@@ -4106,6 +5451,164 @@ def companies_house_registered_office(address):
     return text or 'United Kingdom'
 
 
+def companies_house_iso_date(value):
+    text = str(value or '').strip()[:10]
+    if len(text) == 10 and text[4] == '-' and text[7] == '-':
+        try:
+            datetime.date.fromisoformat(text)
+            return text
+        except ValueError:
+            return ''
+    return ''
+
+
+def format_uk_long_date(value):
+    text = companies_house_iso_date(value)
+    if not text:
+        return ''
+    day = datetime.date.fromisoformat(text)
+    return f"{day.day} {day.strftime('%B %Y')}"
+
+
+def is_companies_house_default_address(office, postcode=None):
+    blob = ' '.join(str(part or '') for part in (office, postcode)).lower()
+    compact = re.sub(r'[^a-z0-9]', '', blob)
+    if 'companieshousedefaultaddress' in compact:
+        return True
+    if 'pobox4385' in compact and 'cf148lh' in compact:
+        return True
+    return False
+
+
+def companies_house_date_is_due(due_date, today=None, *, overdue_only=False):
+    due = companies_house_iso_date(due_date)
+    if not due:
+        return False
+    day = (today or datetime.date.today()).isoformat()
+    return due < day if overdue_only else due <= day
+
+
+def companies_house_flag_due(flag, due_date, today=None, *, overdue_only=False):
+    if flag:
+        return True
+    return companies_house_date_is_due(due_date, today=today, overdue_only=overdue_only)
+
+
+def companies_house_strike_off_proposed(status=None, status_detail=None):
+    blob = f"{status or ''} {status_detail or ''}".lower().replace('_', '-')
+    return 'strike-off' in blob or 'strike off' in blob
+
+
+def companies_house_attention_issues(source, today=None):
+    src = source if isinstance(source, dict) else {}
+    today = today or datetime.date.today()
+    office = str(src.get('reg_office') or src.get('registered_office') or '').strip()
+    postcode = str(src.get('postcode') or '').strip()
+    accounts_due = companies_house_iso_date(src.get('accounts_next_due'))
+    confirmation_due = companies_house_iso_date(src.get('confirmation_next_due'))
+    accounts_overdue = companies_house_flag_due(
+        src.get('accounts_overdue'), accounts_due, today=today, overdue_only=True
+    )
+    confirmation_pending = companies_house_flag_due(
+        src.get('confirmation_overdue') or src.get('confirmation_pending'),
+        confirmation_due,
+        today=today,
+        overdue_only=False,
+    )
+    issues = []
+    if accounts_overdue:
+        issues.append({
+            'code': 'accounts_overdue',
+            'title': 'Accounts overdue',
+            'detail': f"Due {format_uk_long_date(accounts_due)}" if accounts_due else 'File the overdue accounts at Companies House.',
+            'due': accounts_due,
+        })
+    if confirmation_pending:
+        overdue = companies_house_flag_due(
+            src.get('confirmation_overdue'), confirmation_due, today=today, overdue_only=True
+        )
+        issues.append({
+            'code': 'confirmation_pending',
+            'title': 'Confirmation statement overdue' if overdue else 'Confirmation statement pending',
+            'detail': f"Due {format_uk_long_date(confirmation_due)}" if confirmation_due else 'File the confirmation statement at Companies House.',
+            'due': confirmation_due,
+        })
+    if is_companies_house_default_address(office, postcode):
+        issues.append({
+            'code': 'default_address',
+            'title': 'Default Companies House address',
+            'detail': 'Change the registered office away from the Companies House default address in Cardiff.',
+        })
+    if companies_house_strike_off_proposed(src.get('status'), src.get('status_detail')):
+        issues.append({
+            'code': 'strike_off',
+            'title': 'Strike-off proposed',
+            'detail': 'Companies House has proposed to strike this company off the register.',
+        })
+    return issues
+
+
+def companies_house_attention_fingerprint(issues):
+    codes = sorted({str((item or {}).get('code') or '').strip() for item in (issues or []) if (item or {}).get('code')})
+    return '|'.join(codes)
+
+
+def parse_company_attention_json(raw):
+    text = str(raw or '').strip()
+    if not text:
+        return None
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(data, list):
+        return None
+    issues = []
+    for item in data:
+        if not isinstance(item, dict) or not item.get('code'):
+            continue
+        issues.append({
+            'code': str(item.get('code') or '').strip(),
+            'title': str(item.get('title') or '').strip(),
+            'detail': str(item.get('detail') or '').strip(),
+            'due': companies_house_iso_date(item.get('due')),
+        })
+    return issues
+
+
+def company_attention_issues(company):
+    src = company if isinstance(company, dict) else {}
+    stored = parse_company_attention_json(src.get('ch_attention_json'))
+    issues = list(stored or [])
+    seen = {item.get('code') for item in issues}
+    for item in companies_house_attention_issues(src):
+        if item.get('code') in seen:
+            continue
+        issues.append(item)
+        seen.add(item.get('code'))
+    return issues
+
+
+def companies_house_attention_points(issues):
+    points = []
+    for item in issues or []:
+        code = str((item or {}).get('code') or '')
+        title = str((item or {}).get('title') or '').strip()
+        due = format_uk_long_date((item or {}).get('due'))
+        if code == 'accounts_overdue':
+            points.append(f"⚠️ Accounts overdue{f' — due {due}' if due else ''}")
+        elif code == 'confirmation_pending':
+            label = title or 'Confirmation statement pending'
+            points.append(f"📄 {label}{f' — due {due}' if due else ''}")
+        elif code == 'default_address':
+            points.append('🏠 Registered office is the Companies House default address in Cardiff')
+        elif code == 'strike_off':
+            points.append('⚠️ Companies House has proposed to strike this company off')
+        elif title:
+            points.append(f"⚠️ {title}")
+    return points
+
+
 def public_companies_house_profile(data):
     if not isinstance(data, dict):
         return None
@@ -4113,12 +5616,31 @@ def public_companies_house_profile(data):
     number = str(data.get('company_number') or '').strip()
     if not name or not number:
         return None
+    accounts = data.get('accounts') if isinstance(data.get('accounts'), dict) else {}
+    confirmation = data.get('confirmation_statement') if isinstance(data.get('confirmation_statement'), dict) else {}
+    office = companies_house_registered_office(data.get('registered_office_address'))
+    postcode = str((data.get('registered_office_address') or {}).get('postal_code') or '').strip()
+    accounts_due = companies_house_iso_date(accounts.get('next_due'))
+    confirmation_due = companies_house_iso_date(confirmation.get('next_due'))
     return {
         'name': name,
         'company_number': number,
         'status': str(data.get('company_status') or '').strip(),
+        'status_detail': str(data.get('company_status_detail') or '').strip(),
         'inc_date': str(data.get('date_of_creation') or '')[:10],
-        'reg_office': companies_house_registered_office(data.get('registered_office_address')),
+        'reg_office': office,
+        'sic_codes': ', '.join(
+            str(code).strip() for code in (data.get('sic_codes') or []) if str(code).strip()
+        ),
+        'postcode': postcode,
+        'company_type': str(data.get('type') or '').strip(),
+        'registered_email': companies_house_email_from_data(data),
+        'accounts_next_due': accounts_due,
+        'accounts_overdue': companies_house_flag_due(accounts.get('overdue'), accounts_due, overdue_only=True),
+        'confirmation_next_due': confirmation_due,
+        'confirmation_overdue': companies_house_flag_due(confirmation.get('overdue'), confirmation_due, overdue_only=True),
+        'confirmation_pending': companies_house_flag_due(confirmation.get('overdue'), confirmation_due, overdue_only=False),
+        'default_address': is_companies_house_default_address(office, postcode),
     }
 
 
@@ -4146,10 +5668,10 @@ def format_companies_house_officer_name(name):
     return text
 
 
-def fetch_companies_house_primary_director(company_number):
+def fetch_companies_house_active_directors(company_number):
     number = normalize_company_number(company_number)
     if not number:
-        return None
+        return []
     queries = (
         urllib.parse.urlencode({'items_per_page': 100, 'register_type': 'directors'}),
         urllib.parse.urlencode({'items_per_page': 100}),
@@ -4165,16 +5687,328 @@ def fetch_companies_house_primary_director(company_number):
                 _CH_REGISTERED_SYNC_BLOCKED = True
                 _CH_PENDING_SYNC_BLOCKED = True
             continue
+        names = []
+        seen = set()
         for item in payload.get('items') or []:
             if not isinstance(item, dict) or item.get('resigned_on'):
                 continue
             role = str(item.get('officer_role') or '').lower()
             if role and 'director' not in role:
                 continue
-            name = format_companies_house_officer_name(item.get('name'))
-            if name:
-                return name
-    return None
+            pretty = pretty_director_name(format_companies_house_officer_name(item.get('name')))
+            if not pretty or pretty.lower() == 'director':
+                continue
+            key = pretty.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            names.append(pretty)
+        if names:
+            return names
+    return []
+
+
+def fetch_companies_house_primary_director(company_number):
+    names = fetch_companies_house_active_directors(company_number)
+    return names[0] if names else None
+
+
+def company_directors_list(company):
+    company_id = (company or {}).get('id')
+    names = []
+    seen = set()
+
+    def _add(raw):
+        pretty = pretty_director_name(raw)
+        if not pretty or pretty.lower() == 'director':
+            return
+        key = pretty.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        names.append(pretty)
+
+    if company_id:
+        rows = query_db(
+            "SELECT name FROM company_directors WHERE company_id = ? ORDER BY id ASC;",
+            (company_id,),
+        ) or []
+        for row in rows:
+            _add((row or {}).get('name'))
+    if names:
+        return names
+    raw = str((company or {}).get('director') or '').strip()
+    if raw:
+        for part in re.split(r'\s*;\s*|\s*·\s*|\n+', raw):
+            _add(part)
+    return names
+
+
+def sync_company_directors_from_list(company_id, names):
+    cleaned = []
+    seen = set()
+    for raw in names or []:
+        pretty = pretty_director_name(raw)
+        if not pretty or pretty.lower() == 'director':
+            continue
+        key = pretty.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(pretty)
+    if not company_id or not cleaned:
+        return []
+    execute_db("DELETE FROM company_directors WHERE company_id = ?;", (company_id,))
+    today = datetime.date.today().isoformat()
+    for name in cleaned:
+        execute_db(
+            """
+            INSERT INTO company_directors (company_id, name, role, nationality, appointed_date)
+            VALUES (?, ?, 'Director', 'British', ?);
+            """,
+            (company_id, name, today),
+        )
+    execute_db(
+        "UPDATE companies SET director = ?, ch_checked_at = CURRENT_TIMESTAMP WHERE id = ?;",
+        (cleaned[0], company_id),
+    )
+    return cleaned
+
+
+def checkout_value_is_blank(value, *, address=False):
+    text = str(value or '').strip()
+    if not text or text in {'—', '-', '–'}:
+        return True
+    low = text.lower()
+    if low in {'n/a', 'na', 'none', 'null', 'unknown', 'director'}:
+        return True
+    if address and low in {'united kingdom', 'uk', 'gb', 'great britain', 'england', 'london'}:
+        return True
+    return False
+
+
+CHECKOUT_COMPANY_NUMBER_KEYS = frozenset({
+    'company number',
+    'companies house number',
+    'company registration number',
+    'registration number',
+    'registered number',
+    'ch number',
+})
+CHECKOUT_REGISTERED_ADDRESS_KEYS = frozenset({
+    'registered address',
+    'registered office',
+    'registered office address',
+    'registered company address',
+})
+
+
+def checkout_form_company_number(fields, company=None):
+    number = normalize_company_number((company or {}).get('company_number'))
+    if looks_like_uk_company_number(number) and not is_pending_company_number(number):
+        return number
+    for field in fields or []:
+        if not isinstance(field, dict):
+            continue
+        key = checkout_field_key(field.get('label'))
+        if key in CHECKOUT_COMPANY_NUMBER_KEYS:
+            found = normalize_company_number(field.get('value'))
+            if looks_like_uk_company_number(found) and not is_pending_company_number(found):
+                return found
+    return ''
+
+
+def companies_house_snapshot(company_number):
+    number = normalize_company_number(company_number)
+    if not looks_like_uk_company_number(number) or is_pending_company_number(number):
+        return None
+    if not companies_house_api_key():
+        return None
+    global _CH_REGISTERED_SYNC_BLOCKED
+    if _CH_REGISTERED_SYNC_BLOCKED:
+        return None
+    profile, error = fetch_companies_house_profile(number)
+    if error:
+        err = str(error or '')
+        if 'rejected' in err or 'rate limit' in err:
+            _CH_REGISTERED_SYNC_BLOCKED = True
+        return None
+    directors = fetch_companies_house_active_directors(number)
+    director = directors[0] if directors else ''
+    status = companies_house_status_value((profile or {}).get('status'), (profile or {}).get('status_detail'))
+    office = str((profile or {}).get('reg_office') or '').strip()
+    if office.lower() in {'united kingdom', 'uk'}:
+        office = ''
+    return {
+        'name': str((profile or {}).get('name') or '').strip(),
+        'company_number': number,
+        'status': status,
+        'status_detail': str((profile or {}).get('status_detail') or '').strip(),
+        'inc_date': str((profile or {}).get('inc_date') or '')[:10],
+        'reg_office': office,
+        'sic_codes': str((profile or {}).get('sic_codes') or '').strip(),
+        'director': director,
+        'directors': directors,
+        'postcode': str((profile or {}).get('postcode') or '').strip(),
+        'company_type': str((profile or {}).get('company_type') or '').strip(),
+        'registered_email': str((profile or {}).get('registered_email') or '').strip(),
+        'accounts_next_due': companies_house_iso_date((profile or {}).get('accounts_next_due')),
+        'accounts_overdue': bool((profile or {}).get('accounts_overdue')),
+        'confirmation_next_due': companies_house_iso_date((profile or {}).get('confirmation_next_due')),
+        'confirmation_overdue': bool((profile or {}).get('confirmation_overdue')),
+        'confirmation_pending': bool((profile or {}).get('confirmation_pending')),
+        'default_address': bool((profile or {}).get('default_address')),
+    }
+
+
+def fill_company_blanks_from_snapshot(company, snapshot):
+    if not company or not snapshot or not company.get('id'):
+        return False
+    updates = []
+    params = []
+    number = snapshot.get('company_number')
+    if number and is_pending_company_number(company.get('company_number')):
+        updates.append('company_number = ?')
+        params.append(number)
+    if snapshot.get('name') and checkout_value_is_blank(company.get('name')):
+        updates.append('name = ?')
+        params.append(snapshot['name'])
+    if snapshot.get('status') and checkout_value_is_blank(company.get('status')):
+        updates.append('status = ?')
+        params.append(snapshot['status'])
+    inc = str(snapshot.get('inc_date') or '')[:10]
+    if len(inc) >= 10 and checkout_value_is_blank(company.get('inc_date')):
+        updates.append('inc_date = ?')
+        params.append(inc)
+    if snapshot.get('reg_office') and checkout_value_is_blank(company.get('reg_office'), address=True):
+        updates.append('reg_office = ?')
+        params.append(snapshot['reg_office'])
+    if snapshot.get('director') and looks_like_placeholder_director(company.get('director'), company.get('name')):
+        updates.append('director = ?')
+        params.append(snapshot['director'])
+    if snapshot.get('sic_codes'):
+        updates.append('sic_codes = ?')
+        params.append(snapshot['sic_codes'])
+    email = str(snapshot.get('registered_email') or '').strip()
+    if email and checkout_value_is_blank(company.get('registered_email')):
+        updates.append('registered_email = ?')
+        params.append(email)
+    if updates:
+        updates.append('ch_checked_at = CURRENT_TIMESTAMP')
+        params.append(company['id'])
+        execute_db(f"UPDATE companies SET {', '.join(updates)} WHERE id = ?;", tuple(params))
+        if snapshot.get('director') and looks_like_placeholder_director(company.get('director'), company.get('name')):
+            persist_official_director(company['id'], snapshot['director'])
+    persist_companies_house_filing_state(company, snapshot)
+    return bool(updates)
+
+
+def fill_checkout_blanks_from_companies_house(order_row, fields):
+    fields = [dict(field) for field in (fields or []) if isinstance(field, dict)]
+    company = None
+    company_id = (order_row or {}).get('company_id')
+    if not company_id:
+        company_id = ensure_order_company_link(order_row, fields)
+        if company_id and isinstance(order_row, dict):
+            order_row['company_id'] = company_id
+    if company_id:
+        company = query_db(
+            "SELECT id, name, company_number, status, inc_date, director, reg_office FROM companies WHERE id = ?;",
+            (company_id,),
+            one=True,
+        )
+    number = checkout_form_company_number(fields, company)
+    if not number:
+        return fields
+    by_key = {}
+    for field in fields:
+        by_key[checkout_field_key(field.get('label'))] = field.get('value')
+    needs_live = (
+        checkout_value_is_blank(by_key.get('sic code'))
+        or checkout_value_is_blank(
+            by_key.get('registered address') or by_key.get('registered office') or by_key.get('registered office address'),
+            address=True,
+        )
+        or checkout_value_is_blank(by_key.get('incorporation date'))
+        or checkout_value_is_blank(by_key.get('company status'))
+        or checkout_value_is_blank(by_key.get('company number'))
+        or (
+            checkout_value_is_blank(by_key.get('director name'))
+            and looks_like_placeholder_director((company or {}).get('director'), (company or {}).get('name'))
+        )
+    )
+    snapshot = companies_house_snapshot(number) if needs_live else None
+    if not snapshot:
+        if company:
+            snapshot = {
+                'name': str(company.get('name') or '').strip(),
+                'company_number': number,
+                'status': str(company.get('status') or '').strip(),
+                'inc_date': str(company.get('inc_date') or '')[:10],
+                'reg_office': str(company.get('reg_office') or '').strip(),
+                'sic_codes': '',
+                'director': official_company_director(company) or '',
+            }
+            if checkout_value_is_blank(snapshot.get('reg_office'), address=True):
+                snapshot['reg_office'] = ''
+        else:
+            return fields
+    values = {
+        'company number': snapshot.get('company_number') or number,
+        'desired company name': snapshot.get('name') or '',
+        'company name': snapshot.get('name') or '',
+        'registered address': snapshot.get('reg_office') or '',
+        'registered office': snapshot.get('reg_office') or '',
+        'registered office address': snapshot.get('reg_office') or '',
+        'sic code': snapshot.get('sic_codes') or '',
+        'incorporation date': snapshot.get('inc_date') or '',
+        'company status': snapshot.get('status') or '',
+        'director name': snapshot.get('director') or '',
+    }
+    owner = get_company_owner_for_order(order_row, fields) if order_row else {}
+    owner_name = str((owner or {}).get('full_name') or '').strip()
+    if owner_name and not looks_like_placeholder_director(owner_name, snapshot.get('name')):
+        values['director name'] = ''
+    changed = False
+    seen = set()
+    for field in fields:
+        key = checkout_field_key(field.get('label'))
+        seen.add(key)
+        fill_value = values.get(key) or ''
+        if not fill_value:
+            continue
+        address_field = key in CHECKOUT_REGISTERED_ADDRESS_KEYS
+        if checkout_value_is_blank(field.get('value'), address=address_field):
+            field['value'] = fill_value
+            changed = True
+    official_fields = [
+        ('company number', 'Company number'),
+        ('registered address', 'Registered address'),
+        ('sic code', 'SIC code'),
+        ('incorporation date', 'Incorporation date'),
+        ('company status', 'Company status'),
+        ('director name', 'Director name'),
+    ]
+    for key, label in official_fields:
+        if key in seen:
+            continue
+        fill_value = values.get(key) or ''
+        if not fill_value:
+            continue
+        fields.append({'label': label, 'value': fill_value})
+        seen.add(key)
+        changed = True
+    if company:
+        fill_company_blanks_from_snapshot(company, snapshot)
+    if changed and (order_row or {}).get('id'):
+        execute_db(
+            "UPDATE orders SET checkout_form_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?;",
+            (json.dumps(fields), order_row['id']),
+        )
+        if snapshot.get('director') and looks_like_placeholder_director(owner_name, snapshot.get('name')):
+            persist_official_director(company_id, snapshot['director'])
+            upsert_company_owner_from_fields(order_row['id'], company_id, fields)
+    return fields
 
 
 def companies_house_company_url(company_number):
@@ -4189,6 +6023,182 @@ def companies_house_filing_history_url(company_number):
     if not number:
         return 'https://find-and-update.company-information.service.gov.uk'
     return f"{companies_house_company_url(number)}/filing-history"
+
+
+def persist_companies_house_filing_state(company, snapshot, send_email=True):
+    company_id = (company or {}).get('id')
+    if not company_id or is_pending_company_number((snapshot or {}).get('company_number') or (company or {}).get('company_number')):
+        return []
+    source = dict(company or {})
+    if isinstance(snapshot, dict):
+        for key, value in snapshot.items():
+            if key == 'directors':
+                continue
+            if value in (None, ''):
+                continue
+            source[key] = value
+        for key in ('accounts_overdue', 'confirmation_overdue', 'confirmation_pending', 'default_address'):
+            if key in snapshot:
+                source[key] = snapshot.get(key)
+        if snapshot.get('reg_office'):
+            source['reg_office'] = snapshot['reg_office']
+        if snapshot.get('status'):
+            source['status'] = snapshot['status']
+        if snapshot.get('status_detail') is not None:
+            source['status_detail'] = snapshot.get('status_detail')
+    issues = companies_house_attention_issues(source)
+    accounts_due = companies_house_iso_date(source.get('accounts_next_due'))
+    confirmation_due = companies_house_iso_date(source.get('confirmation_next_due'))
+    accounts_overdue = 1 if any(item.get('code') == 'accounts_overdue' for item in issues) else 0
+    confirmation_overdue = 1 if any(item.get('code') == 'confirmation_pending' for item in issues) else 0
+    status = str(source.get('status') or (company or {}).get('status') or 'Active').strip() or 'Active'
+    office = str(source.get('reg_office') or (company or {}).get('reg_office') or '').strip()
+    execute_db(
+        """
+        UPDATE companies
+        SET accounts_next_due = ?, accounts_overdue = ?, confirmation_next_due = ?,
+            confirmation_overdue = ?, ch_attention_json = ?, status = ?,
+            reg_office = CASE WHEN ? != '' THEN ? ELSE reg_office END,
+            ch_checked_at = CURRENT_TIMESTAMP
+        WHERE id = ?;
+        """,
+        (
+            accounts_due or None,
+            accounts_overdue,
+            confirmation_due or None,
+            confirmation_overdue,
+            json.dumps(issues),
+            status,
+            office,
+            office,
+            company_id,
+        ),
+    )
+    company['ch_attention_json'] = json.dumps(issues)
+    company['accounts_next_due'] = accounts_due
+    company['accounts_overdue'] = accounts_overdue
+    company['confirmation_next_due'] = confirmation_due
+    company['confirmation_overdue'] = confirmation_overdue
+    if office:
+        company['reg_office'] = office
+    company['status'] = status
+    if send_email:
+        notify_companies_house_attention(company_id, issues)
+    return issues
+
+
+def build_companies_house_attention_email(client, company, issues, greeting_name=None):
+    name = str((company or {}).get('name') or 'Your company').strip() or 'Your company'
+    number = str((company or {}).get('company_number') or '').strip()
+    extra = '\n'.join(companies_house_attention_points(issues))
+    return build_client_notification_email(
+        client,
+        f'Action needed for {name} at Companies House',
+        f'Companies House currently shows an issue that needs fixing for {name}. Please action this now so the company stays in good standing.',
+        subject=f'Action needed for {name} at Companies House',
+        badge='Attention required',
+        greeting_name=greeting_name,
+        extra_message=extra,
+        detail_title='Company number',
+        detail_value=number,
+        cta_label='View on Companies House',
+        cta_url=companies_house_company_url(number),
+        extra_cta_label='Open Client Panel',
+        extra_cta_url=client_website_url(),
+        layout='activity',
+        footer_note='This email is about a Companies House filing or registered office issue on your Brixen Consultants company.',
+    )
+
+
+def notify_companies_house_attention(company_id, issues=None, email_to=None, force=False):
+    company = query_db(f"SELECT {COMPANY_STAFF_SELECT} FROM companies WHERE id = ?;", (company_id,), one=True)
+    if not company or is_pending_company_number(company.get('company_number')):
+        return {'notification_created': False, 'email_sent': False, 'email_status': 'Not registered'}
+    issues = list(issues if issues is not None else company_attention_issues(company))
+    fingerprint = companies_house_attention_fingerprint(issues)
+    if not fingerprint:
+        execute_db(
+            "UPDATE companies SET ch_alert_fingerprint = '', ch_attention_json = ? WHERE id = ?;",
+            (json.dumps([]), company_id),
+        )
+        return {'notification_created': False, 'email_sent': False, 'email_status': 'No issues'}
+    current_fp = str(company.get('ch_alert_fingerprint') or '').strip()
+    if not force and current_fp == fingerprint:
+        return {'notification_created': False, 'email_sent': False, 'email_status': 'Already sent'}
+    client = resolve_client_user(company.get('user_id'))
+    if not client:
+        return {'notification_created': False, 'email_sent': False, 'email_status': 'Client not found'}
+    form_email = email_to or company_form_email(company['id'], fallback=client.get('email'))
+    if not form_email:
+        return {'notification_created': False, 'email_sent': False, 'email_status': 'No form email'}
+    director_name = official_company_director(company) or client.get('full_name') or 'there'
+    email_subject, email_text, email_html = build_companies_house_attention_email(
+        client,
+        company,
+        issues,
+        greeting_name=director_name,
+    )
+    result = notify_client(
+        client,
+        f"Action needed for {company.get('name')} at Companies House",
+        f"Companies House currently shows an issue that needs fixing for {company.get('name')}. Please action this now so the company stays in good standing.",
+        'warning',
+        '/companies',
+        email_subject=email_subject,
+        email_text=email_text,
+        email_html=email_html,
+        email_to=form_email,
+    )
+    if result.get('notification_created') or result.get('email_sent') or force:
+        execute_db(
+            "UPDATE companies SET ch_alert_fingerprint = ?, ch_alert_sent_at = CURRENT_TIMESTAMP WHERE id = ?;",
+            (fingerprint, company_id),
+        )
+    return {
+        **result,
+        'email_to': form_email,
+        'company_number': company.get('company_number'),
+        'issues': [item.get('code') for item in issues],
+    }
+
+
+def send_companies_house_attention_preview_email(recipient, company=None, issues=None):
+    recipient = str(recipient or '').strip()
+    if not recipient or '@' not in recipient:
+        return False, 'Enter a valid email address'
+    company = dict(company or {})
+    name = str(company.get('name') or 'LUMINAVEST LTD').strip() or 'LUMINAVEST LTD'
+    number = str(company.get('company_number') or '15203368').strip() or '15203368'
+    company['name'] = name
+    company['company_number'] = number
+    issues = list(issues or company_attention_issues(company) or companies_house_attention_issues(company))
+    if not issues:
+        issues = [
+            {'code': 'accounts_overdue', 'title': 'Accounts overdue', 'detail': 'Due 31 July 2026', 'due': '2026-07-31'},
+            {
+                'code': 'default_address',
+                'title': 'Default Companies House address',
+                'detail': 'Change the registered office away from the Companies House default address in Cardiff.',
+            },
+            {
+                'code': 'strike_off',
+                'title': 'Strike-off proposed',
+                'detail': 'Companies House has proposed to strike this company off the register.',
+            },
+        ]
+    director = str(company.get('director') or 'Director').strip() or 'Director'
+    _, body_text, body_html = build_companies_house_attention_email(
+        {'full_name': director, 'email': recipient},
+        company,
+        issues,
+        greeting_name=director,
+    )
+    return EmailService.send_notification_email(
+        recipient,
+        f'Action needed for {name} at Companies House',
+        body_text,
+        body_html,
+    )
 
 
 def is_incorporation_certificate_filing(item):
@@ -4474,34 +6484,116 @@ def persist_official_director(company_id, name):
             """,
             (company_id, pretty),
         )
+    owners = query_db(
+        "SELECT id, full_name, order_id FROM company_owners WHERE company_id = ?;",
+        (company_id,),
+    ) or []
+    for owner in owners:
+        if looks_like_placeholder_director(owner.get('full_name')):
+            execute_db(
+                "UPDATE company_owners SET full_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?;",
+                (pretty, owner['id']),
+            )
+        if owner.get('order_id') and looks_like_placeholder_director(
+            (query_db("SELECT owner_name FROM orders WHERE id = ?;", (owner['order_id'],), one=True) or {}).get('owner_name')
+        ):
+            execute_db(
+                "UPDATE orders SET owner_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?;",
+                (pretty, owner['order_id']),
+            )
+    linked_orders = query_db(
+        "SELECT id, owner_name FROM orders WHERE company_id = ?;",
+        (company_id,),
+    ) or []
+    for order in linked_orders:
+        if looks_like_placeholder_director(order.get('owner_name')):
+            execute_db(
+                "UPDATE orders SET owner_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?;",
+                (pretty, order['id']),
+            )
     return pretty
 
 
 def sync_registered_company_from_companies_house(company):
     if not company or is_pending_company_number(company.get('company_number')):
         return False
-    live = fetch_companies_house_primary_director(company.get('company_number'))
-    if live:
-        persist_official_director(company.get('id'), live)
+    snapshot = companies_house_snapshot(company.get('company_number'))
+    if snapshot:
+        live_directors = snapshot.get('directors') or []
+        if live_directors:
+            sync_company_directors_from_list(company.get('id'), live_directors)
+        elif snapshot.get('director'):
+            persist_official_director(company.get('id'), snapshot.get('director'))
+        fill_company_blanks_from_snapshot(company, snapshot)
+        persist_company_registered_email(company, snapshot.get('registered_email'))
+        persist_companies_house_filing_state(company, snapshot)
         return True
     mark_company_ch_checked(company.get('id'))
     return False
 
 
-def registered_companies_due_for_director_sync(limit=CH_REGISTERED_SYNC_BATCH):
-    rows = query_db(
-        """
-        SELECT id, name, company_number, director, user_id, ch_checked_at
+def hydrate_company_from_companies_house(company, extras=None):
+    """Fill a standalone company card from Companies House. No order is required."""
+    if not company or not company.get('id'):
+        return False
+    extras = extras if isinstance(extras, dict) else {}
+    number = normalize_company_number(
+        extras.get('company_number') or company.get('company_number')
+    )
+    if not looks_like_uk_company_number(number) or is_pending_company_number(number):
+        number = ''
+        search_name = str(extras.get('name') or company.get('name') or '').strip()
+        if len(normalize_company_name_key(search_name)) >= 4:
+            matches, error = search_companies_house(search_name)
+            if not error:
+                match = companies_house_match_for_name(search_name, matches)
+                if match:
+                    number = normalize_company_number(match.get('company_number'))
+    if not looks_like_uk_company_number(number) or is_pending_company_number(number):
+        return False
+    snapshot = companies_house_snapshot(number)
+    if not snapshot:
+        return False
+    profile = {
+        'name': snapshot.get('name') or company.get('name'),
+        'company_number': number,
+        'status': snapshot.get('status') or company.get('status'),
+        'inc_date': snapshot.get('inc_date'),
+        'reg_office': snapshot.get('reg_office') or company.get('reg_office'),
+        'sic_codes': snapshot.get('sic_codes') or company.get('sic_codes'),
+        'registered_email': snapshot.get('registered_email') or company.get('registered_email'),
+    }
+    applied = apply_companies_house_profile_to_company(
+        company.get('id'),
+        profile,
+        director=snapshot.get('director') or None,
+    )
+    if snapshot.get('directors'):
+        sync_company_directors_from_list(company.get('id'), snapshot['directors'])
+    elif snapshot.get('director'):
+        persist_official_director(company.get('id'), snapshot['director'])
+    persist_companies_house_filing_state(company, snapshot)
+    return applied
+
+
+def registered_companies_due_for_director_sync(limit=CH_REGISTERED_SYNC_BATCH, user_id=None):
+    sql = """
+        SELECT id, name, company_number, director, user_id, ch_checked_at, ch_attention_json, reg_office
         FROM companies
-        ORDER BY name COLLATE NOCASE;
-        """
-    ) or []
+    """
+    params = []
+    if user_id:
+        sql += " WHERE user_id = ?"
+        params.append(user_id)
+    sql += " ORDER BY name COLLATE NOCASE;"
+    rows = query_db(sql, params) or []
     cutoff = datetime.datetime.now() - datetime.timedelta(seconds=CH_REGISTERED_RECHECK_SECONDS)
     due = []
     for row in rows:
         if is_pending_company_number(row.get('company_number')):
             continue
         placeholder = looks_like_placeholder_director(row.get('director'), row.get('name'))
+        unchecked = row.get('ch_attention_json') is None
         checked = str(row.get('ch_checked_at') or '').strip()
         stale = True
         if checked:
@@ -4510,19 +6602,19 @@ def registered_companies_due_for_director_sync(limit=CH_REGISTERED_SYNC_BATCH):
                 stale = checked_at < cutoff
             except ValueError:
                 stale = True
-        if placeholder or stale:
+        if placeholder or stale or unchecked:
             due.append(row)
         if len(due) >= int(limit or CH_REGISTERED_SYNC_BATCH):
             break
     return due
 
 
-def sync_registered_companies_from_companies_house(limit=CH_REGISTERED_SYNC_BATCH):
+def sync_registered_companies_from_companies_house(limit=CH_REGISTERED_SYNC_BATCH, user_id=None):
     global _CH_REGISTERED_SYNC_BLOCKED
     updated = 0
     if _CH_REGISTERED_SYNC_BLOCKED or not companies_house_api_key():
         return 0
-    for company in registered_companies_due_for_director_sync(limit=limit):
+    for company in registered_companies_due_for_director_sync(limit=limit, user_id=user_id):
         if _CH_REGISTERED_SYNC_BLOCKED:
             break
         if sync_registered_company_from_companies_house(company):
@@ -4542,6 +6634,113 @@ def official_company_director(company):
         pretty = pretty_director_name(form_name)
         return '' if pretty.lower() == 'director' else pretty
     return ''
+
+
+def registered_company_owner_name(company, resolve_owner=False):
+    if is_pending_company_number((company or {}).get('company_number')):
+        return ''
+    stored = str((company or {}).get('director') or '').strip()
+    company_name = (company or {}).get('name')
+    if stored and not looks_like_placeholder_director(stored, company_name):
+        pretty = pretty_director_name(stored)
+        return '' if pretty.lower() == 'director' else pretty
+    if resolve_owner:
+        return official_company_director(company) or ''
+    return ''
+
+
+def order_owner_display_name(row):
+    company_name = (row or {}).get('company_name')
+    owner = str((row or {}).get('owner_name') or '').strip()
+    if owner and not looks_like_placeholder_director(owner, company_name):
+        pretty = pretty_director_name(owner)
+        return '' if pretty.lower() == 'director' else pretty
+    director = str((row or {}).get('company_director') or '').strip()
+    if (
+        director
+        and not is_pending_company_number((row or {}).get('company_number'))
+        and not looks_like_placeholder_director(director, company_name)
+    ):
+        pretty = pretty_director_name(director)
+        return '' if pretty.lower() == 'director' else pretty
+    return owner
+
+
+def connector_order_id(order_row):
+    row = order_row or {}
+    if row.get('invoice_number') is not None or row.get('file_type') or row.get('file_path'):
+        return optional_record_id(row.get('order_id'))
+    return optional_record_id(row.get('id'))
+
+
+def persist_order_connector(order_row):
+    """Store company owner and the company-creation email from the form."""
+    row = dict(order_row or {})
+    order_id = connector_order_id(row)
+    if not order_id:
+        return row
+    has_name = str(row.get('owner_name') or '').strip() and not looks_like_placeholder_director(
+        row.get('owner_name'), row.get('company_name')
+    )
+    has_email = is_usable_form_email(row.get('owner_form_email'))
+    if has_name and has_email:
+        return row
+    fields = parse_order_checkout_fields(row)
+    if not fields:
+        return row
+    upsert_company_owner_from_fields(order_id, row.get('company_id'), fields, replace_name=False)
+    latest = query_db(
+        "SELECT owner_name, owner_form_email, company_id FROM orders WHERE id = ?;",
+        (order_id,),
+        one=True,
+    ) or {}
+    row['owner_name'] = latest.get('owner_name') or row.get('owner_name')
+    row['owner_form_email'] = latest.get('owner_form_email') or row.get('owner_form_email')
+    if latest.get('company_id'):
+        row['company_id'] = latest.get('company_id')
+    return row
+
+
+def real_order_connector(order_row):
+    """Company owner and the email used to create the company. Never the website signup."""
+    row = persist_order_connector(dict(order_row or {}))
+    name = order_owner_display_name(row) or ''
+    email = str((row or {}).get('owner_form_email') or '').strip()
+    if not is_usable_form_email(email):
+        email = ''
+    company_id = optional_record_id((row or {}).get('company_id'))
+    if (not name or not email) and company_id:
+        owner = company_owner_for_company(company_id)
+        if not name:
+            stored = str((owner or {}).get('full_name') or '').strip()
+            if stored and not looks_like_placeholder_director(stored, (row or {}).get('company_name')):
+                pretty = pretty_director_name(stored)
+                name = '' if pretty.lower() == 'director' else pretty
+        if not email and is_usable_form_email((owner or {}).get('form_email')):
+            email = str(owner['form_email']).strip()
+        if not email:
+            found = company_form_email(company_id) or ''
+            email = found if is_usable_form_email(found) else ''
+    if not name:
+        director = str((row or {}).get('company_director') or '').strip()
+        if director and not looks_like_placeholder_director(director, (row or {}).get('company_name')):
+            pretty = pretty_director_name(director)
+            name = '' if pretty.lower() == 'director' else pretty
+    return {
+        'owner_name': name,
+        'owner_form_email': email if is_usable_form_email(email) else '',
+    }
+
+
+def apply_connector_display(row):
+    connector = real_order_connector(row)
+    out = dict(row or {})
+    out['owner_name'] = connector['owner_name']
+    out['owner_form_email'] = connector['owner_form_email']
+    out['client_name'] = connector['owner_name']
+    out['client_email'] = connector['owner_form_email']
+    out.pop('checkout_form_json', None)
+    return out
 
 
 def compact_company_token(name):
@@ -4586,9 +6785,9 @@ def company_name_from_checkout_fields(fields):
     for field in fields or []:
         if not isinstance(field, dict):
             continue
-        if checkout_field_key(field.get('label')) in ('desired company name', 'company name'):
+        if checkout_field_key(field.get('label')) in CHECKOUT_COMPANY_NAME_KEYS:
             value = str(field.get('value') or '').strip()
-            if value:
+            if value and value.lower() not in {'united kingdom', 'uk', 'none', 'n/a', '-', '—'}:
                 return value
     return ''
 
@@ -4642,8 +6841,12 @@ def company_contact_email(company):
     return ''
 
 
-def companies_house_status_value(raw_status):
+def companies_house_status_value(raw_status, status_detail=None):
     raw = str(raw_status or 'active').lower()
+    if companies_house_strike_off_proposed(raw, status_detail):
+        if raw == 'dissolved':
+            return 'Dissolved'
+        return 'Strike off proposed'
     status_map = {
         'active': 'Active',
         'dissolved': 'Dissolved',
@@ -4704,25 +6907,29 @@ def apply_companies_house_profile_to_company(company_id, profile, director=None)
             return True
         execute_db("UPDATE companies SET ch_checked_at = CURRENT_TIMESTAMP WHERE id = ?;", (company_id,))
         return False
-    current = query_db("SELECT director FROM companies WHERE id = ?;", (company_id,), one=True) or {}
+    current = query_db("SELECT director, sic_codes, registered_email FROM companies WHERE id = ?;", (company_id,), one=True) or {}
     director_name = director or fetch_companies_house_primary_director(number) or current.get('director') or 'Director'
     inc_date = str((profile or {}).get('inc_date') or '')[:10]
     if len(inc_date) < 10:
         inc_date = datetime.date.today().isoformat()
+    sic_codes = str((profile or {}).get('sic_codes') or current.get('sic_codes') or '').strip()
+    registered_email = str((profile or {}).get('registered_email') or current.get('registered_email') or '').strip()
     execute_db(
         """
         UPDATE companies
         SET name = ?, company_number = ?, status = ?, inc_date = ?, director = ?,
-            reg_office = ?, ch_checked_at = CURRENT_TIMESTAMP
+            reg_office = ?, sic_codes = ?, registered_email = ?, ch_checked_at = CURRENT_TIMESTAMP
         WHERE id = ?;
         """,
         (
             name,
             number,
-            companies_house_status_value((profile or {}).get('status')),
+            companies_house_status_value((profile or {}).get('status'), (profile or {}).get('status_detail')),
             inc_date,
             director_name,
             (profile or {}).get('reg_office') or 'United Kingdom',
+            sic_codes or None,
+            registered_email or None,
             company_id,
         ),
     )
@@ -4852,7 +7059,7 @@ def import_webfiling_companies(data, actor=None):
             continue
 
         director = fetch_companies_house_primary_director(number) or 'Director'
-        mapped_status = companies_house_status_value(profile.get('status'))
+        mapped_status = companies_house_status_value(profile.get('status'), profile.get('status_detail'))
         inc_date = profile.get('inc_date') or datetime.date.today().isoformat()
         if len(inc_date) < 10:
             inc_date = datetime.date.today().isoformat()
@@ -4904,8 +7111,8 @@ def import_webfiling_companies(data, actor=None):
 
         company_id = execute_db(
             """
-            INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+            INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status, registered_email)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
             (
                 client_id,
@@ -4917,6 +7124,7 @@ def import_webfiling_companies(data, actor=None):
                 profile.get('reg_office') or 'United Kingdom',
                 package,
                 'Good Standing',
+                registered_email_for_client(client, data) or None,
             ),
         )
         link_orphaned_formation_orders(user_id=client_id)
@@ -4950,7 +7158,7 @@ def ensure_client_for_manual_company(data, actor=None):
     extras = data if isinstance(data, dict) else {}
     client_id = optional_record_id(extras.get('client_id') or extras.get('user_id'))
     if client_id:
-        client = query_db("SELECT id, full_name, role FROM users WHERE id = ?;", (client_id,), one=True)
+        client = query_db("SELECT id, full_name, email, role FROM users WHERE id = ?;", (client_id,), one=True)
         if not client or client.get('role') != 'CLIENT':
             return None, None, 'Select a client account'
         return client_id, client, None
@@ -4967,7 +7175,7 @@ def ensure_client_for_manual_company(data, actor=None):
     if not new_email or not STAFF_EMAIL_RE.match(new_email):
         return None, None, 'Enter a valid client email'
 
-    existing = query_db("SELECT id, full_name, role FROM users WHERE LOWER(email) = ?;", (new_email,), one=True)
+    existing = query_db("SELECT id, full_name, email, role FROM users WHERE LOWER(email) = ?;", (new_email,), one=True)
     if existing:
         if existing.get('role') != 'CLIENT':
             return None, None, 'That email belongs to a staff account'
@@ -4978,7 +7186,7 @@ def ensure_client_for_manual_company(data, actor=None):
         INSERT INTO users (wordpress_user_id, email, password_hash, full_name, phone, country, role, status, last_synced_at)
         VALUES (?, ?, ?, ?, ?, 'United Kingdom', 'CLIENT', 'Active', CURRENT_TIMESTAMP);
     """, (local_id, new_email, unusable_password_hash(), new_name, new_phone))
-    client = query_db("SELECT id, full_name, role FROM users WHERE id = ?;", (client_id,), one=True)
+    client = query_db("SELECT id, full_name, email, role FROM users WHERE id = ?;", (client_id,), one=True)
     if actor:
         log_activity(actor, 'USER_CREATED', 'users', str(client_id), f"Created client {new_email} while adding company")
     return client_id, client, None
@@ -5011,10 +7219,11 @@ def create_manual_company(data, actor=None):
     inc_date = str(extras.get('inc_date') or extras.get('date_of_creation') or '')[:10]
     if len(inc_date) < 10:
         inc_date = datetime.date.today().isoformat()
+    form_email = registered_email_for_client(client, extras)
     company_id = execute_db(
         """
-        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status, registered_email)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """,
         (
             client_id,
@@ -5026,8 +7235,16 @@ def create_manual_company(data, actor=None):
             (extras.get('reg_office') or extras.get('address') or 'United Kingdom').strip() or 'United Kingdom',
             (extras.get('package') or 'Historical Registration').strip() or 'Historical Registration',
             (extras.get('account_status') or 'Good Standing').strip() or 'Good Standing',
+            form_email or None,
         ),
     )
+    created = query_db(
+        "SELECT id, name, company_number, status, inc_date, director, reg_office FROM companies WHERE id = ?;",
+        (company_id,),
+        one=True,
+    )
+    hydrate_company_from_companies_house(created, extras)
+    persist_company_registered_email({'id': company_id, 'user_id': client_id, 'name': name, 'registered_email': form_email}, form_email)
     link_orphaned_formation_orders(user_id=client_id)
     return company_id, None
 
@@ -5074,6 +7291,10 @@ def create_company_from_pending_order(order_id, company_name, extras=None):
         (company_id, order['id']),
     )
     created = query_db("SELECT company_number FROM companies WHERE id = ?;", (company_id,), one=True)
+    persist_company_registered_email(
+        {'id': company_id, 'user_id': order.get('user_id'), 'name': name},
+        order.get('owner_form_email') or order.get('client_email'),
+    )
     if created and not is_pending_company_number(created.get('company_number')):
         notify_company_registered(company_id)
     return company_id, None
@@ -5910,8 +8131,10 @@ CHECKOUT_LABEL_ALIASES = {
     'sic': 'sic code',
     'desired company name': 'desired company name',
     'package': 'package',
-    'registered address form': 'registered address',
-    'registered company address': 'registered address',
+    'company number': 'company number',
+    'companies house number': 'company number',
+    'registered office': 'registered address',
+    'registered office address': 'registered address',
     'passport cnic': 'passport cnic',
     'passport number': 'passport cnic',
     'passport no': 'passport cnic',
@@ -6238,6 +8461,7 @@ def sync_company_name_onto_linked_orders(company_id, name=None):
 
 def _checkout_fields_with_live_company_name(order_row, fields):
     overlaid = apply_current_company_name_to_checkout_fields(order_row, fields)
+    overlaid = fill_checkout_blanks_from_companies_house(order_row, overlaid)
     order_id = (order_row or {}).get('id')
     if order_id and overlaid:
         execute_db(
@@ -6314,13 +8538,21 @@ def company_owner_public(row):
     }
 
 
-def upsert_company_owner_from_fields(order_id, company_id, fields):
+def upsert_company_owner_from_fields(order_id, company_id, fields, replace_name=False):
     if not order_id:
         return company_owner_public(None)
     incoming = owner_profile_from_fields(fields)
     current = query_db("SELECT * FROM company_owners WHERE order_id = ?;", (order_id,), one=True) or {}
+    current_name = str(current.get('full_name') or '').strip()
+    incoming_name = incoming['full_name']
+    if incoming_name and (
+        replace_name or not current_name or looks_like_placeholder_director(current_name)
+    ):
+        owner_name = incoming_name
+    else:
+        owner_name = current_name or incoming_name
     merged = {
-        'full_name': incoming['full_name'] or str(current.get('full_name') or '').strip(),
+        'full_name': owner_name,
         'form_email': incoming['form_email'] or str(current.get('form_email') or '').strip(),
         'phone': incoming['phone'] or str(current.get('phone') or '').strip(),
         'date_of_birth': incoming['date_of_birth'] or str(current.get('date_of_birth') or '').strip(),
@@ -6459,12 +8691,14 @@ def accountancy_people_fields(company, for_client=False):
         return {
             'director': director_name,
             'director_email': director_email,
+            'owner_name': director_name,
             'client_name': (company or {}).get('client_name'),
             'client_email': (company or {}).get('client_email'),
         }
     return {
         'director': director_name,
         'director_email': director_email,
+        'owner_name': director_name,
         'client_name': director_name or (company or {}).get('client_name'),
         'client_email': director_email,
     }
@@ -6670,7 +8904,7 @@ def apply_staff_checkout_form_update(order, raw_fields):
             director_name = value
         elif key == 'package':
             package = value
-        elif key == 'registered address':
+        elif key in CHECKOUT_REGISTERED_ADDRESS_KEYS:
             registered_address = value
         elif key == 'email form':
             form_email = value
@@ -6680,7 +8914,7 @@ def apply_staff_checkout_form_update(order, raw_fields):
     )
     if form_email:
         set_order_form_email(order_id, form_email)
-    upsert_company_owner_from_fields(order_id, company_id, fields)
+    upsert_company_owner_from_fields(order_id, company_id, fields, replace_name=True)
     if company_id:
         updates = []
         params = []
@@ -7141,6 +9375,1234 @@ def refresh_order_checkout_from_wordpress(order_row):
     }
 
 
+def invoice_prefix_value():
+    row = query_db("SELECT value FROM settings WHERE key = 'invoice_prefix';", one=True)
+    prefix = str((row or {}).get('value') or 'INV-').strip()
+    return prefix or 'INV-'
+
+
+def next_invoice_number():
+    prefix = invoice_prefix_value()
+    highest = 0
+    for row in query_db("SELECT invoice_number FROM invoices;") or []:
+        number = str(row.get('invoice_number') or '').strip()
+        tail = number[len(prefix):] if number.startswith(prefix) else ''
+        match = re.search(r'(\d+)$', number)
+        digits = tail if tail.isdigit() else (match.group(1) if match else '')
+        if str(digits).isdigit():
+            highest = max(highest, int(digits))
+    return f"{prefix}{highest + 1:04d}"
+
+
+def invoice_status_for_order(order):
+    status = str((order or {}).get('status') or '')
+    if status in ('Cancelled', 'Refunded'):
+        return 'Cancelled'
+    return 'Pending'
+
+
+def invoice_status_value(raw):
+    text = ' '.join(str(raw or '').strip().lower().replace('_', ' ').replace('-', ' ').split())
+    if text in ('partial paid', 'part paid', 'partial', 'partpaid'):
+        return 'Partial Paid'
+    if text == 'paid':
+        return 'Paid'
+    if text == 'pending':
+        return 'Pending'
+    if text == 'overdue':
+        return 'Overdue'
+    if text == 'cancelled':
+        return 'Cancelled'
+    return ''
+
+
+def invoice_timing_value(raw):
+    text = str(raw or '').strip().lower()
+    if text in ('deposit', 'part', 'partial', 'part paid', '50%', 'advance deposit'):
+        return 'Deposit'
+    if text in ('advance', 'upfront', 'full', 'full advance', 'pay first'):
+        return 'Advance'
+    if text in ('after work', 'on completion', 'completion', 'after'):
+        return 'After work'
+    return ''
+
+
+def invoice_timing_for_order(order, paid=False):
+    method = str((order or {}).get('payment_mode') or '').strip()
+    if method == 'Website Charge' or paid:
+        return 'Advance'
+    return 'After work'
+
+
+def ensure_invoice_for_order(order_id, paid=False):
+    order_id = optional_record_id(order_id)
+    if not order_id:
+        return None
+    order = query_db("SELECT * FROM orders WHERE id = ?;", (order_id,), one=True)
+    if not order:
+        return None
+    existing = query_db("SELECT id, status, paid_at, payment_timing, total FROM invoices WHERE order_id = ? ORDER BY id DESC LIMIT 1;", (order_id,), one=True)
+    if existing:
+        if paid and existing.get('status') != 'Paid':
+            timing = invoice_timing_value(existing.get('payment_timing')) or invoice_timing_for_order(order, paid=True)
+            execute_db(
+                """
+                UPDATE invoices
+                SET status = 'Paid', paid_at = CURRENT_TIMESTAMP, payment_timing = ?, amount_paid = ?
+                WHERE id = ?;
+                """,
+                (timing, float(existing.get('total') or 0), existing['id']),
+            )
+        return existing['id']
+    status = 'Paid' if paid else invoice_status_for_order(order)
+    due_date = (datetime.date.today() + datetime.timedelta(days=30)).isoformat()
+    paid_at = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') if status == 'Paid' else None
+    method = str(order.get('payment_mode') or '').strip() or 'Website Charge'
+    timing = invoice_timing_for_order(order, paid=paid)
+    amount = float(order.get('price') or 0)
+    tax = float(order.get('vat') or 0)
+    total = float(order.get('total') or 0)
+    amount_paid = total if status == 'Paid' else 0
+    for _ in range(8):
+        try:
+            return execute_db(
+                """
+                INSERT INTO invoices (
+                    invoice_number, order_id, user_id, amount, tax, total, status, due_date, paid_at,
+                    payment_method, payment_timing, deposit_amount, amount_paid
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    next_invoice_number(),
+                    order['id'],
+                    order['user_id'],
+                    amount,
+                    tax,
+                    total,
+                    status,
+                    due_date,
+                    paid_at,
+                    method,
+                    timing,
+                    0,
+                    amount_paid,
+                ),
+            )
+        except Exception as exc:
+            if 'UNIQUE' not in str(exc).upper() and 'unique' not in str(exc).lower():
+                raise
+    return None
+
+
+def backfill_invoices_from_orders():
+    rows = query_db(
+        """
+        SELECT o.id
+        FROM orders o
+        LEFT JOIN invoices i ON i.order_id = o.id
+        WHERE i.id IS NULL
+        ORDER BY o.id;
+        """
+    ) or []
+    created = 0
+    for row in rows:
+        if ensure_invoice_for_order(row['id']):
+            created += 1
+    return created
+
+
+def invoice_row_for_staff(invoice_id):
+    row = query_db(
+        """
+        SELECT i.id, i.invoice_number, i.order_id, i.user_id, i.amount, i.tax, i.total,
+               i.status, i.due_date, i.paid_at, i.payment_method, i.payment_timing,
+               i.deposit_amount, i.amount_paid, i.created_at,
+               o.order_number, o.service_name, o.company_id, o.owner_name, o.owner_form_email,
+               o.checkout_form_json, c.name as company_name, c.director as company_director,
+               c.company_number, c.reg_office as company_address,
+               u.country as client_country, u.address as client_address,
+               co.address as owner_address, co.nationality as owner_nationality,
+               co.passport_cnic as owner_cnic
+        FROM invoices i
+        LEFT JOIN orders o ON i.order_id = o.id
+        LEFT JOIN companies c ON o.company_id = c.id
+        LEFT JOIN users u ON i.user_id = u.id
+        LEFT JOIN company_owners co ON co.order_id = o.id
+        WHERE i.id = ?;
+        """,
+        (invoice_id,),
+        one=True,
+    )
+    if not row:
+        return None
+    pakistan = invoice_client_is_in_pakistan(row)
+    out = enrich_invoice_row(apply_connector_display(row))
+    if out is not None:
+        out['client_in_pakistan'] = pakistan
+    return out
+
+
+def html_document_response(start_response, html, status="200 OK"):
+    body = (html or '').encode('utf-8')
+    start_response(status, [
+        ('Content-Type', 'text/html; charset=utf-8'),
+        ('Content-Length', str(len(body))),
+        ('Cache-Control', 'private, no-store'),
+        ('X-Content-Type-Options', 'nosniff'),
+    ])
+    return [body]
+
+
+def invoice_document_secret():
+    return (
+        os.environ.get('INVOICE_DOCUMENT_SECRET')
+        or incorporation_download_secret()
+        or wordpress_integration_secret()
+        or 'brixen-invoice-document'
+    )
+
+
+def sign_invoice_document(invoice_id, expires):
+    payload = f"invoice|{int(invoice_id)}|{int(expires)}"
+    return hmac.new(str(invoice_document_secret()).encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
+
+
+def verify_invoice_document_link(invoice_id, expires, signature):
+    try:
+        invoice_id = int(invoice_id)
+        expires = int(expires)
+    except (TypeError, ValueError):
+        return False
+    expected = sign_invoice_document(invoice_id, expires)
+    if not expected or not signature:
+        return False
+    if not hmac.compare_digest(str(signature).strip(), expected):
+        return False
+    return expires >= int(datetime.datetime.now().timestamp())
+
+
+def invoice_download_filename(invoice_id, invoice_number=None):
+    number = str(invoice_number or '').strip()
+    if not number:
+        try:
+            row = query_db(
+                "SELECT invoice_number FROM invoices WHERE id = ?;",
+                (int(invoice_id),),
+                one=True,
+            )
+        except (TypeError, ValueError):
+            row = None
+        number = str((row or {}).get('invoice_number') or f'INV-{invoice_id}').strip() or f'INV-{invoice_id}'
+    return f"Invoice {number}.pdf"
+
+
+def invoice_public_document_url(invoice_id, days=90):
+    expires = int(datetime.datetime.now().timestamp()) + (max(int(days), 1) * 24 * 60 * 60)
+    signature = sign_invoice_document(invoice_id, expires)
+    # Filename MUST be the last path segment so iOS Safari / Mail use
+    # "Invoice INV-0003.pdf" when Content-Disposition is ignored.
+    # Path-only signing avoids email clients breaking & into &amp;.
+    filename = urllib.parse.quote(invoice_download_filename(invoice_id))
+    return (
+        f"{portal_base_url()}/invoice/{int(invoice_id)}/"
+        f"{int(expires)}/{signature}/{filename}"
+    )
+
+
+def invoice_currency_code(payment_method):
+    return 'GBP'
+
+
+def invoice_bank_details(payment_method):
+    return dict(INVOICE_BANK_GBP)
+
+
+_PAKISTAN_PLACE_RE = re.compile(
+    r'\b(pakistan|pakistani|islamabad|lahore|karachi|rawalpindi|faisalabad|peshawar|'
+    r'multan|quetta|sialkot|gujranwala|hyderabad|punjab|sindh|balochistan|\bpk\b)\b',
+    re.I,
+)
+_GBP_PKR_RATE_CACHE = {'rate': None, 'fetched_at': 0}
+
+
+def looks_like_pakistan(value):
+    text = str(value or '').strip()
+    if not text:
+        return False
+    if text.lower() in ('pk', 'pak', 'pakistan', 'islamic republic of pakistan'):
+        return True
+    if _PAKISTAN_PLACE_RE.search(text):
+        return True
+    digits = re.sub(r'\D', '', text)
+    return len(digits) == 13
+
+
+def invoice_client_is_in_pakistan(invoice):
+    if str((invoice or {}).get('payment_method') or '').startswith('PKR'):
+        return True
+    blobs = [
+        (invoice or {}).get('client_country'),
+        (invoice or {}).get('client_address'),
+        (invoice or {}).get('owner_address'),
+        (invoice or {}).get('owner_nationality'),
+        (invoice or {}).get('owner_cnic'),
+    ]
+    for field in parse_order_checkout_fields(invoice):
+        label = str(field.get('label') or '').lower()
+        if 'registered' in label:
+            continue
+        key = checkout_field_key(field.get('label'))
+        if (
+            key in ('country', 'issuance country', 'director address', 'director home address', 'address', 'nationality', 'passport cnic')
+            or 'home' in key
+            or key.endswith('country')
+        ):
+            blobs.append(field.get('value'))
+    return any(looks_like_pakistan(item) for item in blobs)
+
+
+def gbp_to_pkr_rate():
+    if os.environ.get('CRM_TESTING'):
+        try:
+            return float(os.environ.get('CRM_TEST_GBP_PKR') or 370)
+        except (TypeError, ValueError):
+            return 370.0
+    now = datetime.datetime.now().timestamp()
+    cached = _GBP_PKR_RATE_CACHE.get('rate')
+    if cached and now - float(_GBP_PKR_RATE_CACHE.get('fetched_at') or 0) < 3600:
+        return cached
+    rate = None
+    for url, pick in (
+        ('https://open.er-api.com/v6/latest/GBP', lambda data: (data.get('rates') or {}).get('PKR')),
+        ('https://api.exchangerate.host/latest?base=GBP&symbols=PKR', lambda data: (data.get('rates') or {}).get('PKR')),
+    ):
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'BrixenConsultantsCRM/1.0'})
+            with urllib.request.urlopen(req, timeout=4) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+            candidate = float(pick(data) or 0)
+            if candidate > 50:
+                rate = candidate
+                break
+        except (urllib.error.URLError, TimeoutError, ValueError, TypeError, OSError, json.JSONDecodeError):
+            continue
+    if rate:
+        _GBP_PKR_RATE_CACHE['rate'] = round(float(rate), 4)
+        _GBP_PKR_RATE_CACHE['fetched_at'] = now
+        return _GBP_PKR_RATE_CACHE['rate']
+    return cached
+
+
+def format_pkr_money(amount):
+    try:
+        value = float(amount or 0)
+    except (TypeError, ValueError):
+        value = 0.0
+    return f"Rs {value:,.2f}"
+
+
+def invoice_pakistan_fx_note(pounds):
+    rate = gbp_to_pkr_rate()
+    try:
+        gbp_amount = float(pounds or 0)
+    except (TypeError, ValueError):
+        gbp_amount = 0.0
+    if not rate or gbp_amount <= 0:
+        return None
+    rupees = round(gbp_amount * float(rate), 2)
+    return {
+        'gbp_display': format_invoice_money(gbp_amount, 'GBP'),
+        'rate_display': f"{float(rate):,.2f}",
+        'pkr_display': format_pkr_money(rupees),
+        'math': f"{format_invoice_money(gbp_amount, 'GBP')} × {float(rate):,.2f} = {format_pkr_money(rupees)}",
+    }
+
+
+def parse_invoice_money(raw):
+    try:
+        return round(float(str(raw).replace('£', '').replace('Rs', '').replace(',', '').strip()), 2)
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def default_deposit_amount(total):
+    try:
+        value = float(total or 0)
+    except (TypeError, ValueError):
+        value = 0.0
+    return round(value * 0.5, 2)
+
+
+def invoice_money_state(invoice):
+    invoice = invoice or {}
+    currency = 'GBP'
+    try:
+        total = float(invoice.get('total') or 0)
+    except (TypeError, ValueError):
+        total = 0.0
+    try:
+        paid = float(invoice.get('amount_paid') or 0)
+    except (TypeError, ValueError):
+        paid = 0.0
+    try:
+        deposit = float(invoice.get('deposit_amount') or 0)
+    except (TypeError, ValueError):
+        deposit = 0.0
+    status = str(invoice.get('status') or 'Pending')
+    if status == 'Paid':
+        paid = total
+    paid = max(0.0, round(paid, 2))
+    due = max(0.0, round(total - paid, 2))
+    timing = invoice_timing_value(invoice.get('payment_timing')) or 'After work'
+    display = status
+    if status == 'Partial Paid' or (
+        status not in ('Paid', 'Cancelled', 'Overdue') and paid > 0.004 and due > 0.004
+    ):
+        display = 'Partial Paid'
+    return {
+        'currency': currency,
+        'total': round(total, 2),
+        'amount_paid': paid,
+        'amount_due': due,
+        'deposit_amount': max(0.0, round(deposit, 2)),
+        'timing': timing,
+        'status': status,
+        'display_status': display,
+        'fully_paid': due <= 0.004 and total > 0 and status == 'Paid',
+    }
+
+
+def enrich_invoice_row(row):
+    if not row:
+        return None
+    out = dict(row)
+    money = invoice_money_state(out)
+    out.update(money)
+    return out
+
+
+def format_invoice_money(amount, currency='GBP'):
+    try:
+        value = float(amount or 0)
+    except (TypeError, ValueError):
+        value = 0.0
+    return f"£{value:,.2f}"
+
+
+def format_invoice_uk_date(raw):
+    text = str(raw or '').strip()
+    if not text:
+        return datetime.date.today().strftime('%d/%m/%Y')
+    for candidate, fmt in (
+        (text[:19], '%Y-%m-%d %H:%M:%S'),
+        (text[:10], '%Y-%m-%d'),
+        (text[:10], '%d/%m/%Y'),
+    ):
+        try:
+            return datetime.datetime.strptime(candidate, fmt).strftime('%d/%m/%Y')
+        except ValueError:
+            continue
+    return text
+
+
+def invoice_phone_display(brand=None):
+    brand = brand or brand_settings()
+    digits = re.sub(r'\D', '', str((brand or {}).get('support_phone') or '447360515317')) or '447360515317'
+    return f"+{digits}" if not digits.startswith('+') else digits
+
+
+def invoice_line_items_for_document(invoice):
+    order_id = optional_record_id((invoice or {}).get('order_id'))
+    rows = []
+    if order_id:
+        rows = query_db(
+            """
+            SELECT product_name, quantity, unit_price, line_total
+            FROM order_line_items
+            WHERE order_id = ?
+            ORDER BY sort_order ASC, id ASC;
+            """,
+            (order_id,),
+        ) or []
+    items = []
+    for row in rows:
+        name = str(row.get('product_name') or '').strip()
+        if not name:
+            continue
+        qty = int(row.get('quantity') or 1) or 1
+        amount = row.get('line_total')
+        if amount is None and row.get('unit_price') is not None:
+            amount = float(row.get('unit_price') or 0) * qty
+        items.append({
+            'description': name,
+            'quantity': qty,
+            'unit_price': row.get('unit_price'),
+            'amount': amount,
+        })
+    if not items:
+        fallback_amount = (invoice or {}).get('total') or (invoice or {}).get('amount') or 0
+        items.append({
+            'description': str((invoice or {}).get('service_name') or 'Professional services').strip() or 'Professional services',
+            'quantity': 1,
+            'unit_price': fallback_amount,
+            'amount': fallback_amount,
+        })
+    return items
+
+
+def invoice_document_payload(invoice_id):
+    invoice = invoice_row_for_staff(invoice_id)
+    if not invoice:
+        return None
+    brand = brand_settings()
+    money = invoice_money_state(invoice)
+    currency = 'GBP'
+    fx_pounds = money['amount_due'] if money['amount_due'] > 0.004 else money['total']
+    pakistan = bool(invoice.get('client_in_pakistan')) or invoice_client_is_in_pakistan(invoice)
+    return {
+        'invoice': invoice,
+        'brand': brand,
+        'bank': invoice_bank_details(invoice.get('payment_method')),
+        'logo_url': wordmark_image_src(),
+        'owner_name': invoice.get('owner_name') or '',
+        'owner_email': invoice.get('owner_form_email') or '',
+        'company_name': invoice.get('company_name') or '',
+        'company_address': invoice.get('company_address') or '',
+        'line_items': invoice_line_items_for_document(invoice),
+        'currency': currency,
+        'total_display': format_invoice_money(money['total'], currency),
+        'paid_display': format_invoice_money(money['amount_paid'], currency),
+        'amount_due_display': format_invoice_money(money['amount_due'], currency),
+        'deposit_display': format_invoice_money(money['deposit_amount'], currency) if money['timing'] == 'Deposit' and money['deposit_amount'] else '',
+        'timing': money['timing'],
+        'invoice_date': format_invoice_uk_date(invoice.get('created_at')),
+        'paid': money['amount_due'] <= 0.004 and money['status'] == 'Paid',
+        'part_paid': money['display_status'] == 'Partial Paid',
+        'pakistan_fx': invoice_pakistan_fx_note(fx_pounds) if pakistan else None,
+    }
+
+
+def render_invoice_document_html(payload):
+    brand = payload['brand']
+    invoice = payload['invoice']
+    bank = payload['bank']
+    navy = '#003971'
+    muted = '#6b7280'
+    rule = '#d4d4d8'
+    ink = '#1f2937'
+    legal_name = html_escape((brand.get('legal_name') or 'Brixen Consultants Ltd').upper())
+    trading_name = html_escape((brand.get('company_name') or 'Brixen Consultants').upper())
+    office = html_escape(brand.get('registered_office') or '')
+    email = html_escape(brand.get('support_email') or 'contact@brixenconsultants.com')
+    phone = html_escape(invoice_phone_display(brand))
+    company_no = html_escape(brand.get('company_number') or '')
+    ico = html_escape(brand.get('ico_number') or '')
+    invoice_number = html_escape(invoice.get('invoice_number') or '')
+    title = html_escape(f"Invoice {invoice.get('invoice_number') or ''}".strip())
+    to_lines = []
+    for value in (payload.get('owner_name'), payload.get('company_name'), payload.get('company_address'), payload.get('owner_email')):
+        text = str(value or '').strip()
+        if text and text not in to_lines:
+            to_lines.append(text)
+    to_html = '<br>'.join(html_escape(line) for line in to_lines) or '—'
+    item_rows = []
+    for item in payload.get('line_items') or []:
+        item_rows.append(
+            '<tr>'
+            f'<td>{html_escape(item.get("description") or "")}</td>'
+            f'<td class="qty">{html_escape(str(item.get("quantity") or 1))}</td>'
+            f'<td class="amt">{html_escape(format_invoice_money(item.get("amount"), "GBP"))}</td>'
+            '</tr>'
+        )
+    if payload.get('paid'):
+        paid_mark = '<span class="paid">Paid</span>'
+    elif payload.get('part_paid'):
+        paid_mark = (
+            '<span class="paid">Deposit received</span>'
+            if payload.get('timing') == 'Deposit'
+            else '<span class="paid">Partial Paid</span>'
+        )
+    else:
+        paid_mark = ''
+    extra_totals = ''
+    if payload.get('timing') == 'Deposit' and payload.get('deposit_display'):
+        extra_totals += (
+            f'<tr><td class="k">Deposit now</td><td class="v">{html_escape(payload["deposit_display"])}</td></tr>'
+        )
+    if float((payload.get('invoice') or {}).get('amount_paid') or 0) > 0.004 or payload.get('paid'):
+        extra_totals += (
+            f'<tr><td class="k">Paid so far</td><td class="v">{html_escape(payload["paid_display"])}</td></tr>'
+        )
+    extra_totals += (
+        f'<tr><td class="k">Amount due</td><td class="v">{html_escape(payload["amount_due_display"])}</td></tr>'
+    )
+    logo_url = html_escape(payload.get('logo_url') or wordmark_image_src())
+    gbp = INVOICE_BANK_GBP
+    pkr = INVOICE_BANK_PKR
+    pay_html = (
+        '<h3 class="pay-head">GBP</h3>'
+        '<table class="pay" role="presentation"><tr>'
+        f'<td><div class="k">Account title</div><div class="v">{html_escape(gbp["account_name"])}</div></td>'
+        f'<td><div class="k">Account number</div><div class="v">{html_escape(gbp["account_number"])}</div></td>'
+        f'<td><div class="k">Sort code</div><div class="v">{html_escape(gbp["sort_code"])}</div></td>'
+        '</tr></table>'
+        f'<div class="pay-link"><a href="{html_escape(gbp["pay_url"])}">Pay now in £</a></div>'
+        '<h3 class="pay-head">PKR</h3>'
+        '<table class="pay" role="presentation"><tr>'
+        f'<td><div class="k">Account title</div><div class="v">{html_escape(pkr["account_name"])}</div></td>'
+        f'<td><div class="k">Bank name</div><div class="v">{html_escape(pkr["bank_name"])}</div></td>'
+        f'<td><div class="k">IBAN</div><div class="v">{html_escape(pkr["iban"])}</div></td>'
+        '</tr></table>'
+    )
+    fx = payload.get('pakistan_fx') or {}
+    if fx.get('math'):
+        pay_html += (
+            '<div class="fx">'
+            f'<p class="fx-title">If you pay from Pakistan</p>'
+            f'<p class="fx-math">{html_escape(fx["math"])}</p>'
+            f'<p class="fx-copy">Send <strong>{html_escape(fx["pkr_display"])}</strong> to the UBL account. '
+            f'That is {html_escape(fx["gbp_display"])} at today\'s GBP to PKR rate.</p>'
+            '</div>'
+        )
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{title}</title>
+  {email_favicon_html()}
+  <style>
+    @page {{ size: A4; margin: 14mm 14mm 16mm; }}
+    html, body {{ margin: 0; padding: 0; background: #efeae2; color: {ink};
+      font-family: Arial, Helvetica, sans-serif; }}
+    .toolbar {{ max-width: 210mm; margin: 16px auto 0; text-align: right; }}
+    .toolbar button {{ background: {navy}; color: #fff; border: 0; border-radius: 980px;
+      padding: 8px 16px; font: 600 13px/1.2 Arial, Helvetica, sans-serif; cursor: pointer; }}
+    .sheet {{ width: 210mm; min-height: 297mm; margin: 12px auto 24px; background: #fff;
+      padding: 18mm 16mm 20mm; box-sizing: border-box; position: relative; }}
+    .head {{ width: 100%; border-collapse: collapse; }}
+    .head td {{ vertical-align: top; }}
+    .brand {{ width: 42%; padding-right: 12px; }}
+    .legal {{ width: 58%; text-align: right; font-size: 11px; line-height: 1.45; color: {ink}; }}
+    .logo {{ display: block; width: 168px; max-width: 100%; height: auto; }}
+    .label {{ font-size: 11px; font-weight: 700; color: {ink}; margin: 0 0 2px; }}
+    .value {{ font-size: 11px; color: {ink}; }}
+    hr {{ border: 0; border-top: 1px solid {rule}; margin: 18px 0; }}
+    h1 {{ margin: 0 0 18px; font-size: 28px; font-weight: 800; letter-spacing: 0.04em; color: {ink}; }}
+    .meta {{ width: 100%; border-collapse: collapse; }}
+    .meta td {{ width: 25%; vertical-align: top; padding-right: 14px; }}
+    .meta .k {{ font-size: 11px; font-weight: 700; color: {ink}; margin-bottom: 6px; }}
+    .meta .v {{ font-size: 13px; color: {ink}; line-height: 1.4; }}
+    table.items {{ width: 100%; border-collapse: collapse; margin-top: 28px; }}
+    table.items th {{ text-align: left; font-size: 11px; font-weight: 600; color: {muted};
+      padding: 0 0 8px; border-bottom: 1px solid {rule}; }}
+    table.items th.qty, table.items td.qty, table.items th.amt, table.items td.amt {{ text-align: right; }}
+    table.items td {{ padding: 14px 0; font-size: 13px; border-bottom: 1px solid {rule}; vertical-align: top; }}
+    .totals {{ width: 100%; border-collapse: collapse; margin-top: 8px; }}
+    .totals td {{ padding-top: 14px; font-size: 13px; }}
+    .totals .k {{ font-weight: 700; text-align: right; width: 80%; }}
+    .totals .v {{ font-weight: 700; text-align: right; }}
+    .paid {{ display: inline-block; margin-left: 8px; color: #15803d; font-size: 12px; font-weight: 700; }}
+    h2 {{ margin: 28px 0 16px; font-size: 22px; font-weight: 800; letter-spacing: 0.04em; color: {ink}; }}
+    .pay-head {{ margin: 18px 0 10px; font-size: 13px; font-weight: 800; letter-spacing: 0.06em; color: {ink}; }}
+    .fx {{ margin-top: 16px; }}
+    .fx-title {{ margin: 0 0 6px; font-size: 13px; font-weight: 800; color: {ink}; }}
+    .fx-math {{ margin: 0 0 6px; font-size: 15px; font-weight: 700; color: {ink}; }}
+    .fx-copy {{ margin: 0; font-size: 12px; line-height: 1.45; color: {ink}; }}
+    .pay {{ width: 100%; border-collapse: collapse; }}
+    .pay td {{ width: 33%; vertical-align: top; padding-right: 14px; }}
+    .pay .k {{ font-size: 11px; font-weight: 700; margin-bottom: 6px; }}
+    .pay .v {{ font-size: 13px; }}
+    .pay-link {{ margin-top: 16px; }}
+    .pay-link a {{ display: inline-block; background: {navy}; color: #fff; text-decoration: none;
+      font-size: 13px; font-weight: 600; letter-spacing: -0.022em; padding: 7px 14px; border-radius: 980px; }}
+    .pg {{ position: absolute; right: 16mm; bottom: 10mm; font-size: 11px; color: {muted}; }}
+    @media print {{
+      html, body {{ background: #fff; }}
+      .toolbar {{ display: none !important; }}
+      .sheet {{ margin: 0; min-height: auto; box-shadow: none; }}
+    }}
+  </style>
+</head>
+<body>
+  <div class="toolbar no-print"><button type="button" onclick="window.print()">Print / Save PDF</button></div>
+  <article class="sheet">
+    <table class="head" role="presentation">
+      <tr>
+        <td class="brand">
+          <img class="logo" src="{logo_url}" alt="Brixen Consultants">
+        </td>
+        <td class="legal">
+          <div class="label">Registered Business name</div>
+          <div class="value">{legal_name}</div>
+          <div class="value">{office}</div>
+          <div class="value">{email}</div>
+          <div class="value">{phone}</div>
+          <div class="value">Company No - {company_no}</div>
+          <div class="value">ICO Reg No - {ico}</div>
+        </td>
+      </tr>
+    </table>
+    <hr>
+    <h1>INVOICE</h1>
+    <table class="meta" role="presentation">
+      <tr>
+        <td><div class="k">Reference</div><div class="v">{invoice_number}</div></td>
+        <td><div class="k">Amount due</div><div class="v">{html_escape(payload['amount_due_display'])}{paid_mark}</div></td>
+        <td><div class="k">Invoice Date</div><div class="v">{html_escape(payload['invoice_date'])}</div></td>
+        <td><div class="k">To</div><div class="v">{to_html}</div></td>
+      </tr>
+    </table>
+    <table class="items">
+      <thead>
+        <tr><th>Description</th><th class="qty">Qty</th><th class="amt">Amount</th></tr>
+      </thead>
+      <tbody>
+        {''.join(item_rows)}
+      </tbody>
+    </table>
+    <table class="totals" role="presentation">
+      <tr>
+        <td class="k">Total</td>
+        <td class="v">{html_escape(payload['total_display'])}</td>
+      </tr>
+      {extra_totals}
+    </table>
+    <hr>
+    <h2>PAYMENT METHODS</h2>
+    {pay_html}
+    <div class="pg">Page 1 of 1</div>
+  </article>
+</body>
+</html>"""
+
+
+def pdf_literal(text):
+    raw = str(text or '')
+    encoded = raw.encode('latin-1', 'replace').decode('latin-1')
+    return encoded.replace('\\', '\\\\').replace('(', '\\(').replace(')', '\\)')
+
+
+def pdf_simple_document(lines, *, page_width=595.28, page_height=841.89, margin=48):
+    """Build a minimal single-page PDF (Helvetica) with no third-party deps."""
+    content = ['BT', '/F1 11 Tf', f'1 0 0 1 {margin:.2f} {page_height - margin:.2f} Tm', '16 TL']
+    for line in lines or []:
+        kind = 'text'
+        text = line
+        size = 11
+        if isinstance(line, dict):
+            kind = str(line.get('kind') or 'text')
+            text = line.get('text') or ''
+            size = float(line.get('size') or 11)
+        if kind == 'gap':
+            content.append(f'0 -{float(text or 10):.2f} Td')
+            continue
+        if kind == 'bold':
+            content.append(f'/F2 {size:.2f} Tf')
+        else:
+            content.append(f'/F1 {size:.2f} Tf')
+        content.append(f'({pdf_literal(text)}) Tj')
+        content.append('T*')
+    content.append('ET')
+    stream = '\n'.join(content).encode('latin-1', 'replace')
+    objects = []
+    objects.append(b'1 0 obj<< /Type /Catalog /Pages 2 0 R >>endobj\n')
+    objects.append(b'2 0 obj<< /Type /Pages /Kids [3 0 R] /Count 1 >>endobj\n')
+    objects.append(
+        (
+            f'3 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {page_width:.2f} {page_height:.2f}] '
+            f'/Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>endobj\n'
+        ).encode('latin-1')
+    )
+    objects.append(f'4 0 obj<< /Length {len(stream)} >>stream\n'.encode('latin-1') + stream + b'\nendstream\nendobj\n')
+    objects.append(b'5 0 obj<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>endobj\n')
+    objects.append(b'6 0 obj<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>endobj\n')
+    out = bytearray(b'%PDF-1.4\n')
+    offsets = [0]
+    for obj in objects:
+        offsets.append(len(out))
+        out.extend(obj)
+    xref = len(out)
+    out.extend(f'xref\n0 {len(offsets)}\n'.encode('latin-1'))
+    out.extend(b'0000000000 65535 f \n')
+    for offset in offsets[1:]:
+        out.extend(f'{offset:010d} 00000 n \n'.encode('latin-1'))
+    out.extend(
+        f'trailer<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n'.encode('latin-1')
+    )
+    return bytes(out)
+
+
+def render_invoice_document_pdf(payload):
+    """Professional Tide-style invoice PDF. Prefers fpdf2; falls back to simple PDF."""
+    try:
+        from fpdf import FPDF
+    except Exception:
+        return _render_invoice_document_pdf_simple(payload)
+
+    brand = (payload or {}).get('brand') or {}
+    invoice = (payload or {}).get('invoice') or {}
+    gbp = INVOICE_BANK_GBP
+    pkr = INVOICE_BANK_PKR
+    navy = (0, 57, 113)
+    ink = (31, 41, 55)
+    muted = (107, 114, 128)
+    rule = (212, 212, 216)
+
+    class InvoicePDF(FPDF):
+        def footer(self):
+            self.set_y(-14)
+            self.set_font('Helvetica', '', 9)
+            self.set_text_color(*muted)
+            self.cell(0, 8, 'Page 1 of 1', align='R')
+
+    pdf = InvoicePDF(orientation='P', unit='mm', format='A4')
+    pdf.set_auto_page_break(auto=True, margin=18)
+    pdf.add_page()
+    pdf.set_margins(16, 16, 16)
+
+    logo_path = wordmark_image_path()
+    if not os.path.exists(logo_path):
+        logo_path = os.path.join(STATIC_DIR, 'img', 'brixen-logo.png')
+    left = pdf.get_x()
+    top = pdf.get_y()
+    if os.path.exists(logo_path):
+        try:
+            pdf.image(logo_path, x=left, y=top, w=48)
+        except Exception:
+            pass
+
+    def money(value):
+        return str(value or '').replace('£', 'GBP ')
+
+    # Logo left, company details right (former trading-name column) — no trading name.
+    pdf.set_xy(left + 100, top)
+    pdf.set_font('Helvetica', 'B', 9)
+    pdf.set_text_color(*ink)
+    pdf.multi_cell(
+        78,
+        4.2,
+        'Registered Business name\n' + (brand.get('legal_name') or 'Brixen Consultants Ltd').upper(),
+        align='R',
+    )
+    pdf.set_font('Helvetica', '', 9)
+    legal_block = '\n'.join([
+        str(brand.get('registered_office') or ''),
+        str(brand.get('support_email') or 'contact@brixenconsultants.com'),
+        invoice_phone_display(brand),
+        f"Company No - {brand.get('company_number') or ''}",
+        f"ICO Reg No - {brand.get('ico_number') or ''}",
+    ])
+    pdf.set_x(left + 100)
+    pdf.multi_cell(78, 4.2, legal_block, align='R')
+
+    pdf.set_y(max(pdf.get_y(), top + 36) + 4)
+    pdf.set_draw_color(*rule)
+    pdf.line(16, pdf.get_y(), 194, pdf.get_y())
+    pdf.ln(6)
+
+    pdf.set_font('Helvetica', 'B', 22)
+    pdf.set_text_color(*ink)
+    pdf.cell(0, 10, 'INVOICE', new_x='LMARGIN', new_y='NEXT')
+    pdf.ln(2)
+
+    meta = [
+        ('Reference', str(invoice.get('invoice_number') or '')),
+        ('Amount due', money(payload.get('amount_due_display') or '')),
+        ('Invoice Date', str(payload.get('invoice_date') or '')),
+        ('To', ''),
+    ]
+    col_w = 44.5
+    y0 = pdf.get_y()
+    to_bottom = y0
+    for index, (label, value) in enumerate(meta):
+        x = 16 + index * col_w
+        pdf.set_xy(x, y0)
+        pdf.set_font('Helvetica', 'B', 9)
+        pdf.cell(col_w - 2, 5, label)
+        pdf.set_xy(x, y0 + 5)
+        pdf.set_font('Helvetica', '', 10)
+        if label == 'To':
+            to_lines = []
+            for field in (
+                payload.get('owner_name'),
+                payload.get('company_name'),
+                payload.get('company_address'),
+                payload.get('owner_email'),
+            ):
+                text = str(field or '').strip()
+                if text and text not in to_lines:
+                    to_lines.append(text)
+            pdf.multi_cell(col_w - 2, 4.5, '\n'.join(to_lines) or '-')
+            to_bottom = max(to_bottom, pdf.get_y())
+        else:
+            mark = ''
+            if label == 'Amount due' and payload.get('paid'):
+                mark = '  Paid'
+            pdf.multi_cell(col_w - 2, 4.5, f"{value}{mark}")
+            to_bottom = max(to_bottom, pdf.get_y())
+
+    pdf.set_y(max(to_bottom, y0 + 28) + 6)
+    pdf.set_font('Helvetica', '', 9)
+    pdf.set_text_color(*muted)
+    pdf.cell(110, 7, 'Description', border='B')
+    pdf.cell(30, 7, 'Qty', border='B', align='R')
+    pdf.cell(38, 7, 'Amount', border='B', align='R', ln=1)
+    pdf.set_text_color(*ink)
+    pdf.set_font('Helvetica', '', 11)
+    for item in payload.get('line_items') or []:
+        desc = str(item.get('description') or '').strip() or 'Professional services'
+        qty = str(item.get('quantity') or 1)
+        amount = money(format_invoice_money(item.get('amount'), 'GBP'))
+        y = pdf.get_y()
+        pdf.multi_cell(110, 8, desc, border='B')
+        h = pdf.get_y() - y
+        pdf.set_xy(16 + 110, y)
+        pdf.cell(30, max(h, 8), qty, border='B', align='R')
+        pdf.cell(38, max(h, 8), amount, border='B', align='R', new_x='LMARGIN', new_y='NEXT')
+
+    pdf.ln(2)
+    totals = [('Total', money(payload.get('total_display') or ''))]
+    if payload.get('timing') == 'Deposit' and payload.get('deposit_display'):
+        totals.append(('Deposit now', money(payload.get('deposit_display'))))
+    if float(invoice.get('amount_paid') or 0) > 0.004 or payload.get('paid'):
+        totals.append(('Paid so far', money(payload.get('paid_display') or '')))
+    totals.append(('Amount due', money(payload.get('amount_due_display') or '')))
+    for label, value in totals:
+        pdf.set_font('Helvetica', 'B', 11)
+        pdf.cell(140, 7, label, align='R')
+        pdf.cell(38, 7, str(value or ''), align='R', new_x='LMARGIN', new_y='NEXT')
+
+    pdf.ln(4)
+    pdf.set_draw_color(*rule)
+    pdf.line(16, pdf.get_y(), 194, pdf.get_y())
+    pdf.ln(6)
+    pdf.set_font('Helvetica', 'B', 16)
+    pdf.cell(0, 8, 'PAYMENT METHODS', new_x='LMARGIN', new_y='NEXT')
+    pdf.ln(2)
+
+    pdf.set_font('Helvetica', 'B', 10)
+    pdf.cell(0, 6, 'GBP', new_x='LMARGIN', new_y='NEXT')
+    pdf.set_font('Helvetica', '', 10)
+    pay_y = pdf.get_y()
+    for index, (label, value) in enumerate((
+        ('Account title', gbp['account_name']),
+        ('Account number', gbp['account_number']),
+        ('Sort code', gbp['sort_code']),
+    )):
+        x = 16 + index * 60
+        pdf.set_xy(x, pay_y)
+        pdf.set_font('Helvetica', 'B', 9)
+        pdf.cell(58, 5, label, new_x='LMARGIN', new_y='NEXT')
+        pdf.set_x(x)
+        pdf.set_font('Helvetica', '', 10)
+        pdf.multi_cell(58, 5, str(value))
+    pdf.set_y(max(pdf.get_y(), pay_y + 14) + 4)
+    # Apple-style pill: small navy capsule (padding ~7x14, fully rounded).
+    pill_label = 'Pay now in GBP'
+    pdf.set_font('Helvetica', 'B', 10)
+    pill_w = pdf.get_string_width(pill_label) + 10  # ~14px horizontal padding
+    pill_h = 7.5
+    pill_x = 16
+    pill_y = pdf.get_y()
+    pdf.set_fill_color(*navy)
+    try:
+        pdf.rounded_rect(pill_x, pill_y, pill_w, pill_h, pill_h / 2, style='F')
+    except Exception:
+        pdf.rect(pill_x, pill_y, pill_w, pill_h, style='F')
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_xy(pill_x, pill_y + 0.6)
+    pdf.cell(pill_w, pill_h - 1.2, pill_label, align='C', link=gbp['pay_url'])
+    pdf.set_text_color(*ink)
+    pdf.set_y(pill_y + pill_h + 8)
+
+    pdf.set_font('Helvetica', 'B', 10)
+    pdf.cell(0, 6, 'PKR', new_x='LMARGIN', new_y='NEXT')
+    pay_y = pdf.get_y()
+    for index, (label, value) in enumerate((
+        ('Account title', pkr['account_name']),
+        ('Bank name', pkr['bank_name']),
+        ('IBAN', pkr['iban']),
+    )):
+        x = 16 + index * 60
+        pdf.set_xy(x, pay_y)
+        pdf.set_font('Helvetica', 'B', 9)
+        pdf.cell(58, 5, label, new_x='LMARGIN', new_y='NEXT')
+        pdf.set_x(x)
+        pdf.set_font('Helvetica', '', 10)
+        pdf.multi_cell(58, 5, str(value))
+    pdf.set_y(max(pdf.get_y(), pay_y + 14) + 2)
+
+    fx = payload.get('pakistan_fx') or {}
+    if fx.get('math'):
+        pdf.set_font('Helvetica', 'B', 10)
+        pdf.cell(0, 6, 'If you pay from Pakistan', new_x='LMARGIN', new_y='NEXT')
+        pdf.set_font('Helvetica', 'B', 12)
+        pdf.cell(0, 6, money(fx.get('math') or ''), new_x='LMARGIN', new_y='NEXT')
+        pdf.set_font('Helvetica', '', 9)
+        pdf.multi_cell(
+            0,
+            5,
+            money(
+                f"Send {fx.get('pkr_display') or ''} to the UBL account. "
+                f"That is {fx.get('gbp_display') or ''} at today's GBP to PKR rate."
+            ),
+        )
+
+    out = pdf.output()
+    return bytes(out) if isinstance(out, (bytes, bytearray)) else bytes(out)
+
+
+def _render_invoice_document_pdf_simple(payload):
+    brand = (payload or {}).get('brand') or {}
+    invoice = (payload or {}).get('invoice') or {}
+    gbp = INVOICE_BANK_GBP
+    pkr = INVOICE_BANK_PKR
+    lines = [
+        {'kind': 'bold', 'size': 16, 'text': (brand.get('legal_name') or 'Brixen Consultants Ltd')},
+        str(brand.get('registered_office') or ''),
+        str(brand.get('support_email') or 'contact@brixenconsultants.com'),
+        invoice_phone_display(brand),
+        f"Company No {brand.get('company_number') or ''}".strip(),
+        f"ICO Reg No {brand.get('ico_number') or ''}".strip(),
+        {'kind': 'gap', 'text': 14},
+        {'kind': 'bold', 'size': 22, 'text': 'INVOICE'},
+        {'kind': 'gap', 'text': 8},
+        {'kind': 'bold', 'text': f"Reference  {invoice.get('invoice_number') or ''}"},
+        f"Invoice date  {payload.get('invoice_date') or ''}",
+        f"Amount due  {payload.get('amount_due_display') or ''}",
+    ]
+    if payload.get('paid'):
+        lines.append('Status  Paid')
+    elif payload.get('part_paid'):
+        lines.append('Status  Partial Paid')
+    lines.append({'kind': 'gap', 'text': 10})
+    lines.append({'kind': 'bold', 'text': 'Bill to'})
+    for value in (
+        payload.get('owner_name'),
+        payload.get('company_name'),
+        payload.get('company_address'),
+        payload.get('owner_email'),
+    ):
+        text = str(value or '').strip()
+        if text:
+            lines.append(text)
+    lines.append({'kind': 'gap', 'text': 12})
+    lines.append({'kind': 'bold', 'text': 'Description'})
+    for item in payload.get('line_items') or []:
+        desc = str(item.get('description') or '').strip() or 'Professional services'
+        qty = item.get('quantity') or 1
+        amount = format_invoice_money(item.get('amount'), 'GBP')
+        lines.append(f"{desc}  x{qty}  {amount}")
+    lines.append({'kind': 'gap', 'text': 10})
+    lines.append({'kind': 'bold', 'text': f"Total  {payload.get('total_display') or ''}"})
+    if payload.get('timing') == 'Deposit' and payload.get('deposit_display'):
+        lines.append(f"Deposit now  {payload.get('deposit_display')}")
+    if float(invoice.get('amount_paid') or 0) > 0.004 or payload.get('paid'):
+        lines.append(f"Paid so far  {payload.get('paid_display') or ''}")
+    lines.append(f"Amount due  {payload.get('amount_due_display') or ''}")
+    lines.append({'kind': 'gap', 'text': 14})
+    lines.append({'kind': 'bold', 'size': 14, 'text': 'Payment methods'})
+    lines.append({'kind': 'gap', 'text': 6})
+    lines.append({'kind': 'bold', 'text': 'GBP'})
+    lines.append(f"Account name  {gbp['account_name']}")
+    lines.append(f"Account number  {gbp['account_number']}")
+    lines.append(f"Sort code  {gbp['sort_code']}")
+    lines.append(f"Pay online  {gbp['pay_url']}")
+    lines.append({'kind': 'gap', 'text': 8})
+    lines.append({'kind': 'bold', 'text': 'PKR'})
+    lines.append(f"Account name  {pkr['account_name']}")
+    lines.append(f"Bank name  {pkr['bank_name']}")
+    lines.append(f"IBAN  {pkr['iban']}")
+    fx = payload.get('pakistan_fx') or {}
+    if fx.get('math'):
+        lines.append({'kind': 'gap', 'text': 8})
+        lines.append({'kind': 'bold', 'text': 'If you pay from Pakistan'})
+        lines.append(fx.get('math'))
+        lines.append(f"Send {fx.get('pkr_display') or ''} to the UBL account.")
+    lines.append({'kind': 'gap', 'text': 16})
+    lines.append('Page 1 of 1')
+    return pdf_simple_document([line for line in lines if line not in ('', None)])
+
+
+def pdf_document_response(start_response, pdf_bytes, filename='invoice.pdf', status="200 OK", *, head_only=False):
+    body = pdf_bytes or b''
+    raw = str(filename or 'invoice.pdf').strip() or 'invoice.pdf'
+    # Keep spaces for "Invoice INV-0003.pdf"; strip path/control chars only.
+    safe = re.sub(r'[\x00-\x1f\x7f<>:"/\\|?*]+', '', raw).strip(' .') or 'invoice.pdf'
+    if not safe.lower().endswith('.pdf'):
+        safe = f"{safe}.pdf"
+    ascii_name = safe.encode('ascii', 'replace').decode('ascii') or 'invoice.pdf'
+    quoted = urllib.parse.quote(safe)
+    # filename* first so Safari/Chrome prefer the spaced name; plain filename as fallback.
+    start_response(status, [
+        ('Content-Type', 'application/pdf'),
+        ('Content-Length', str(len(body))),
+        (
+            'Content-Disposition',
+            f"attachment; filename*=UTF-8''{quoted}; filename=\"{ascii_name}\"",
+        ),
+        ('Cache-Control', 'private, no-store'),
+        ('X-Content-Type-Options', 'nosniff'),
+    ])
+    return [] if head_only else [body]
+
+
+def serve_invoice_document(start_response, invoice_id, *, head_only=False):
+    payload = invoice_document_payload(invoice_id)
+    if not payload:
+        start_response("404 Not Found", [('Content-Type', 'text/plain; charset=utf-8')])
+        return [b'Invoice not found']
+    number = str(((payload.get('invoice') or {}).get('invoice_number') or f'INV-{invoice_id}')).strip()
+    filename = invoice_download_filename(invoice_id, number)
+    return pdf_document_response(
+        start_response,
+        render_invoice_document_pdf(payload),
+        filename=filename,
+        head_only=head_only,
+    )
+
+
+def update_admin_invoice(invoice_id, data, actor=None):
+    invoice = query_db("SELECT * FROM invoices WHERE id = ?;", (invoice_id,), one=True)
+    if not invoice:
+        return None, 'Invoice not found', None
+    data = data if isinstance(data, dict) else {}
+    status = invoice.get('status')
+    if 'status' in data:
+        status = str(data.get('status') or '').strip()
+        status = invoice_status_value(status) or status
+        if status not in INVOICE_STATUSES:
+            return None, 'Choose Paid, Partial Paid, Pending, Overdue, or Cancelled', None
+    method = invoice.get('payment_method')
+    if 'payment_method' in data:
+        method = str(data.get('payment_method') or '').strip() or method
+        if method and method not in ORDER_PAYMENT_MODES and method != 'Credit Card (Stripe)':
+            return None, 'Invalid payment method', None
+    previous_timing = invoice_timing_value(invoice.get('payment_timing')) or 'After work'
+    timing = previous_timing
+    if 'payment_timing' in data:
+        timing = invoice_timing_value(data.get('payment_timing'))
+        if timing not in INVOICE_PAYMENT_TIMINGS:
+            return None, 'Choose After work, full advance, or a deposit', None
+    due_date = invoice.get('due_date')
+    if 'due_date' in data:
+        raw_due = str(data.get('due_date') or '').strip()
+        if raw_due:
+            try:
+                due_date = datetime.date.fromisoformat(raw_due[:10]).isoformat()
+            except ValueError:
+                return None, 'Enter a valid due date', None
+    amount = float(invoice.get('amount') or 0)
+    tax = float(invoice.get('tax') or 0)
+    total = float(invoice.get('total') or 0)
+    if 'total' in data or 'amount' in data:
+        if not can_edit_order_price(actor):
+            return None, 'Only an administrator can change invoice totals', None
+        raw_amount = data.get('total') if 'total' in data else data.get('amount')
+        parsed_total = parse_invoice_money(raw_amount)
+        if parsed_total is None:
+            return None, 'Enter a valid amount', None
+        total = parsed_total
+        if total < 0 or total > 100000:
+            return None, 'Amount must be between £0 and £100,000', None
+        if total > 0 and amount >= 0 and float(invoice.get('total') or 0) > 0:
+            ratio = min(1.0, max(0.0, amount / float(invoice.get('total') or total)))
+        else:
+            ratio = 1.0
+        amount = round(total * ratio, 2)
+        tax = round(total - amount, 2)
+    old_paid = invoice_money_state(invoice)['amount_paid']
+    deposit_amount = float(invoice.get('deposit_amount') or 0)
+    if 'deposit_amount' in data:
+        parsed_deposit = parse_invoice_money(data.get('deposit_amount'))
+        if parsed_deposit is None:
+            return None, 'Enter a valid deposit amount', None
+        if parsed_deposit < 0 or parsed_deposit > total:
+            return None, 'Deposit must be between 0 and the invoice total', None
+        deposit_amount = parsed_deposit
+    if timing == 'Deposit':
+        if deposit_amount <= 0.004:
+            deposit_amount = default_deposit_amount(total)
+        if deposit_amount + 0.004 >= total and total > 0:
+            timing = 'Advance'
+            deposit_amount = 0
+    else:
+        deposit_amount = 0
+    amount_paid = old_paid
+    if 'amount_paid' in data:
+        parsed_paid = parse_invoice_money(data.get('amount_paid'))
+        if parsed_paid is None:
+            return None, 'Enter a valid amount received', None
+        if parsed_paid < 0 or parsed_paid > total:
+            return None, 'Amount received must be between 0 and the invoice total', None
+        amount_paid = parsed_paid
+    if status == 'Paid':
+        amount_paid = total
+    elif amount_paid + 0.004 >= total and total > 0:
+        status = 'Paid'
+        amount_paid = total
+    elif status == 'Partial Paid' and amount_paid <= 0.004:
+        if deposit_amount > 0.004:
+            amount_paid = min(deposit_amount, total)
+        elif old_paid > 0.004:
+            amount_paid = old_paid
+    elif status not in ('Cancelled', 'Overdue') and amount_paid > 0.004:
+        status = 'Partial Paid'
+    was_paid = str(invoice.get('status') or '') == 'Paid'
+    paid_at = invoice.get('paid_at')
+    if status == 'Paid' and not was_paid:
+        paid_at = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    elif status != 'Paid':
+        paid_at = None
+    execute_db(
+        """
+        UPDATE invoices
+        SET status = ?, payment_method = ?, payment_timing = ?, due_date = ?, amount = ?, tax = ?, total = ?,
+            paid_at = ?, deposit_amount = ?, amount_paid = ?
+        WHERE id = ?;
+        """,
+        (status, method, timing, due_date, amount, tax, total, paid_at, deposit_amount, amount_paid, invoice_id),
+    )
+    if method in ORDER_PAYMENT_MODES and invoice.get('order_id'):
+        execute_db(
+            "UPDATE orders SET payment_mode = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?;",
+            (method, invoice['order_id']),
+        )
+    mail = None
+    received_more = amount_paid > old_paid + 0.004
+    order = None
+    if invoice.get('order_id') and (
+        (received_more and status != 'Cancelled')
+        or data.get('send_payment_details')
+        or (
+            timing in ('Advance', 'Deposit')
+            and previous_timing == 'After work'
+            and amount_paid + 0.004 < total
+            and status != 'Cancelled'
+        )
+    ):
+        order = query_db(
+            """
+            SELECT o.*, u.email, u.full_name
+            FROM orders o
+            JOIN users u ON o.user_id = u.id
+            WHERE o.id = ?;
+            """,
+            (invoice.get('order_id'),),
+            one=True,
+        )
+    if received_more and status != 'Cancelled':
+        mail = notify_payment_received(order, invoice=invoice_row_for_staff(invoice_id))
+    elif order and (
+        data.get('send_payment_details')
+        or (timing in ('Advance', 'Deposit') and previous_timing == 'After work' and amount_paid + 0.004 < total)
+    ):
+        mail = notify_payment_requested(order, invoice=invoice_row_for_staff(invoice_id))
+    updated = invoice_row_for_staff(invoice_id)
+    return updated, None, mail
+
+
 def upsert_woocommerce_order(o_data):
     order_num = o_data.get('order_number') or f"#GB{int(datetime.datetime.now().timestamp())}"
     wp_user_id = str(o_data.get('wordpress_user_id') or '')
@@ -7150,14 +10612,18 @@ def upsert_woocommerce_order(o_data):
     if not incoming_service and line_items:
         incoming_service = ', '.join(item['product_name'] for item in line_items)
     service_name = incoming_service or 'Corporate Formation Service'
-    price = float(o_data.get('price', 150.00))
-    total = float(o_data.get('total', price * 1.2))
-    vat = total - price
+    price = normalize_retail_price(float(o_data.get('price', 150.00)))
+    total = normalize_retail_price(float(o_data.get('total', price * 1.2)))
+    vat = round(total - price, 2)
     status = o_data.get('status') or 'Processing'
     if status not in ('Pending', 'Processing', 'In Progress', 'Completed', 'Cancelled', 'Refunded', 'Pending Verification'):
         status = 'Processing'
     wc_order_id = str(o_data.get('woocommerce_order_id') or '') or None
-    company_name = o_data.get('company_name') or o_data.get('billing_company')
+    company_name = extract_order_company_name(o_data) or o_data.get('company_name') or o_data.get('billing_company')
+    company_number = o_data.get('company_number') or o_data.get('registration_number')
+    meta = o_data.get('meta') if isinstance(o_data.get('meta'), dict) else {}
+    if not company_number:
+        company_number = meta.get('_cfs_company_number') or meta.get('company_number')
 
     client_rec = None
     if wp_user_id:
@@ -7189,7 +10655,9 @@ def upsert_woocommerce_order(o_data):
 
     company_id = None
     if not guest_pending:
-        company_id = match_company_for_client(cid, company_name)
+        company_id = match_company_for_client_by_number(cid, company_number)
+        if not company_id:
+            company_id = match_company_for_client(cid, company_name)
         if not company_id:
             company_id = ensure_company_from_registration_order(
                 cid, client_name, o_data, service_name, line_items, wc_order_id
@@ -7247,6 +10715,18 @@ def upsert_woocommerce_order(o_data):
     except Exception as err:
         print(f"[CheckoutAttach] Import error for order {ord_id}: {err}")
     persist_order_checkout_form(ord_id, o_data)
+    ensure_invoice_for_order(ord_id)
+    if created is False:
+        latest = query_db("SELECT id, price, vat, total FROM orders WHERE id = ?;", (ord_id,), one=True)
+        if latest:
+            execute_db(
+                """
+                UPDATE invoices
+                SET amount = ?, tax = ?, total = ?
+                WHERE order_id = ? AND status != 'Paid';
+                """,
+                (float(latest.get('price') or 0), float(latest.get('vat') or 0), float(latest.get('total') or 0), ord_id),
+            )
     if not guest_pending and status == 'Completed' and previous_status != 'Completed':
         completed_order = query_db(
             """
@@ -7269,7 +10749,52 @@ def upsert_woocommerce_order(o_data):
     }
 
 
+def backfill_normalize_retail_prices():
+    for row in query_db("SELECT id, price, vat, total FROM orders;"):
+        price = float(row.get('price') or 0)
+        total = float(row.get('total') or 0)
+        new_price = normalize_retail_price(price)
+        new_total = normalize_retail_price(total)
+        if new_price == price and new_total == total:
+            continue
+        if new_total != total:
+            vat = round(new_total - new_price, 2)
+            final_total = new_total
+        else:
+            vat = round(total - new_price, 2)
+            final_total = total
+        execute_db(
+            "UPDATE orders SET price = ?, vat = ?, total = ? WHERE id = ?;",
+            (new_price, vat, final_total, row['id']),
+        )
+        execute_db(
+            """
+            UPDATE invoices
+            SET amount = ?, tax = ?, total = ?
+            WHERE order_id = ? AND status != 'Paid';
+            """,
+            (new_price, vat, final_total, row['id']),
+        )
+
+    for row in query_db("SELECT id, unit_price, line_total, quantity FROM order_line_items;"):
+        unit = normalize_retail_price(row.get('unit_price'))
+        line = normalize_retail_price(row.get('line_total'))
+        if unit == float(row.get('unit_price') or 0) and line == float(row.get('line_total') or 0):
+            continue
+        qty = max(int(row.get('quantity') or 1), 1)
+        if unit != float(row.get('unit_price') or 0) and line == float(row.get('line_total') or 0):
+            line = round(unit * qty, 2)
+        execute_db(
+            "UPDATE order_line_items SET unit_price = ?, line_total = ? WHERE id = ?;",
+            (unit, line, row['id']),
+        )
+
+
 ensure_schema()
+try:
+    backfill_normalize_retail_prices()
+except Exception:
+    pass
 try:
     backfill_companies_from_registration_webhooks()
 except Exception:
@@ -7288,6 +10813,10 @@ except Exception:
     pass
 try:
     ensure_internal_staff_have_all_departments()
+except Exception:
+    pass
+try:
+    backfill_invoices_from_orders()
 except Exception:
     pass
 
@@ -7338,6 +10867,41 @@ def application(environ, start_response):
             return [b"Not Found"]
         candidate = os.path.join(STATIC_DIR, rel_path)
         return serve_static(environ, start_response, candidate, allowed_root=STATIC_DIR)
+
+    if path.startswith('/invoice/') and method in ('GET', 'HEAD'):
+        parts = [urllib.parse.unquote(p) for p in path.split('/') if p]
+        # Supported:
+        #   /invoice/{id}
+        #   /invoice/{id}/...?expires=&signature=
+        #   /invoice/{id}/{expires}/{signature}/Invoice INV-0003.pdf   (preferred)
+        #   /invoice/{id}/Invoice-INV-0003.pdf/{expires}/{signature}   (legacy)
+        if len(parts) not in (2, 3, 5):
+            start_response("404 Not Found", [('Content-Type', 'text/plain; charset=utf-8')])
+            return [b'Invoice not found']
+        try:
+            invoice_id = int(parts[1])
+        except (TypeError, ValueError):
+            start_response("404 Not Found", [('Content-Type', 'text/plain; charset=utf-8')])
+            return [b'Invoice not found']
+        if len(parts) == 5:
+            # Preferred: .../{expires}/{signature}/Invoice INV-0003.pdf
+            # Legacy:    .../Invoice-....pdf/{expires}/{signature}
+            if parts[2].isdigit():
+                expires = parts[2]
+                signature = parts[3]
+            else:
+                expires = parts[3]
+                signature = parts[4]
+        else:
+            # Repair email clients that request literal &amp; in the query string.
+            raw_qs = (environ.get('QUERY_STRING') or '').replace('&amp;', '&')
+            qs = urllib.parse.parse_qs(raw_qs)
+            expires = _qs_first(qs, 'expires') or '0'
+            signature = _qs_first(qs, 'signature') or ''
+        if not verify_invoice_document_link(invoice_id, expires, signature):
+            start_response("403 Forbidden", [('Content-Type', 'text/plain; charset=utf-8')])
+            return [b'Invoice link is invalid or expired']
+        return serve_invoice_document(start_response, invoice_id, head_only=(method == 'HEAD'))
 
     if path == '/api/public/incorporation-certificate' and method == 'GET':
         qs = urllib.parse.parse_qs(environ.get('QUERY_STRING', ''))
@@ -7495,11 +11059,16 @@ def application(environ, start_response):
                             updated_at = CURRENT_TIMESTAMP
                         WHERE id = ?;
                     """, (existing_ord['id'],))
-                    execute_db("UPDATE invoices SET status = 'Paid', paid_at = CURRENT_TIMESTAMP WHERE order_id = ?;", (existing_ord['id'],))
+                    ensure_invoice_for_order(existing_ord['id'], paid=True)
                     guest = query_db("SELECT id FROM users WHERE email = 'guest.unlinked@brixenconsultants.com';", one=True)
                     is_guest = guest and int(existing_ord.get('user_id') or 0) == int(guest['id'])
                     if not is_guest and not already_paid:
-                        notify_payment_received(existing_ord)
+                        paid_invoice = query_db(
+                            "SELECT * FROM invoices WHERE order_id = ? ORDER BY id DESC LIMIT 1;",
+                            (existing_ord['id'],),
+                            one=True,
+                        )
+                        notify_payment_received(existing_ord, invoice=paid_invoice)
             return json_response(start_response, {'status': 'success', 'message': 'Payment recorded'})
             
         return json_response(start_response, {'status': 'success', 'message': f'Event {event_type} received'})
@@ -7655,6 +11224,14 @@ def application(environ, start_response):
             return json_response(start_response, {'status': 'error', 'message': err or 'Invalid SSO signature'}, "401 Unauthorized")
 
         client_rec = find_client_for_wordpress(wp_id, email)
+        if not client_rec and email:
+            name = email.split('@')[0].replace('.', ' ').replace('_', ' ').replace('-', ' ').title()
+            db_execute("""
+                INSERT INTO users (full_name, email, role, status, wordpress_user_id, created_at, updated_at)
+                VALUES (?, ?, 'CLIENT', 'ACTIVE', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+            """, (name, email, wp_id))
+            client_rec = find_client_for_wordpress(wp_id, email)
+
         if not client_rec:
             return json_response(start_response, {'status': 'error', 'message': 'Client record not found for SSO'}, "404 Not Found")
             
@@ -7663,7 +11240,7 @@ def application(environ, start_response):
 
         if method == 'GET':
             start_response("302 Found", [
-                ('Location', '/'),
+                ('Location', '/#dashboard'),
                 ('Set-Cookie', session_cookie_header(token, environ=environ))
             ])
             return [b""]
@@ -7814,7 +11391,7 @@ def application(environ, start_response):
             
         companies = query_db("SELECT * FROM companies WHERE user_id = ? ORDER BY id DESC;", (cid,))
         orders = [dict(row) for row in query_db("SELECT o.*, c.name as company_name FROM orders o LEFT JOIN companies c ON o.company_id = c.id WHERE o.user_id = ? ORDER BY o.created_at DESC;", (cid,))]
-        invoices = [dict(row) for row in query_db("SELECT * FROM invoices WHERE user_id = ? ORDER BY created_at DESC;", (cid,))]
+        invoices = [enrich_invoice_row(dict(row)) for row in query_db("SELECT * FROM invoices WHERE user_id = ? ORDER BY created_at DESC;", (cid,))]
         if not can_view_revenue(user):
             orders = [strip_order_finance(row) for row in orders]
             invoices = [strip_order_finance(row) for row in invoices]
@@ -7845,12 +11422,15 @@ def application(environ, start_response):
     # ----------------------------------------------------
     # PRIVATE SECURE DOCUMENT STREAMING API
     # ----------------------------------------------------
-    if path.startswith('/api/documents/') and method == 'GET' and (path.endswith('/download') or path.endswith('/view')):
+    if (path.startswith('/api/documents/') or path.startswith('/api/client/documents/')) and method == 'GET' and (path.endswith('/download') or path.endswith('/view')):
         if not user:
             return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
 
         parts = path.split('/')
-        doc_id = parts[3] if len(parts) > 3 else ''
+        if path.startswith('/api/client/documents/'):
+            doc_id = parts[4] if len(parts) > 4 else ''
+        else:
+            doc_id = parts[3] if len(parts) > 3 else ''
         doc = query_db("SELECT * FROM documents WHERE id = ?;", (doc_id,), one=True)
         if not doc:
             return json_response(start_response, {'status': 'error', 'message': 'Document not found'}, "404 Not Found")
@@ -8041,9 +11621,11 @@ def application(environ, start_response):
         uk_comps = comp_count
         intl_comps = 0
         companies = query_db("""
-            SELECT id, name, company_number, status, account_status, reg_office, package
+            SELECT id, name, company_number, status, inc_date, director, reg_office, package, account_status,
+                   created_at, utr_number, identity_verified, psc_verified
             FROM companies WHERE user_id = ? ORDER BY created_at DESC;
         """, (uid,))
+        public_companies = [public_client_company(row) for row in companies]
 
         overdue_cnt = query_db("SELECT COUNT(*) as c FROM addresses WHERE user_id = ? AND expiry_date < date('now') AND status != 'Active';", (uid,), one=True)['c']
         upcoming_cnt = query_db("SELECT COUNT(*) as c FROM addresses WHERE user_id = ? AND expiry_date BETWEEN date('now') AND date('now', '+30 days');", (uid,), one=True)['c']
@@ -8106,12 +11688,25 @@ def application(environ, start_response):
             o_dict['done_items_count'] = sum(1 for item in service_items if item['status'] == 'Done')
             enhanced_orders.append(o_dict)
 
+        visible_docs = query_db("""
+            SELECT d.*, c.name as company_name, o.order_number
+            FROM documents d
+            LEFT JOIN companies c ON d.company_id = c.id
+            LEFT JOIN orders o ON d.order_id = o.id
+            WHERE d.user_id = ? AND d.client_visible = 1
+            ORDER BY d.created_at DESC;
+        """, (uid,)) or []
+        public_docs = [public_document(row, for_client=True) for row in visible_docs]
+        pending_actions = build_client_pending_actions(uid)
+
         display_name = (user.get('full_name') or '').strip() or user.get('email') or 'there'
-        now_str = datetime.datetime.now().strftime("%d %B %Y")
+        now_dt = datetime.datetime.now()
+        now_str = now_dt.strftime("%d %B %Y")
 
         return json_response(start_response, {
             'status': 'success',
             'current_date': now_str,
+            'greeting': client_greeting_label(now_dt),
             'user_name': display_name,
             'total_companies': comp_count,
             'uk_companies': uk_comps,
@@ -8119,8 +11714,12 @@ def application(environ, start_response):
             'overdue_deadlines': overdue_cnt,
             'upcoming_deadlines': upcoming_cnt,
             'active_orders_count': len(enhanced_orders),
+            'documents_count': len(public_docs),
+            'pending_actions_count': len(pending_actions),
+            'pending_actions': pending_actions,
             'active_orders': enhanced_orders,
-            'companies': companies,
+            'companies': public_companies,
+            'recent_documents': public_docs[:4],
         })
 
     if path == '/api/client/orders' and method == 'GET':
@@ -8260,7 +11859,9 @@ def application(environ, start_response):
             order['client_phone'] = ''
 
         timeline = query_db("SELECT * FROM order_timeline WHERE order_id = ? ORDER BY id ASC;", (oid,))
-        invoice = query_db("SELECT * FROM invoices WHERE order_id = ?;", (oid,), one=True)
+        if user['role'] != 'CLIENT':
+            ensure_invoice_for_order(oid)
+        invoice = query_db("SELECT * FROM invoices WHERE order_id = ? ORDER BY id DESC LIMIT 1;", (oid,), one=True)
         for_client = user['role'] == 'CLIENT'
         if for_client:
             documents = query_db("SELECT * FROM documents WHERE order_id = ? AND client_visible = 1;", (oid,))
@@ -8276,6 +11877,15 @@ def application(environ, start_response):
         """, (oid, user['id']))
         order_out = dict(order)
         checkout_form = load_order_checkout_form(order)
+        if not order_out.get('company_id'):
+            linked_id = ensure_order_company_link(order, checkout_form)
+            if linked_id:
+                order_out['company_id'] = linked_id
+                named = query_db("SELECT name, company_number FROM companies WHERE id = ?;", (linked_id,), one=True) or {}
+                order_out['company_name'] = named.get('name') or order_out.get('company_name')
+                order_out['company_number'] = named.get('company_number') or order_out.get('company_number')
+        if not str(order_out.get('company_name') or '').strip():
+            order_out['company_name'] = company_name_from_checkout_fields(checkout_form)
         order_out['checkout_form'] = checkout_form
         if not for_client:
             order_out['company_owner'] = get_company_owner_for_order(order, checkout_form)
@@ -8294,18 +11904,25 @@ def application(environ, start_response):
         include_finance = for_client or can_view_revenue(user)
         invoice_out = None
         if invoice:
+            money = invoice_money_state(invoice)
             invoice_out = {
+                'id': invoice.get('id'),
                 'invoice_number': invoice.get('invoice_number'),
-                'status': invoice.get('status'),
+                'status': money['display_status'],
                 'due_date': invoice.get('due_date'),
                 'paid_at': invoice.get('paid_at'),
+                'payment_timing': money['timing'],
+                'document_url': f"/api/admin/invoices/{int(invoice['id'])}/document" if invoice.get('id') and not for_client else f"/api/client/invoices/{int(invoice['id'])}/document" if invoice.get('id') else '',
             }
             if include_finance:
                 invoice_out.update({
                     'amount': invoice.get('amount'),
                     'tax': invoice.get('tax'),
-                    'total': invoice.get('total'),
+                    'total': money['total'],
                     'payment_method': invoice.get('payment_method'),
+                    'deposit_amount': money['deposit_amount'],
+                    'amount_paid': money['amount_paid'],
+                    'amount_due': money['amount_due'],
                 })
         if not include_finance:
             order_out = strip_order_finance(order_out)
@@ -8364,10 +11981,9 @@ def application(environ, start_response):
         if user['role'] == 'CLIENT':
             return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
         ch_synced = sync_pending_companies_from_companies_house()
-        comps = query_db("""
-            SELECT id, name, company_number, status, inc_date, director, reg_office, package, account_status,
-                   created_at, user_id, utr_number, authentication_code, activation_code,
-                   identity_verified, identity_verified_at, psc_verified, psc_verified_at
+        registered_synced = sync_registered_companies_from_companies_house()
+        comps = query_db(f"""
+            SELECT {COMPANY_STAFF_SELECT}
             FROM companies ORDER BY created_at DESC;
         """)
         deadlines_map = upcoming_deadlines_by_company(None, [row['id'] for row in comps])
@@ -8443,7 +12059,19 @@ def application(environ, start_response):
         data = parse_body(environ)
         previous = query_db("SELECT name FROM companies WHERE id = ?;", (company_id,), one=True)
         if 'name' in (data or {}):
-            company, error = rename_pending_company(company_id, data.get('name'))
+            current = query_db(f"SELECT {COMPANY_STAFF_SELECT} FROM companies WHERE id = ?;", (company_id,), one=True)
+            if current and not is_pending_company_number(current.get('company_number')):
+                company, error = relink_company_from_companies_house(
+                    company_id,
+                    data.get('name'),
+                    data.get('companies_house_number'),
+                )
+            else:
+                company, error = rename_pending_company(
+                    company_id,
+                    data.get('name'),
+                    data.get('companies_house_number'),
+                )
             if error:
                 status_code = "404 Not Found" if error == 'Company not found' else "400 Bad Request"
                 return json_response(start_response, {'status': 'error', 'message': error}, status_code)
@@ -8477,17 +12105,15 @@ def application(environ, start_response):
             return json_response(start_response, {'status': 'error', 'message': 'Company not found'}, "404 Not Found")
         sync_pending_companies_from_companies_house(company_id=company_id, limit=1)
         company = query_db(
-            """
-            SELECT id, name, company_number, status, inc_date, director, reg_office, package, account_status,
-                   created_at, user_id, utr_number, authentication_code, activation_code,
-                   identity_verified, identity_verified_at, psc_verified, psc_verified_at
-            FROM companies WHERE id = ?;
-            """,
+            f"SELECT {COMPANY_STAFF_SELECT} FROM companies WHERE id = ?;",
             (company_id,),
             one=True,
         )
         if not company:
             return json_response(start_response, {'status': 'error', 'message': 'Company not found'}, "404 Not Found")
+        sync_registered_company_from_companies_house(company)
+        persist_company_registered_email(company)
+        company = query_db(f"SELECT {COMPANY_STAFF_SELECT} FROM companies WHERE id = ?;", (company_id,), one=True) or company
         owner_id = company.get('user_id')
         deadlines_map = upcoming_deadlines_by_company(owner_id, [company_id])
         registered_office = company_registered_office_record(company_id, company)
@@ -8509,7 +12135,7 @@ def application(environ, start_response):
         )
         return json_response(start_response, {
             'status': 'success',
-            'company': public_client_company(company, deadlines_map.get(company_id, []), for_staff=True),
+            'company': public_client_company(company, deadlines_map.get(company_id, []), for_staff=True, resolve_owner=True),
             'client_id': company.get('user_id'),
             'registered_office': registered_office,
             'orders': [public_client_order_summary(row) for row in orders],
@@ -8580,10 +12206,10 @@ def application(environ, start_response):
         if not user:
             return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
         ch_synced = sync_pending_companies_from_companies_house(user_id=user['id'])
+        registered_synced = sync_registered_companies_from_companies_house(user_id=user['id'])
         comps = query_db(
-            """
-            SELECT id, name, company_number, status, inc_date, director, reg_office, package, account_status,
-                   created_at, utr_number, identity_verified, psc_verified
+            f"""
+            SELECT {COMPANY_LIST_SELECT}
             FROM companies WHERE user_id = ? ORDER BY created_at DESC;
             """,
             (user['id'],),
@@ -8610,11 +12236,16 @@ def application(environ, start_response):
         if owned:
             sync_pending_companies_from_companies_house(company_id=company_id, user_id=user['id'], limit=1)
         company = query_db(
-            """
-            SELECT id, name, company_number, status, inc_date, director, reg_office, package, account_status,
-                   created_at, utr_number, identity_verified, psc_verified
-            FROM companies WHERE id = ? AND user_id = ?;
-            """,
+            f"SELECT {COMPANY_STAFF_SELECT} FROM companies WHERE id = ? AND user_id = ?;",
+            (company_id, user['id']),
+            one=True,
+        )
+        if not company:
+            return json_response(start_response, {'status': 'error', 'message': 'Company not found'}, "404 Not Found")
+        sync_registered_company_from_companies_house(company)
+        persist_company_registered_email(company)
+        company = query_db(
+            f"SELECT {COMPANY_STAFF_SELECT} FROM companies WHERE id = ? AND user_id = ?;",
             (company_id, user['id']),
             one=True,
         )
@@ -8640,7 +12271,7 @@ def application(environ, start_response):
         )
         return json_response(start_response, {
             'status': 'success',
-            'company': public_client_company(company, deadlines_map.get(company_id, [])),
+            'company': public_client_company(company, deadlines_map.get(company_id, []), resolve_owner=True),
             'registered_office': registered_office,
             'orders': [public_client_order_summary(row) for row in orders],
             'documents': [public_document(row, for_client=True) for row in documents],
@@ -8667,7 +12298,32 @@ def application(environ, start_response):
             JOIN orders o ON i.order_id = o.id
             WHERE i.user_id = ? ORDER BY i.created_at DESC;
         """, (user['id'],))
-        return json_response(start_response, {'status': 'success', 'invoices': invs})
+        invoices = []
+        for row in invs or []:
+            item = enrich_invoice_row(dict(row)) or dict(row)
+            if item.get('id'):
+                item['document_url'] = f"/api/client/invoices/{int(item['id'])}/document"
+            invoices.append(item)
+        return json_response(start_response, {'status': 'success', 'invoices': invoices})
+
+    if path.startswith('/api/client/invoices/') and path.endswith('/document') and method == 'GET':
+        if not user:
+            return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
+        parts = [p for p in path.split('/') if p]
+        if len(parts) != 5:
+            return json_response(start_response, {'status': 'error', 'message': 'Invoice not found'}, "404 Not Found")
+        try:
+            invoice_id = int(parts[3])
+        except (TypeError, ValueError):
+            return json_response(start_response, {'status': 'error', 'message': 'Invoice not found'}, "404 Not Found")
+        owned = query_db(
+            "SELECT id FROM invoices WHERE id = ? AND user_id = ?;",
+            (invoice_id, user['id']),
+            one=True,
+        )
+        if not owned:
+            return json_response(start_response, {'status': 'error', 'message': 'Invoice not found'}, "404 Not Found")
+        return serve_invoice_document(start_response, invoice_id)
 
     if path == '/api/client/documents' and method == 'GET':
         if not user:
@@ -9044,8 +12700,9 @@ def application(environ, start_response):
             SELECT o.id, o.order_number, o.user_id, o.company_id, o.service_id, o.service_name,
                    o.price, o.vat, o.total, o.status, o.progress_percent, o.payment_mode, o.assigned_staff_id,
                    o.created_at, o.updated_at, o.expected_date, o.delivery_label,
-                   o.owner_name, o.owner_form_email,
+                   o.owner_name, o.owner_form_email, o.checkout_form_json,
                    u.full_name as client_name, u.email as client_email, c.name as company_name,
+                   c.director as company_director, c.company_number,
                    s.full_name as assigned_staff_name,
                    COALESCE((SELECT GROUP_CONCAT(li.product_name, ', ') FROM order_line_items li WHERE li.order_id = o.id), o.service_name) as products_summary,
                    (SELECT li.category_name FROM order_line_items li WHERE li.order_id = o.id ORDER BY li.sort_order ASC, li.id ASC LIMIT 1) as category_name,
@@ -9111,6 +12768,23 @@ def application(environ, start_response):
         listed = []
         for row in orders:
             item = dict(row)
+            if not item.get('company_id'):
+                linked_id = ensure_order_company_link(item)
+                if linked_id:
+                    item['company_id'] = linked_id
+                    linked = query_db(
+                        "SELECT name, director, company_number FROM companies WHERE id = ?;",
+                        (linked_id,),
+                        one=True,
+                    ) or {}
+                    item['company_name'] = linked.get('name') or item.get('company_name')
+                    item['company_director'] = linked.get('director') or item.get('company_director')
+                    item['company_number'] = linked.get('company_number') or item.get('company_number')
+            item['company_name'] = order_display_company_name(item)
+            item.pop('checkout_form_json', None)
+            display_owner = order_owner_display_name(item)
+            if display_owner:
+                item['owner_name'] = display_owner
             if not can_view_revenue(user):
                 item = strip_order_finance(item)
             listed.append(item)
@@ -9241,6 +12915,10 @@ def application(environ, start_response):
             if payment_mode and payment_mode not in ORDER_PAYMENT_MODES:
                 return json_response(start_response, {'status': 'error', 'message': 'Invalid payment mode'}, "400 Bad Request")
             execute_db("UPDATE orders SET payment_mode = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?;", (payment_mode, oid))
+            execute_db(
+                "UPDATE invoices SET payment_method = ? WHERE order_id = ? AND status != 'Paid';",
+                (payment_mode, oid),
+            )
         if 'total' in data or 'price' in data:
             if not can_edit_order_price(user):
                 return json_response(start_response, {'status': 'error', 'message': 'Only an administrator can change order prices'}, "403 Forbidden")
@@ -9263,6 +12941,7 @@ def application(environ, start_response):
                 "UPDATE orders SET total = ?, price = ?, vat = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?;",
                 (new_total, new_price, new_vat, oid),
             )
+            ensure_invoice_for_order(oid)
             execute_db(
                 """
                 UPDATE invoices
@@ -9344,12 +13023,39 @@ def application(environ, start_response):
         existing = query_db("SELECT * FROM orders WHERE id = ?;", (oid,), one=True)
         if not existing:
             return json_response(start_response, {'status': 'error', 'message': 'Order not found'}, "404 Not Found")
+        company_id = optional_record_id(existing.get('company_id'))
+        company = query_db(
+            "SELECT id, name, company_number, status, inc_date, director, reg_office FROM companies WHERE id = ?;",
+            (company_id,),
+            one=True,
+        ) if company_id else None
+        form_number = checkout_form_company_number(parse_order_checkout_fields(existing), company)
+        owner_name = str(existing.get('owner_name') or '').strip()
+        if (
+            company
+            and looks_like_placeholder_director(company.get('director'), company.get('name'))
+            and owner_name
+            and not looks_like_placeholder_director(owner_name, company.get('name'))
+        ):
+            persist_official_director(company_id, owner_name)
         doc_rows = query_db("SELECT file_path FROM documents WHERE order_id = ?;", (oid,))
         file_paths = [row.get('file_path') for row in doc_rows]
         execute_db("DELETE FROM orders WHERE id = ?;", (oid,))
         remove_stored_document_files(file_paths)
+        leftover = query_db(
+            "SELECT id, name, company_number, status, inc_date, director, reg_office FROM companies WHERE id = ?;",
+            (company_id,),
+            one=True,
+        ) if company_id else None
+        if leftover:
+            hydrate_company_from_companies_house(leftover, {'company_number': form_number} if form_number else {})
         log_activity(user, 'ORDER_DELETE', 'orders', str(oid), f"Deleted order {existing.get('order_number')}")
-        return json_response(start_response, {'status': 'success', 'message': 'Order deleted'})
+        return json_response(start_response, {
+            'status': 'success',
+            'message': 'Order deleted. The company card was kept.',
+            'company_id': company_id,
+            'company_kept': bool(leftover),
+        })
 
     if path == '/api/admin/services' and method == 'GET':
         denied = require_permission(start_response, user, 'orders.view')
@@ -9453,18 +13159,76 @@ def application(environ, start_response):
         denied = require_permission(start_response, user, 'invoices.view')
         if denied:
             return denied
-        invoices = [dict(row) for row in query_db("""
+        backfill_invoices_from_orders()
+        invoices = [
+            apply_connector_display(row)
+            for row in query_db("""
             SELECT i.id, i.invoice_number, i.order_id, i.user_id, i.amount, i.tax, i.total,
-                   i.status, i.due_date, i.paid_at, i.payment_method, i.created_at,
-                   o.order_number, o.service_name, u.full_name as client_name, u.email as client_email
+                   i.status, i.due_date, i.paid_at, i.payment_method, i.payment_timing,
+                   i.deposit_amount, i.amount_paid, i.created_at,
+                   o.order_number, o.service_name, o.company_id, o.owner_name, o.owner_form_email,
+                   o.checkout_form_json, c.name as company_name, c.director as company_director,
+                   c.company_number
             FROM invoices i
             LEFT JOIN orders o ON i.order_id = o.id
-            LEFT JOIN users u ON i.user_id = u.id
+            LEFT JOIN companies c ON o.company_id = c.id
             ORDER BY i.created_at DESC;
-        """)]
+        """)
+        ]
+        invoices = [enrich_invoice_row(row) for row in invoices]
         if not can_view_revenue(user):
             invoices = [strip_order_finance(row) for row in invoices]
+        for row in invoices:
+            if row.get('id'):
+                row['document_url'] = f"/api/admin/invoices/{int(row['id'])}/document"
         return json_response(start_response, {'status': 'success', 'invoices': invoices})
+
+    if path.startswith('/api/admin/invoices/') and path.endswith('/document') and method == 'GET':
+        denied = require_permission(start_response, user, 'invoices.view')
+        if denied:
+            return denied
+        parts = [p for p in path.split('/') if p]
+        if len(parts) != 5:
+            return json_response(start_response, {'status': 'error', 'message': 'Invoice not found'}, "404 Not Found")
+        try:
+            invoice_id = int(parts[3])
+        except (TypeError, ValueError):
+            return json_response(start_response, {'status': 'error', 'message': 'Invoice not found'}, "404 Not Found")
+        return serve_invoice_document(start_response, invoice_id)
+
+    if path.startswith('/api/admin/invoices/') and method in ('PUT', 'PATCH'):
+        denied = require_permission(start_response, user, 'invoices.view')
+        if denied:
+            return denied
+        parts = [p for p in path.split('/') if p]
+        if len(parts) != 4:
+            return json_response(start_response, {'status': 'error', 'message': 'Invoice not found'}, "404 Not Found")
+        try:
+            invoice_id = int(parts[3])
+        except (TypeError, ValueError):
+            return json_response(start_response, {'status': 'error', 'message': 'Invoice not found'}, "404 Not Found")
+        updated, error, mail = update_admin_invoice(invoice_id, parse_body(environ), actor=user)
+        if error:
+            status_code = "404 Not Found" if error == 'Invoice not found' else "400 Bad Request"
+            if 'administrator' in error:
+                status_code = "403 Forbidden"
+            return json_response(start_response, {'status': 'error', 'message': error}, status_code)
+        payload = dict(updated or {})
+        if not can_view_revenue(user):
+            payload = strip_order_finance(payload)
+        log_activity(
+            user,
+            'INVOICE_UPDATED',
+            'invoices',
+            str(invoice_id),
+            f"Updated invoice {payload.get('invoice_number')}",
+        )
+        return json_response(start_response, {
+            'status': 'success',
+            'invoice': payload,
+            'email_sent': bool((mail or {}).get('email_sent')),
+            'email_status': (mail or {}).get('email_status'),
+        })
 
     if path == '/api/admin/accountancy' and method == 'GET':
         denied = require_permission(start_response, user, 'accountancy.manage')
@@ -9612,14 +13376,20 @@ def application(environ, start_response):
         if denied:
             return denied
         docs = query_db("""
-            SELECT d.*, u.full_name as client_name, u.email as client_email, c.name as company_name, o.order_number
+            SELECT d.*, c.name as company_name, o.order_number, o.company_id as order_company_id,
+                   o.owner_name, o.owner_form_email, o.checkout_form_json,
+                   c.director as company_director, c.company_number
             FROM documents d
-            LEFT JOIN users u ON d.user_id = u.id
             LEFT JOIN companies c ON d.company_id = c.id
             LEFT JOIN orders o ON d.order_id = o.id
             ORDER BY d.created_at DESC;
         """)
-        listed = [public_document(d) for d in docs if d]
+        listed = []
+        for doc in docs or []:
+            row = dict(doc)
+            if not row.get('company_id') and row.get('order_company_id'):
+                row['company_id'] = row.get('order_company_id')
+            listed.append(public_document(apply_connector_display(row)))
         return json_response(start_response, {'status': 'success', 'documents': listed})
 
     if path == '/api/admin/documents' and method == 'POST':
@@ -9660,16 +13430,38 @@ def application(environ, start_response):
             if store_err:
                 return json_response(start_response, {'status': 'error', 'message': store_err}, "400 Bad Request")
             file_size_str = format_document_size(len(file_bytes))
-            review_notes = (data.get('review_notes') or '').strip() or 'Delivered to client portal'
+            client_visible_flag = 1
+            if 'client_visible' in data:
+                cv_val = data.get('client_visible')
+                if cv_val is False or cv_val == 0 or str(cv_val).lower() in ('0', 'false', 'off', 'no'):
+                    client_visible_flag = 0
+            review_notes = (data.get('review_notes') or '').strip() or ('Delivered to client portal' if client_visible_flag else 'Internal staff document')
             doc_id = execute_db("""
                 INSERT INTO documents (user_id, company_id, order_id, name, category, file_path, file_type, file_size, status, uploaded_by, review_notes, client_visible, shared_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Approved', ?, ?, 1, CURRENT_TIMESTAMP);
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Approved', ?, ?, ?, ?);
             """, (
                 target_client['id'], resolved_company_id, order_id, doc_name, category, target_path,
-                DOCUMENT_TYPE_LABELS.get(ext, 'Document'), file_size_str, user['full_name'], review_notes
+                DOCUMENT_TYPE_LABELS.get(ext, 'Document'), file_size_str, user['full_name'], review_notes,
+                client_visible_flag,
+                (datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') if client_visible_flag == 1 else None)
             ))
-            log_activity(user, 'DOCUMENT_UPLOAD', 'documents', str(doc_id), f"Delivered document {doc_name} to client #{target_client['id']}")
-            delivery = notify_client_document_uploaded(target_client, doc_name, client_message)
+            log_activity(user, 'DOCUMENT_UPLOAD', 'documents', str(doc_id), f"Uploaded document {doc_name} for client #{target_client['id']} (client_visible={client_visible_flag})")
+            
+            notification_created = False
+            email_sent = False
+            email_status = 'not_applicable'
+
+            if client_visible_flag == 1:
+                company_obj = query_db("SELECT name FROM companies WHERE id = ?;", (resolved_company_id,), one=True) if resolved_company_id else None
+                order_obj = query_db("SELECT order_number FROM orders WHERE id = ?;", (order_id,), one=True) if order_id else None
+                comp_name = company_obj['name'] if company_obj else None
+                ord_num = order_obj['order_number'] if order_obj else None
+                
+                delivery = notify_client_document_uploaded(target_client, doc_name, client_message, company_name=comp_name, order_number=ord_num)
+                notification_created = delivery['notification_created']
+                email_sent = delivery['email_sent']
+                email_status = delivery['email_status']
+
             created = query_db("""
                 SELECT d.*, c.name as company_name, o.order_number
                 FROM documents d
@@ -9680,11 +13472,11 @@ def application(environ, start_response):
             portal_login_ready = client_portal_login_ready(target_client)
             return json_response(start_response, {
                 'status': 'success',
-                'message': 'Document uploaded successfully.',
+                'message': 'Document uploaded successfully.' if client_visible_flag else 'Document stored. It is saved as an internal document and not visible to the client.',
                 'document': public_document(created),
-                'notification_created': delivery['notification_created'],
-                'email_sent': delivery['email_sent'],
-                'email_status': delivery['email_status'],
+                'notification_created': notification_created,
+                'email_sent': email_sent,
+                'email_status': email_status,
                 'portal_login_ready': portal_login_ready,
                 'client_email': target_client.get('email'),
             })
@@ -9718,6 +13510,111 @@ def application(environ, start_response):
             'status': 'success',
             'message': 'Document stored. It is not visible to the customer until you send it.',
             'document': public_document(created)
+        })
+
+    if path == '/api/admin/documents/intake/process' and method == 'POST':
+        denied = require_permission(start_response, user, 'documents.upload')
+        if denied:
+            return denied
+        data = parse_body(environ)
+        files_data = data.get('files') or []
+        if not files_data or not isinstance(files_data, list):
+            return json_response(start_response, {'status': 'error', 'message': 'No files provided for intake'}, "400 Bad Request")
+
+        extracted_client_name = None
+        extracted_dob = None
+        extracted_company_name = None
+        extracted_company_num = None
+        
+        parsed_files = []
+        for file_item in files_data:
+            fname = (file_item.get('file_name') or 'document.pdf').strip()
+            b64 = file_item.get('file_content_base64', '')
+            res = extract_document_text_and_metadata(fname, b64)
+            if 'error' not in res:
+                parsed_files.append(res)
+                if not extracted_client_name and res.get('extracted_name'):
+                    extracted_client_name = res['extracted_name']
+                if not extracted_dob and res.get('extracted_dob'):
+                    extracted_dob = res['extracted_dob']
+                if not extracted_company_name and res.get('extracted_company_name'):
+                    extracted_company_name = res['extracted_company_name']
+                if not extracted_company_num and res.get('extracted_company_number'):
+                    extracted_company_num = res['extracted_company_number']
+
+        if not parsed_files:
+            return json_response(start_response, {'status': 'error', 'message': 'Could not parse uploaded files'}, "400 Bad Request")
+
+        client_user = None
+        if extracted_client_name:
+            client_user = query_db("SELECT * FROM users WHERE role = 'CLIENT' AND lower(full_name) = lower(?);", (extracted_client_name,), one=True)
+            
+        if not client_user and extracted_client_name:
+            clean_username = re.sub(r'[^a-z0-9]', '.', extracted_client_name.lower().strip())
+            provisional_email = f"{clean_username}@brixen-pending.local"
+            user_id = execute_db("""
+                INSERT INTO users (full_name, email, role, status, created_at)
+                VALUES (?, ?, 'CLIENT', 'Active', CURRENT_TIMESTAMP);
+            """, (extracted_client_name, provisional_email))
+            client_user = query_db("SELECT * FROM users WHERE id = ?;", (user_id,), one=True)
+
+        client_id = client_user['id'] if client_user else None
+
+        company_obj = None
+        if extracted_company_num or extracted_company_name:
+            company_obj = auto_import_companies_house_from_intake(extracted_company_name, extracted_company_num, client_user_id=client_id)
+
+        company_id = company_obj['id'] if company_obj else None
+
+        filed_documents = []
+        for pf in parsed_files:
+            ext = pf['ext']
+            file_bytes = pf['file_bytes']
+            fname = pf['filename']
+            cat = pf['category']
+            
+            target_path, store_err = store_client_document_file(client_id, None, ext, file_bytes)
+            if not store_err and target_path:
+                file_size_str = format_document_size(len(file_bytes))
+                doc_id = execute_db("""
+                    INSERT INTO documents (user_id, company_id, name, category, file_path, file_type, file_size, status, uploaded_by, review_notes, client_visible, shared_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'Approved', ?, 'Smart Document Intake', 0, NULL);
+                """, (
+                    client_id, company_id, fname, cat, target_path,
+                    DOCUMENT_TYPE_LABELS.get(ext, 'Document'), file_size_str, user['full_name']
+                ))
+                filed_documents.append({
+                    'id': doc_id,
+                    'name': fname,
+                    'category': cat,
+                    'file_size': file_size_str
+                })
+
+        log_activity(user, 'SMART_INTAKE', 'documents', str(filed_documents[0]['id']) if filed_documents else '', f"Processed Smart Intake ({len(filed_documents)} files) for client #{client_id}")
+
+        missing_fields = []
+        if client_user:
+            if 'brixen-pending.local' in (client_user.get('email') or ''):
+                missing_fields.append('Email Address')
+            if not client_user.get('phone'):
+                missing_fields.append('Phone Number')
+
+        return json_response(start_response, {
+            'status': 'success',
+            'message': f"Smart Intake successfully processed {len(filed_documents)} document(s).",
+            'client': {
+                'id': client_user['id'] if client_user else None,
+                'full_name': client_user['full_name'] if client_user else (extracted_client_name or 'Unassigned'),
+                'dob': extracted_dob or 'Not detected',
+                'email': client_user.get('email') if client_user else None,
+            },
+            'company': {
+                'id': company_obj['id'] if company_obj else None,
+                'name': company_obj['name'] if company_obj else (extracted_company_name or 'No CH Match'),
+                'company_number': company_obj.get('companies_house_number') or company_obj.get('company_number') if company_obj else extracted_company_num,
+            },
+            'missing_fields': missing_fields,
+            'filed_documents': filed_documents
         })
 
     if path.startswith('/api/admin/documents/') and path.endswith('/send') and method == 'POST':

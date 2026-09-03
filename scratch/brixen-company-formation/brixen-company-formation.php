@@ -2,12 +2,47 @@
 /**
  * Plugin Name: Brixen Company Formation Form
  * Description: Separate company-formation file-details form for Digital, Professional and All Inclusive packages. Does not create KYC / Identity Verification orders.
- * Version: 1.1.2
+ * Version: 1.1.4
  * Author: Brixen Consultants
  */
 
 if (!defined('ABSPATH')) {
     exit;
+}
+
+function brixen_normalize_retail_price($amount) {
+    $value = round((float) $amount, 2);
+    if ($value <= 0) {
+        return $value;
+    }
+    $cents = (int) round($value * 100);
+    $pounds_whole = (int) $value;
+    if ($cents % 10 === 9) {
+        return (float) ceil($value);
+    }
+    if ($value == $pounds_whole && $pounds_whole % 10 === 9) {
+        return (float) ($pounds_whole + 1);
+    }
+    return $value;
+}
+
+function brixen_format_retail_price($amount) {
+    $value = brixen_normalize_retail_price($amount);
+    if (abs($value - round($value)) < 0.001) {
+        return (string) (int) round($value);
+    }
+    return number_format($value, 2, '.', '');
+}
+
+function brixen_normalize_retail_price_html($html) {
+    if (!is_string($html) || $html === '') {
+        return $html;
+    }
+    return preg_replace_callback('/£([\d,]+(?:\.\d{1,2})?)/', function ($matches) {
+        $raw = str_replace(',', '', $matches[1]);
+        $normalized = brixen_normalize_retail_price((float) $raw);
+        return '£' . brixen_format_retail_price($normalized);
+    }, $html);
 }
 
 class Brixen_Company_Formation_Form {
@@ -65,6 +100,30 @@ class Brixen_Company_Formation_Form {
         add_filter('woocommerce_get_country_locale', array($this, 'hide_locale_state_fields'), 99);
         add_action('woocommerce_after_checkout_validation', array($this, 'ignore_checkout_state_errors'), 20, 2);
         add_action('wp_head', array($this, 'print_checkout_button_css'), 120);
+        add_filter('woocommerce_product_get_price', array($this, 'filter_product_price'), 20, 2);
+        add_filter('woocommerce_product_get_regular_price', array($this, 'filter_product_price'), 20, 2);
+        add_filter('woocommerce_product_get_sale_price', array($this, 'filter_product_price'), 20, 2);
+        add_filter('woocommerce_cart_item_price', array($this, 'filter_cart_price_html'), 20, 3);
+        add_filter('woocommerce_cart_item_subtotal', array($this, 'filter_cart_price_html'), 20, 3);
+        add_filter('woocommerce_cart_subtotal', array($this, 'filter_cart_price_html'), 20, 1);
+        add_filter('woocommerce_cart_total', array($this, 'filter_cart_price_html'), 20, 1);
+        add_filter('the_content', array($this, 'filter_pricing_html'), 25);
+        add_filter('elementor/frontend/the_content', array($this, 'filter_pricing_html'), 25);
+    }
+
+    public function filter_product_price($price, $product) {
+        if ($price === '' || $price === null) {
+            return $price;
+        }
+        return (string) brixen_normalize_retail_price($price);
+    }
+
+    public function filter_cart_price_html($html) {
+        return brixen_normalize_retail_price_html($html);
+    }
+
+    public function filter_pricing_html($html) {
+        return brixen_normalize_retail_price_html($html);
     }
 
     private function order_has_formation_product($order) {
@@ -1113,12 +1172,14 @@ class Brixen_Company_Formation_Form {
             wp_enqueue_style('select2');
             wp_enqueue_script('selectWoo');
         }
-        wp_register_style('cfs-frontend', false, array(), '1.1.2');
+        wp_register_style('cfs-frontend', false, array(), '1.1.4');
         wp_enqueue_style('cfs-frontend');
         wp_add_inline_style('cfs-frontend', $this->css() . $this->account_menu_css());
-        wp_register_script('cfs-frontend', false, array('jquery'), '1.1.2', true);
+        wp_register_script('cfs-frontend', false, array('jquery'), '1.1.4', true);
         wp_enqueue_script('cfs-frontend');
         $account_url = function_exists('wc_get_page_permalink') ? wc_get_page_permalink('myaccount') : home_url('/client-panel/');
+        $portal_url = function_exists('brixen_crm_portal_sso_url') ? brixen_crm_portal_sso_url() : '';
+        $client_panel_url = ($portal_url !== '') ? $portal_url : $account_url;
         wp_localize_script('cfs-frontend', 'cfsAjax', array(
             'ajaxUrl' => admin_url('admin-ajax.php'),
             'sicNonce' => wp_create_nonce('cfs_sic_search'),
@@ -1126,8 +1187,9 @@ class Brixen_Company_Formation_Form {
             'productId' => (string) $this->allowed_product_id($_GET['product_id'] ?? 0),
             'cartUrl' => function_exists('wc_get_cart_url') ? wc_get_cart_url() : home_url('/cart-2/'),
             'checkoutUrl' => function_exists('wc_get_checkout_url') ? wc_get_checkout_url() : home_url('/checkout-2/'),
-            'accountUrl' => $account_url,
-            'loginUrl' => $account_url,
+            'accountUrl' => $client_panel_url,
+            'loginUrl' => wp_login_url($account_url),
+            'portalUrl' => $client_panel_url,
             'logoutUrl' => wp_logout_url(home_url('/')),
             'loggedIn' => is_user_logged_in() ? 1 : 0,
             'countries' => $this->country_names(),
@@ -1627,6 +1689,7 @@ jQuery(function($){
     var cfg = window.cfsAjax || {};
     var cartUrl = cfg.cartUrl || '/cart-2/';
     var loginUrl = cfg.loginUrl || cfg.accountUrl || '/client-panel/';
+    var portalUrl = cfg.portalUrl || cfg.accountUrl || loginUrl;
     var logoutUrl = cfg.logoutUrl || '/wp-login.php?action=logout';
     var loggedIn = parseInt(cfg.loggedIn, 10) === 1;
     var hideTimer = null;
@@ -1656,6 +1719,7 @@ jQuery(function($){
         var $menu = $('<ul class="brixen-account-dropdown" role="menu"></ul>');
         $menu.append('<li role="none"><a role="menuitem" href="' + cartUrl + '"><i class="fas fa-shopping-cart" aria-hidden="true"></i> Cart</a></li>');
         if (loggedIn) {
+            $menu.append('<li role="none"><a role="menuitem" href="' + portalUrl + '"><i class="fas fa-user-circle" aria-hidden="true"></i> Client Portal</a></li>');
             $menu.append('<li role="none"><a role="menuitem" href="' + logoutUrl + '"><i class="fas fa-sign-out-alt" aria-hidden="true"></i> Logout</a></li>');
         } else {
             $menu.append('<li role="none"><a role="menuitem" href="' + loginUrl + '"><i class="fas fa-sign-in-alt" aria-hidden="true"></i> Log in</a></li>');

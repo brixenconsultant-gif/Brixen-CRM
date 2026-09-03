@@ -61,7 +61,7 @@
     </script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-    <link rel="stylesheet" href="/static/css/styles.css?v=98.0">
+    <link rel="stylesheet" href="/static/css/styles.css?v=113.0">
 </head>
 <body>
     <div id="auth-loading-screen" role="status" aria-live="polite">
@@ -87,7 +87,6 @@
                 <div class="nav-group">
                     <ul class="nav-list">
                         <li class="nav-item" data-view="client-dashboard"><a href="#dashboard" onclick="switchView('client-dashboard')"><i data-lucide="layout-dashboard"></i> <span>Dashboard</span></a></li>
-                        <li class="nav-item" data-view="client-profile"><a href="#profile" onclick="switchView('client-profile')"><i data-lucide="user"></i> <span>My Profile</span></a></li>
                     </ul>
                 </div>
 
@@ -163,7 +162,8 @@
                         <li class="nav-item" data-view="admin-tasks"><a href="#admin-tasks"><i data-lucide="list-checks"></i> <span>Tasks &amp; Team</span></a></li>
                         <li class="nav-item" data-view="admin-services"><a href="#admin-services"><i data-lucide="layers"></i> <span>Services Catalog</span></a></li>
                         <li class="nav-item" data-view="admin-invoices"><a href="#admin-invoices"><i data-lucide="receipt"></i> <span>Invoices Manager</span></a></li>
-                        <li class="nav-item" data-view="admin-documents"><a href="#admin-documents"><i data-lucide="file-check"></i> <span>Documents Review</span></a></li>
+                        <li class="nav-item" data-view="admin-documents"><a href="#admin-documents" onclick="switchView('admin-documents')"><i data-lucide="file-check"></i> <span>Documents Review</span></a></li>
+                        <li class="nav-item" data-view="admin-intake"><a href="#admin-intake" onclick="switchView('admin-intake')"><i data-lucide="file-search"></i> <span>Smart Intake</span></a></li>
                         <li class="nav-item" data-view="admin-logs"><a href="#admin-logs"><i data-lucide="history"></i> <span>Audit Logs</span></a></li>
                         <li class="nav-item" data-view="admin-settings"><a href="#admin-settings"><i data-lucide="settings"></i> <span>System Settings</span></a></li>
                         <li class="nav-item" data-view="client-profile"><a href="#profile"><i data-lucide="user-cog"></i> <span>Profile &amp; Password</span></a></li>
@@ -255,6 +255,9 @@
                             </li>
                             <li class="top-menu-item" data-view="admin-documents">
                                 <a href="#admin-documents" onclick="switchView('admin-documents')"><i data-lucide="folder-lock"></i> <span>Documents</span></a>
+                            </li>
+                            <li class="top-menu-item" data-view="admin-intake">
+                                <a href="#admin-intake" onclick="switchView('admin-intake')"><i data-lucide="file-search"></i> <span>Smart Intake</span></a>
                             </li>
                             <li class="top-menu-item" data-view="admin-logs">
                                 <a href="#admin-logs" onclick="switchView('admin-logs')"><i data-lucide="activity"></i> <span>Logs</span></a>
@@ -503,105 +506,100 @@
                     <div id="client-orders-pagination" class="orders-pagination" style="display:none;"></div>
                 </div>
 
-                <!-- 2. CLIENT DASHBOARD VIEW (Brixen Corporate UI/UX Layout) -->
+                <!-- 2. CLIENT DASHBOARD VIEW -->
                 <div id="view-client-dashboard" class="view-panel" style="display: none;">
-                    <div class="page-title-row">
-                        <div class="page-title-text">
-                            <h1>Dashboard</h1>
-                            <div class="page-kicker">Client Portal</div>
-                            <p>Your companies, compliance, and active orders in one place.</p>
-                        </div>
-                    </div>
-
                     <div id="dash-error" class="dash-banner-error" style="display:none;" role="alert"></div>
 
-                    <div class="welcome-hero">
-                        <div class="hero-left">
-                            <div class="hero-date" id="hero-current-date">Today</div>
-                            <h2>Welcome back, <span id="hero-user-name">—</span>! <span class="wave-emoji">🔥</span></h2>
-                            <p>Here’s what’s happening with your companies and orders today.</p>
+                    <div id="portal-home-skel" class="portal-home-skel" aria-hidden="false" aria-busy="true">
+                        <div class="portal-skel-welcome">
+                            <div class="portal-skel-bar portal-skel-date"></div>
+                            <div class="portal-skel-bar portal-skel-hello"></div>
+                            <div class="portal-skel-bar portal-skel-line"></div>
                         </div>
-                        <div class="hero-right">
-                            <div class="hero-stat-number" id="hero-companies-count">0</div>
-                            <div class="hero-stat-label">Companies</div>
+                        <div class="portal-home-overview">
+                            <div class="portal-skel-card"></div>
+                            <div class="portal-skel-card"></div>
+                            <div class="portal-skel-card"></div>
+                            <div class="portal-skel-card"></div>
                         </div>
-                    </div>
-
-                    <div class="stats-grid-3">
-                        <div class="stat-card-brixen">
-                            <div class="card-head">
-                                <div>
-                                    <div class="card-title">PORTFOLIO</div>
-                                    <div class="card-subtitle">Total registered companies</div>
-                                </div>
-                                <div class="stat-icon purple"><i data-lucide="building-2"></i></div>
-                            </div>
-                            <div class="card-body">
-                                <div class="card-big-value" id="dash-card-portfolio-count">0</div>
-                                <div class="country-badges-row">
-                                    <span class="country-tag" id="dash-uk-count">0 UK</span>
-                                    <span class="country-tag" id="dash-intl-count">0 International</span>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="stat-card-brixen">
-                            <div class="card-head">
-                                <div>
-                                    <div class="card-title">OVERDUE</div>
-                                    <div class="card-subtitle">Missed compliance deadlines</div>
-                                </div>
-                                <div class="stat-icon green"><i data-lucide="check-circle-2"></i></div>
-                            </div>
-                            <div class="card-body">
-                                <div class="card-big-value" id="dash-card-overdue-count">0</div>
-                                <div>
-                                    <span class="health-badge success" id="dash-overdue-badge">
-                                        <i data-lucide="check-circle-2"></i> All on track
-                                    </span>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="stat-card-brixen">
-                            <div class="card-head">
-                                <div>
-                                    <div class="card-title">UPCOMING</div>
-                                    <div class="card-subtitle">Upcoming deadlines / events</div>
-                                </div>
-                                <div class="stat-icon blue"><i data-lucide="calendar"></i></div>
-                            </div>
-                            <div class="card-body">
-                                <div class="card-big-value" id="dash-card-upcoming-count">0</div>
-                                <div>
-                                    <span class="health-badge info" id="dash-upcoming-badge">
-                                        <i data-lucide="calendar"></i> No deadlines soon
-                                    </span>
-                                </div>
-                            </div>
+                        <div class="portal-home-split">
+                            <div class="portal-skel-block"></div>
+                            <div class="portal-skel-block"></div>
                         </div>
                     </div>
 
-                    <div class="tracker-section-header">
-                        <div>
-                            <h2>Order Status Tracker</h2>
-                            <p>Active orders — delivered orders are hidden</p>
+                    <div id="portal-home" class="portal-home" hidden>
+                        <section class="portal-home-welcome" aria-labelledby="portal-home-hello">
+                            <p class="portal-home-date" id="portal-home-date"></p>
+                            <h1 class="portal-home-hello" id="portal-home-hello"></h1>
+                            <p class="portal-home-lede">Welcome back to your Brixen Client Portal.</p>
+                            <p class="portal-home-sub">Manage your businesses, orders, documents and services from one place.</p>
+                        </section>
+
+                        <section class="portal-home-overview" aria-label="Quick overview">
+                            <button type="button" class="portal-overview-card" onclick="switchView('client-companies')">
+                                <span class="portal-overview-label">My businesses</span>
+                                <span class="portal-overview-value" id="dash-card-businesses">—</span>
+                            </button>
+                            <button type="button" class="portal-overview-card" onclick="switchView('client-orders')">
+                                <span class="portal-overview-label">Active orders</span>
+                                <span class="portal-overview-value" id="dash-card-orders">—</span>
+                            </button>
+                            <button type="button" class="portal-overview-card" onclick="switchView('client-documents')">
+                                <span class="portal-overview-label">Documents</span>
+                                <span class="portal-overview-value" id="dash-card-documents">—</span>
+                            </button>
+                            <div class="portal-overview-card" id="dash-card-pending-wrap">
+                                <span class="portal-overview-label">Pending actions</span>
+                                <span class="portal-overview-value" id="dash-card-pending">—</span>
+                            </div>
+                        </section>
+
+                        <section id="portal-home-attention" class="portal-home-attention" hidden></section>
+
+                        <div class="portal-home-split">
+                            <section id="portal-home-orders" class="portal-home-panel" hidden>
+                                <div class="portal-home-panel-head">
+                                    <h2>Your Orders</h2>
+                                    <button type="button" class="portal-home-link" onclick="switchView('client-orders')">View all orders →</button>
+                                </div>
+                                <div id="dash-active-orders-grid" class="portal-home-list"></div>
+                            </section>
+                            <section id="portal-home-companies" class="portal-home-panel" hidden>
+                                <div class="portal-home-panel-head">
+                                    <h2>Business Portfolio</h2>
+                                    <button type="button" class="portal-home-link" onclick="switchView('client-companies')">View Business Portfolio →</button>
+                                </div>
+                                <div id="dash-companies-grid" class="portal-home-list"></div>
+                            </section>
                         </div>
-                        <div class="active-orders-pill">
-                            <span id="dash-active-orders-num">0</span> Active Orders
+
+                        <section id="portal-home-documents" class="portal-home-panel" hidden>
+                            <div class="portal-home-panel-head">
+                                <h2>Recent Documents</h2>
+                                <button type="button" class="portal-home-link" onclick="switchView('client-documents')">View all documents →</button>
+                            </div>
+                            <div id="dash-recent-documents" class="portal-home-list"></div>
+                        </section>
+
+                        <div class="portal-home-bottom">
+                            <section class="portal-home-panel portal-home-actions-panel" aria-label="Quick actions">
+                                <h2>Quick Actions</h2>
+                                <div class="portal-home-actions">
+                                    <button type="button" class="btn-secondary" onclick="openUploadDocumentModal()"><i data-lucide="upload"></i> Upload Document</button>
+                                    <button type="button" class="btn-secondary" onclick="switchView('client-orders')">View Orders</button>
+                                    <button type="button" class="btn-secondary" onclick="switchView('client-companies')">Business Portfolio</button>
+                                </div>
+                            </section>
+                            <section class="portal-home-help">
+                                <div>
+                                    <h2>Need help?</h2>
+                                    <p>Your Brixen team is here to help.</p>
+                                </div>
+                                <button type="button" class="btn-primary" onclick="switchView('client-support')">Contact Support</button>
+                            </section>
                         </div>
                     </div>
-
-                    <div id="dash-active-orders-grid" class="orders-grid"></div>
-
-                    <div class="tracker-section-header">
-                        <div>
-                            <h2>Your Companies</h2>
-                            <p>Registered entities linked to your client account.</p>
-                        </div>
-                        <div class="active-orders-pill" id="dash-companies-count-pill">0 Companies</div>
-                    </div>
-                    <div id="dash-companies-grid" class="companies-grid"></div>
                 </div>
 
                 <!-- 3. COMPANY REGISTERED VIEW (CLIENT) -->
@@ -617,10 +615,12 @@
                         <div class="portfolio-count-pill" id="portfolio-company-count">0 UK</div>
                     </div>
                     <div class="portfolio-filter-bar" role="tablist" aria-label="Company registration filter">
+                        <button type="button" data-company-reg-scope="client" data-company-reg-filter="attention" onclick="setCompanyRegFilter('client', 'attention')">Attention <span data-count>0</span></button>
                         <button type="button" class="is-active" data-company-reg-scope="client" data-company-reg-filter="all" onclick="setCompanyRegFilter('client', 'all')">All <span data-count>0</span></button>
                         <button type="button" data-company-reg-scope="client" data-company-reg-filter="ch" onclick="setCompanyRegFilter('client', 'ch')">Companies House <span data-count>0</span></button>
                         <button type="button" data-company-reg-scope="client" data-company-reg-filter="pending" onclick="setCompanyRegFilter('client', 'pending')">Not registered <span data-count>0</span></button>
                     </div>
+                    <div id="client-attention-banner" class="portfolio-attention-banner" hidden></div>
                     <div id="portfolio-companies-grid" class="portfolio-grid"></div>
                 </div>
 
@@ -668,10 +668,12 @@
                         </div>
                     </div>
                     <div class="portfolio-filter-bar" role="tablist" aria-label="Company registration filter">
+                        <button type="button" data-company-reg-scope="admin" data-company-reg-filter="attention" onclick="setCompanyRegFilter('admin', 'attention')">Attention <span data-count>0</span></button>
                         <button type="button" class="is-active" data-company-reg-scope="admin" data-company-reg-filter="all" onclick="setCompanyRegFilter('admin', 'all')">All <span data-count>0</span></button>
                         <button type="button" data-company-reg-scope="admin" data-company-reg-filter="ch" onclick="setCompanyRegFilter('admin', 'ch')">Companies House <span data-count>0</span></button>
                         <button type="button" data-company-reg-scope="admin" data-company-reg-filter="pending" onclick="setCompanyRegFilter('admin', 'pending')">Not registered <span data-count>0</span></button>
                     </div>
+                    <div id="admin-attention-banner" class="portfolio-attention-banner" hidden></div>
                     <div id="admin-ch-banner" class="portfolio-ch-banner" hidden>
                         Add a Companies House API key in System Settings to search live company names and numbers.
                     </div>
@@ -699,7 +701,7 @@
                             <thead>
                                 <tr>
                                     <th>Company</th>
-                                    <th>Director</th>
+                                    <th>Owner</th>
                                     <th>Address</th>
                                     <th>IDV</th>
                                     <th>PSC</th>
@@ -1225,7 +1227,7 @@
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>Invoices Manager</h1>
-                            <p>Invoices created from website and CRM orders.</p>
+                            <p>Mark Advance if they paid before work, or After work if they pay when the job is done. Paid emails follow that timing.</p>
                         </div>
                     </div>
                     <div id="adm-invoices-error" class="dash-banner-error" style="display:none;" role="alert"></div>
@@ -1234,11 +1236,13 @@
                             <thead>
                                 <tr>
                                     <th>Invoice #</th>
-                                    <th>Client</th>
+                                    <th>Owner</th>
                                     <th>Order</th>
                                     <th class="col-inv-total">Total</th>
+                                    <th>When</th>
                                     <th>Status</th>
                                     <th>Date</th>
+                                    <th></th>
                                 </tr>
                             </thead>
                             <tbody id="adm-invoices-table-body"></tbody>
@@ -1270,6 +1274,93 @@
                             </thead>
                             <tbody id="adm-documents-table-body"></tbody>
                         </table>
+                    </div>
+                </div>
+
+                <!-- SMART DOCUMENT INTAKE & AUTO-FILING VIEW -->
+                <div id="view-admin-intake" class="view-panel" style="display: none;">
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>Smart Document Intake &amp; Auto-Filing</h1>
+                            <p>Upload unorganized client files (bank statements, passports, ID documents, company formation docs). The system automatically reads name &amp; DOB, searches Companies House, imports the company, links the customer, and files all documents.</p>
+                        </div>
+                    </div>
+
+                    <div id="adm-intake-error" class="dash-banner-error" style="display:none;" role="alert"></div>
+                    <div id="adm-intake-success" class="dash-banner-success" style="display:none;" role="alert"></div>
+
+                    <!-- UPLOAD CONTAINER CARD -->
+                    <div class="modal-card" style="max-width:100%; margin:0 0 24px 0; padding:24px;">
+                        <form id="intake-upload-form" onsubmit="submitSmartIntakeForm(event)">
+                            <div id="intake-drop-zone" style="border: 2px dashed #cbd5e1; border-radius:12px; padding:36px 20px; text-align:center; background:#f8fafc; cursor:pointer; transition: all 0.2s ease;" onclick="document.getElementById('intake-files-input').click()">
+                                <i data-lucide="file-up" style="width:48px; height:48px; color:#475569; margin-bottom:12px;"></i>
+                                <h3 style="margin:0 0 8px 0; font-size:1.1rem; font-weight:700; color:#1e293b;">Drag &amp; Drop Unorganized Files Here</h3>
+                                <p style="margin:0 0 16px 0; color:#64748b; font-size:0.875rem;">Supports bank statements, passports, CNIC, utility bills, company docs (PDF, PNG, JPG, DOCX)</p>
+                                <button type="button" class="btn-secondary" style="pointer-events:none;"><i data-lucide="folder-open"></i> Browse Files</button>
+                                <input type="file" id="intake-files-input" multiple accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.zip,.txt" style="display:none;" onchange="onIntakeFilesSelected(event)">
+                            </div>
+
+                            <div id="intake-file-preview-list" style="margin-top:16px; display:flex; flex-wrap:wrap; gap:8px;"></div>
+
+                            <div style="display:flex; justify-content:flex-end; gap:12px; margin-top:20px;">
+                                <button type="button" class="btn-secondary" onclick="resetSmartIntakeForm()"><i data-lucide="rotate-ccw"></i> Reset</button>
+                                <button type="submit" class="btn-primary" id="btn-intake-submit" disabled><i data-lucide="cpu"></i> Process &amp; Auto-File Documents</button>
+                            </div>
+                        </form>
+                    </div>
+
+                    <!-- INTAKE RESULTS & MATCHES PANEL -->
+                    <div id="intake-results-panel" style="display:none;">
+                        <h2 style="font-size:1.1rem; font-weight:700; color:#0f172a; margin:0 0 16px 0; display:flex; align-items:center; gap:8px;">
+                            <i data-lucide="sparkles" style="color:#0284c7;"></i> Processing &amp; Auto-Filing Results
+                        </h2>
+
+                        <!-- CARDS GRID FOR MATCHED ENTITIES -->
+                        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap:16px; margin-bottom:24px;">
+                            <!-- CLIENT CARD -->
+                            <div class="modal-card" style="margin:0; padding:18px; border-top:4px solid #0284c7;">
+                                <div style="font-size:0.75rem; font-weight:700; text-transform:uppercase; color:#64748b; margin-bottom:6px;">Extracted Client Profile</div>
+                                <h3 id="res-client-name" style="margin:0 0 4px 0; font-size:1.1rem; color:#0f172a;">-</h3>
+                                <div style="font-size:0.85rem; color:#475569;" id="res-client-dob">DOB: -</div>
+                                <div style="margin-top:12px;" id="res-client-status-badge"></div>
+                                <div style="margin-top:12px;" id="res-client-action-btn"></div>
+                            </div>
+
+                            <!-- COMPANY CARD -->
+                            <div class="modal-card" style="margin:0; padding:18px; border-top:4px solid #16a34a;">
+                                <div style="font-size:0.75rem; font-weight:700; text-transform:uppercase; color:#64748b; margin-bottom:6px;">Companies House Auto-Match</div>
+                                <h3 id="res-company-name" style="margin:0 0 4px 0; font-size:1.1rem; color:#0f172a;">-</h3>
+                                <div style="font-size:0.85rem; color:#475569;" id="res-company-num">Company #: -</div>
+                                <div style="margin-top:12px;" id="res-company-status-badge"></div>
+                            </div>
+
+                            <!-- PENDING ACTION ALERT -->
+                            <div class="modal-card" style="margin:0; padding:18px; border-top:4px solid #eab308; background:#fffbeb;">
+                                <div style="font-size:0.75rem; font-weight:700; text-transform:uppercase; color:#b45309; margin-bottom:6px;">Pending Information Alert</div>
+                                <div id="res-pending-alert-text" style="font-size:0.875rem; color:#92400e; line-height:1.4;">
+                                    Email or phone number missing. You can add missing contact details later in the customer profile.
+                                </div>
+                                <div style="margin-top:12px;" id="res-pending-action-btn"></div>
+                            </div>
+                        </div>
+
+                        <!-- FILED DOCUMENTS TABLE -->
+                        <div class="data-table-container">
+                            <h3 style="font-size:0.95rem; font-weight:700; padding:16px 20px 0 20px; margin:0; color:#1e293b;">Auto-Categorized &amp; Filed Documents</h3>
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>File Name</th>
+                                        <th>Auto-Detected Category</th>
+                                        <th>Assigned Client</th>
+                                        <th>Assigned Company</th>
+                                        <th>Status</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="intake-filed-docs-tbody"></tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
 
@@ -1848,6 +1939,33 @@
                 <div data-order-finance><span class="staff-order-field-label">Payment mode</span><select id="staff-order-payment-mode" class="select-filter staff-order-field-control" onchange="updateAdminOrderPaymentMode(staffOrderId, this.value)"></select></div>
                 <div><span class="staff-order-field-label">Status</span><select id="staff-order-status-select" class="select-filter staff-order-field-control" onchange="updateAdminOrderStatus(staffOrderId, this.value)"></select></div>
             </div>
+            <div id="staff-order-pay-plan" class="staff-order-pay-plan" data-order-finance hidden>
+                <h4 class="staff-order-section-title">How they pay</h4>
+                <p class="staff-order-section-copy">Set this when you start the order. Pay first if they must send money before work. Deposit is usually 50%, or type any amount. Every invoice shows both the GBP Tide account and the PKR UBL account.</p>
+                <div class="staff-order-book-grid">
+                    <div class="full">
+                        <span class="staff-order-field-label">Payment plan</span>
+                        <select id="staff-order-pay-timing" class="select-filter staff-order-field-control" onchange="toggleStaffOrderDepositField()">
+                            <option value="After work">Pay after work</option>
+                            <option value="Advance">Pay first — full amount</option>
+                            <option value="Deposit">Pay first — deposit now</option>
+                        </select>
+                    </div>
+                    <div id="staff-order-deposit-wrap" hidden>
+                        <span class="staff-order-field-label">Deposit now</span>
+                        <input type="text" id="staff-order-deposit-amount" class="select-filter staff-order-field-control" inputmode="decimal" placeholder="50% of total">
+                        <div id="staff-order-deposit-hint" class="staff-order-field-sub"></div>
+                    </div>
+                    <div class="full"><span class="staff-order-field-label">Invoice</span><strong id="staff-order-pay-summary">—</strong></div>
+                </div>
+                <div class="staff-order-form-actions" style="margin-top:10px;">
+                    <button type="button" class="btn-secondary" onclick="saveStaffOrderPaymentPlan()">Save plan</button>
+                    <button type="button" class="btn-primary" id="staff-order-mark-deposit" onclick="markStaffOrderDepositReceived()">Mark deposit received</button>
+                    <button type="button" class="btn-primary" id="staff-order-mark-paid" onclick="markStaffOrderPaidInFull()">Mark paid in full</button>
+                    <button type="button" class="btn-secondary" id="staff-order-email-pay" onclick="emailStaffOrderPaymentDetails()">Email payment details</button>
+                    <button type="button" class="btn-secondary" id="staff-order-view-invoice" onclick="openStaffOrderInvoice()">View invoice</button>
+                </div>
+            </div>
             <div id="staff-order-manage" style="display:none; gap:8px; margin:12px 0 16px; align-items:center; flex-wrap:wrap;">
                 <button type="button" class="btn-primary" id="staff-order-progress-btn" onclick="advanceStaffOrderProgress()"><i data-lucide="plus"></i> Advance Progress</button>
                 <button type="button" class="portfolio-delete-btn" id="staff-order-delete-btn" style="display:none;" onclick="openDeleteOrderModal(staffOrderId)" title="Delete order" aria-label="Delete order"><i data-lucide="trash-2"></i></button>
@@ -1895,7 +2013,7 @@
             <div class="modal-header">
                 <div>
                     <h3>Delete order</h3>
-                    <p style="font-size:0.8rem; color:#64748b;">This permanently removes the order from the CMS. Related invoices and order documents are also removed. This cannot be undone.</p>
+                    <p style="font-size:0.8rem; color:#64748b;">This permanently removes the order and its invoices. The company card stays, and official Companies House details stay on that card.</p>
                 </div>
                 <button type="button" class="btn-close" onclick="closeDeleteOrderModal()"><i data-lucide="x"></i></button>
             </div>
@@ -1907,6 +2025,73 @@
                 <button type="button" class="btn-secondary" onclick="closeDeleteOrderModal()">Cancel</button>
                 <button type="button" class="portfolio-delete-btn" id="delete-order-submit" onclick="confirmDeleteOrder()" title="Delete order" aria-label="Delete order"><i data-lucide="trash-2"></i></button>
             </div>
+        </div>
+    </div>
+
+    <div id="modal-edit-invoice" class="modal-overlay" style="z-index:1100;">
+        <div class="modal-card" style="max-width:520px;">
+            <div class="modal-header">
+                <div>
+                    <h3>Edit invoice</h3>
+                    <p style="font-size:0.8rem; color:#64748b;">Pay after work, take the full amount first, or take a deposit (usually 50%) and the rest when the job is done.</p>
+                </div>
+                <button type="button" class="btn-close" onclick="closeEditInvoiceModal()"><i data-lucide="x"></i></button>
+            </div>
+            <form id="edit-invoice-form" onsubmit="submitEditInvoiceForm(event)">
+                <div id="edit-invoice-error" style="display:none; padding:10px; border-radius:8px; background:#fef2f2; color:#dc2626; font-size:0.8rem; font-weight:600;" role="alert"></div>
+                <div style="display:flex; flex-direction:column; gap:12px; margin-top:10px;">
+                    <div>
+                        <div style="font-size:0.88rem; font-weight:800; color:#0f172a;" id="edit-invoice-number">—</div>
+                        <div style="font-size:0.75rem; color:#64748b; margin-top:2px;" id="edit-invoice-client"></div>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Status</label>
+                            <select id="edit-invoice-status" class="select-filter" style="width:100%; margin-top:4px;">
+                                <option value="Pending">Pending</option>
+                                <option value="Partial Paid">Partial Paid</option>
+                                <option value="Paid">Paid</option>
+                                <option value="Overdue">Overdue</option>
+                                <option value="Cancelled">Cancelled</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">When they pay</label>
+                            <select id="edit-invoice-timing" class="select-filter" style="width:100%; margin-top:4px;" onchange="toggleEditInvoiceDepositField()">
+                                <option value="After work">After work — when the job is done</option>
+                                <option value="Advance">Pay first — full amount</option>
+                                <option value="Deposit">Pay first — deposit now</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Payment method</label>
+                            <select id="edit-invoice-method" class="select-filter" style="width:100%; margin-top:4px;"></select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Due date</label>
+                            <input type="date" id="edit-invoice-due" class="select-filter" style="width:100%; margin-top:4px;">
+                        </div>
+                        <div data-order-finance>
+                            <label style="font-size:0.8rem; font-weight:700;">Total (£)</label>
+                            <input type="text" id="edit-invoice-total" class="select-filter" style="width:100%; margin-top:4px;" inputmode="decimal">
+                        </div>
+                        <div id="edit-invoice-deposit-wrap" data-order-finance hidden>
+                            <label style="font-size:0.8rem; font-weight:700;">Deposit now</label>
+                            <input type="text" id="edit-invoice-deposit" class="select-filter" style="width:100%; margin-top:4px;" inputmode="decimal">
+                        </div>
+                        <div data-order-finance>
+                            <label style="font-size:0.8rem; font-weight:700;">Received so far</label>
+                            <input type="text" id="edit-invoice-paid" class="select-filter" style="width:100%; margin-top:4px;" inputmode="decimal">
+                        </div>
+                    </div>
+                    <p style="font-size:0.75rem; color:#64748b; margin:0;">GBP uses Tide 32546658 / 04-06-05. PKR uses the UBL IBAN. Use Send invoice to email the company owner. Marking a new receipt also emails them.</p>
+                    <div style="display:flex; justify-content:flex-end; gap:10px; flex-wrap:wrap;">
+                        <button type="button" class="btn-secondary" onclick="closeEditInvoiceModal()">Cancel</button>
+                        <button type="button" class="btn-secondary" id="edit-invoice-send" onclick="emailAdminInvoice()">Send invoice</button>
+                        <button type="submit" class="btn-primary" id="edit-invoice-submit">Save invoice</button>
+                    </div>
+                </div>
+            </form>
         </div>
     </div>
 
@@ -1956,6 +2141,12 @@
                     <div>
                         <label style="font-size:0.8rem; font-weight:700;">Description / message to client</label>
                         <textarea id="deliver-document-message" class="select-filter" style="width:100%; height:80px; margin-top:4px; font-family:inherit; padding:10px;" placeholder="Optional short message shown in the client notification and email. Internal notes are never sent."></textarea>
+                    </div>
+                    <div>
+                        <label style="display:flex; align-items:center; gap:8px; font-size:0.8rem; font-weight:700; cursor:pointer;">
+                            <input type="checkbox" id="deliver-document-client-visible" checked style="width:16px; height:16px;">
+                            <span>Visible to client (client can view and download in portal)</span>
+                        </label>
                     </div>
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
                         <div>
@@ -2050,7 +2241,7 @@
             <div class="modal-header">
                 <div>
                     <h3>Add company</h3>
-                    <p style="font-size:0.8rem; color:#64748b;">Add a company registered before the CRM, or any company that is not on a website order yet.</p>
+                    <p style="font-size:0.8rem; color:#64748b;">For companies registered before the CRM. This creates a company card only — no order. Companies House fills official details, so you can delete any dummy orders afterwards.</p>
                 </div>
                 <button type="button" class="btn-close" onclick="closeCreateCompanyModal()"><i data-lucide="x"></i></button>
             </div>
@@ -2214,25 +2405,32 @@
                 <button type="button" class="portfolio-tab" data-tab="compliance" onclick="switchPortfolioDetailTab('compliance')">Compliance</button>
                 <button type="button" class="portfolio-tab" data-tab="orders" onclick="switchPortfolioDetailTab('orders')">Orders / Services</button>
                 <button type="button" class="portfolio-tab" data-tab="documents" onclick="switchPortfolioDetailTab('documents')">Documents</button>
-                <button type="button" class="portfolio-tab" data-tab="support" onclick="switchPortfolioDetailTab('support')">Support</button>
             </div>
             <div class="portfolio-tab-panel" data-panel="overview">
+                <div id="portfolio-detail-attention" class="portfolio-attention-banner" hidden></div>
                 <div class="portfolio-detail-grid">
                     <div class="full" id="portfolio-detail-name-wrap">
                         <span>Company name</span>
                         <strong id="portfolio-detail-name-field">—</strong>
                         <form id="portfolio-rename-form" class="portfolio-rename-form" hidden onsubmit="savePendingCompanyName(event)">
-                            <input type="text" id="portfolio-rename-input" name="name" required minlength="2" maxlength="160" autocomplete="off" placeholder="Desired company name">
+                            <div class="portfolio-rename-search ch-search-wrap">
+                                <input type="text" id="portfolio-rename-input" name="name" required minlength="2" maxlength="160" autocomplete="off" placeholder="Desired company name" oninput="searchCompaniesHouseForRename(this)">
+                                <span id="portfolio-rename-ch-tick" class="portfolio-rename-ch-tick" hidden title="On record at Companies House" aria-label="On record at Companies House"><i data-lucide="check-circle-2"></i></span>
+                                <input type="hidden" id="portfolio-rename-ch-number" name="companies_house_number" value="">
+                                <input type="hidden" id="portfolio-rename-ch-status" name="companies_house_status" value="">
+                                <div class="ch-search-results portfolio-rename-ch-results" id="portfolio-rename-ch-results" hidden></div>
+                            </div>
                             <button type="submit" class="btn-primary" id="portfolio-rename-save">Save name</button>
                             <span id="portfolio-rename-status" role="status"></span>
                         </form>
-                        <p id="portfolio-rename-hint" class="portfolio-rename-hint" hidden>Change this before the Companies House application. The client portal shows the same name.</p>
+                        <p id="portfolio-rename-hint" class="portfolio-rename-hint" hidden>Type a name to check Companies House. Save once the green tick appears.</p>
                     </div>
                     <div><span>Company number</span><strong id="portfolio-detail-number-field">—</strong></div>
                     <div><span>Status</span><strong id="portfolio-detail-status">—</strong></div>
                     <div><span>Country</span><strong id="portfolio-detail-country">—</strong></div>
                     <div><span>Incorporation date</span><strong id="portfolio-detail-inc">—</strong></div>
-                    <div><span>Director</span><strong id="portfolio-detail-director">—</strong></div>
+                    <div><span id="portfolio-detail-owner-label">Director</span><strong id="portfolio-detail-director">—</strong></div>
+                    <div class="full"><span>Registered email</span><strong id="portfolio-detail-email">—</strong></div>
                 </div>
             </div>
             <div class="portfolio-tab-panel" data-panel="office" hidden>
@@ -2242,7 +2440,9 @@
                 </div>
             </div>
             <div class="portfolio-tab-panel" data-panel="activity" hidden>
-                <p class="portfolio-empty-copy" id="portfolio-detail-activity">No SIC or business activity details on file.</p>
+                <div id="portfolio-detail-activity" class="portfolio-activity">
+                    <p class="portfolio-empty-copy">No SIC or business activity details on file.</p>
+                </div>
             </div>
             <div class="portfolio-tab-panel" data-panel="compliance" hidden>
                 <div id="portfolio-detail-compliance"></div>
@@ -2252,9 +2452,6 @@
             </div>
             <div class="portfolio-tab-panel" data-panel="documents" hidden>
                 <div id="portfolio-detail-documents"></div>
-            </div>
-            <div class="portfolio-tab-panel" data-panel="support" hidden>
-                <div id="portfolio-detail-support"></div>
             </div>
             <div class="portfolio-modal-actions">
                 <button type="button" class="portfolio-delete-btn" id="portfolio-delete-company-btn" style="display:none;" onclick="deleteCompanyFromDetail()" title="Delete company" aria-label="Delete company"><i data-lucide="trash-2"></i></button>
@@ -2433,6 +2630,35 @@
         </div>
     </div>
 
+    <div id="modal-client-upload-document" class="modal-overlay" style="z-index:1100;" onclick="if(event.target===this) closeUploadDocumentModal()">
+        <div class="modal-card" style="max-width:480px;" role="dialog" aria-modal="true" aria-labelledby="client-upload-title">
+            <div class="modal-header">
+                <div>
+                    <h3 id="client-upload-title">Upload Document</h3>
+                    <p style="font-size:0.8rem; color:#64748b;">Files are stored against your client account for review.</p>
+                </div>
+                <button type="button" class="btn-close" onclick="closeUploadDocumentModal()"><i data-lucide="x"></i></button>
+            </div>
+            <form id="client-upload-document-form" onsubmit="submitClientUploadDocument(event)">
+                <div id="client-upload-error" class="dash-banner-error" style="display:none;" role="alert"></div>
+                <div style="display:flex; flex-direction:column; gap:14px; margin-top:10px;">
+                    <div>
+                        <label for="client-upload-name" style="font-size:0.8rem; font-weight:700;">Document name *</label>
+                        <input type="text" id="client-upload-name" class="select-filter" style="width:100%; margin-top:4px;" placeholder="e.g. Passport" required>
+                    </div>
+                    <div>
+                        <label for="client-upload-file" style="font-size:0.8rem; font-weight:700;">File *</label>
+                        <input type="file" id="client-upload-file" accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.zip" style="width:100%; margin-top:4px; font-size:0.8rem;" required>
+                    </div>
+                    <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:6px;">
+                        <button type="button" class="btn-secondary" onclick="closeUploadDocumentModal()">Cancel</button>
+                        <button type="submit" class="btn-primary" id="client-upload-submit">Upload</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <div id="modal-document-preview" class="modal-overlay document-preview-overlay" style="z-index:1200;" onclick="if(event.target===this) closeDocumentPreview()">
         <div class="modal-card document-preview-card" role="dialog" aria-modal="true" aria-labelledby="document-preview-title">
             <div class="document-preview-toolbar">
@@ -2457,6 +2683,6 @@
     </div>
 
     <div id="global-search-results" class="global-search-results" hidden></div>
-    <script src="/static/js/app.js?v=148.0"></script>
+    <script src="/static/js/app.js?v=173.0"></script>
 </body>
 </html>

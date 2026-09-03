@@ -3,7 +3,7 @@ Contributors: Brixen Consultants Engineering Team
 Tags: woocommerce, crm, sync, webhooks, sso, client portal
 Requires at least: 5.8
 Tested up to: 6.7
-Stable tag: 1.2.5
+Stable tag: 1.6.0
 License: Proprietary
 
 Official integration plugin for Brixen Consultants connecting WordPress User Registration and WooCommerce Checkout to the Brixen CRM & Client Portal.
@@ -38,6 +38,14 @@ This plugin provides automated real-time synchronization between the official Br
 * `payment.completed`: Fired when payment is confirmed for an order.
 
 == Changelog ==
+
+= 1.6.0 =
+* Production release alignment for client portal document delivery, signed SSO redirect flow, and WooCommerce checkout sync.
+
+= 1.5.0 =
+* After login and on `/client-panel/`, customers are redirected via signed SSO to the custom Brixen client portal at portal.brixenconsultants.com (not the WooCommerce account dashboard).
+* Adds `brixen_crm_portal_sso_url()` helper for theme/header menus.
+* SSO shortcode opens the portal in the same tab.
 
 = 1.2.5 =
 * Publish the square website favicon at /apple-touch-icon.png and /favicon.ico so mail apps can show the Brixen icon.

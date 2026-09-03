@@ -50,6 +50,7 @@ const VIEW_ACCESS = {
     'admin-orders': ['Orders', 'Support'],
     'admin-services': ['Orders'],
     'admin-documents': ['Documents', 'Compliance'],
+    'admin-intake': ['Documents', 'Compliance'],
     'admin-invoices': ['Accounts'],
     'admin-accountancy': ['Accountancy', 'Accounts', 'Compliance']
 };
@@ -187,7 +188,7 @@ function applyAdminRevenueCards() {
 
 function applyAdminOrderFinanceVisibility() {
     const hide = !canViewRevenue();
-    document.querySelectorAll('.orders-table-wrap, .invoices-table-wrap, #modal-staff-order').forEach((el) => {
+    document.querySelectorAll('.orders-table-wrap, .invoices-table-wrap, #modal-staff-order, #modal-edit-invoice').forEach((el) => {
         el.classList.toggle('hide-order-finance', hide);
     });
     const paymentFilter = document.getElementById('filter-admin-order-payment');
@@ -510,6 +511,7 @@ function clearLoggedInChrome() {
     const notesList = document.getElementById('notifications-list');
     if (notesList) notesList.innerHTML = '';
     lastNotifications = [];
+    resetClientDashboardView();
 }
 
 function showLoginView() {
@@ -673,6 +675,7 @@ async function switchToUser(userId, event) {
         }
         currentUser = data.user;
         closeAccountMenu();
+        resetClientDashboardView();
         updateUserUI();
         switchView(defaultPortalView());
         setAuthShellState(false, true);
@@ -694,6 +697,7 @@ async function stopImpersonation(event) {
         }
         currentUser = data.user;
         closeAccountMenu();
+        resetClientDashboardView();
         updateUserUI();
         switchView(defaultPortalView());
         setAuthShellState(false, true);
@@ -948,6 +952,7 @@ function switchView(viewName) {
         case 'admin-services': loadAdminServices(); break;
         case 'admin-invoices': loadAdminInvoices(); break;
         case 'admin-documents': loadAdminDocuments(); break;
+        case 'admin-intake': resetSmartIntakeForm(); break;
         case 'admin-logs': loadAdminLogs(); break;
         case 'admin-settings': loadAdminSettings(); break;
     }
@@ -1422,198 +1427,212 @@ document.addEventListener('keydown', (event) => {
 // ----------------------------------------------------
 // CLIENT DASHBOARD (Brixen Consultants Layout)
 // ----------------------------------------------------
+let clientDashLoadSeq = 0;
+let clientDashDocsById = {};
+
+function timeOfDayGreeting(date) {
+    const hour = (date || new Date()).getHours();
+    if (hour < 12) return 'Good morning';
+    if (hour < 17) return 'Good afternoon';
+    return 'Good evening';
+}
+
+function resetClientDashboardView() {
+    clientDashLoadSeq += 1;
+    clientDashDocsById = {};
+    const hello = document.getElementById('portal-home-hello');
+    const dateEl = document.getElementById('portal-home-date');
+    if (hello) hello.textContent = '';
+    if (dateEl) dateEl.textContent = '';
+    ['dash-card-businesses', 'dash-card-orders', 'dash-card-documents', 'dash-card-pending'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = '—';
+    });
+    const ready = document.getElementById('portal-home');
+    const skel = document.getElementById('portal-home-skel');
+    const errorBox = document.getElementById('dash-error');
+    if (ready) ready.hidden = true;
+    if (skel) {
+        skel.hidden = false;
+        skel.setAttribute('aria-busy', 'true');
+    }
+    if (errorBox) {
+        errorBox.style.display = 'none';
+        errorBox.textContent = '';
+    }
+}
+
+function showClientDashboardSkeleton() {
+    const ready = document.getElementById('portal-home');
+    const skel = document.getElementById('portal-home-skel');
+    if (ready) ready.hidden = true;
+    if (skel) {
+        skel.hidden = false;
+        skel.setAttribute('aria-busy', 'true');
+    }
+}
+
+function showClientDashboardReady() {
+    const ready = document.getElementById('portal-home');
+    const skel = document.getElementById('portal-home-skel');
+    if (skel) {
+        skel.hidden = true;
+        skel.setAttribute('aria-busy', 'false');
+    }
+    if (ready) ready.hidden = false;
+}
+
+function dashStatusClass(status) {
+    const raw = String(status || '').toLowerCase();
+    if (/completed|paid|active|approved|verified|good standing/.test(raw)) return 'completed';
+    if (/processing|in progress|in-progress|current/.test(raw)) return 'processing';
+    if (/cancel|reject|overdue|fail|expired/.test(raw)) return 'cancelled';
+    return 'pending';
+}
+
 async function loadClientDashboard() {
-    const grid = document.getElementById('dash-active-orders-grid');
-    const companiesGrid = document.getElementById('dash-companies-grid');
+    const loadId = ++clientDashLoadSeq;
     const errorBox = document.getElementById('dash-error');
     if (errorBox) {
         errorBox.style.display = 'none';
         errorBox.textContent = '';
     }
-    if (grid) {
-        grid.innerHTML = `
-            <div class="order-card skeleton-card" aria-label="Loading order" style="opacity: 0.6;">
-                <div class="order-card-header"><div style="width:100px; height:18px; background:#e2e8f0; border-radius:4px;"></div></div>
-                <div style="height:24px; background:#e2e8f0; border-radius:4px; margin:12px 0;"></div>
-                <div style="height:8px; background:#e2e8f0; border-radius:4px;"></div>
-            </div>
-            <div class="order-card skeleton-card" aria-label="Loading order" style="opacity: 0.6;">
-                <div class="order-card-header"><div style="width:100px; height:18px; background:#e2e8f0; border-radius:4px;"></div></div>
-                <div style="height:24px; background:#e2e8f0; border-radius:4px; margin:12px 0;"></div>
-                <div style="height:8px; background:#e2e8f0; border-radius:4px;"></div>
-            </div>
-        `;
-    }
-    if (companiesGrid) {
-        companiesGrid.innerHTML = `
-            <div class="company-card skeleton-card" aria-label="Loading companies" style="opacity:0.6; min-height:88px;"></div>
-            <div class="company-card skeleton-card" aria-label="Loading companies" style="opacity:0.6; min-height:88px;"></div>
-        `;
-    }
+    showClientDashboardSkeleton();
+    const hello = document.getElementById('portal-home-hello');
+    const dateEl = document.getElementById('portal-home-date');
+    if (hello) hello.textContent = '';
+    if (dateEl) dateEl.textContent = '';
 
     try {
-        const res = await fetch('/api/client/dashboard');
+        const res = await fetch('/api/client/dashboard', { credentials: 'same-origin' });
+        if (loadId !== clientDashLoadSeq || !currentUser) return;
         if (!res.ok) throw new Error('Unable to load dashboard data. Please try again.');
         const data = await res.json();
-        
+        if (loadId !== clientDashLoadSeq || !currentUser) return;
+
         if (data.status === 'success') {
-            const heroDate = document.getElementById('hero-current-date');
-            const heroName = document.getElementById('hero-user-name');
-            const heroComps = document.getElementById('hero-companies-count');
-            const displayName = (data.user_name || currentUser?.full_name || currentUser?.email || 'there').trim();
+            const displayName = String(data.user_name || '').trim();
+            const greeting = data.greeting || timeOfDayGreeting();
             const todayLabel = new Date().toLocaleDateString('en-GB', {
                 weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
             });
-            
-            if (heroDate) heroDate.textContent = todayLabel;
-            if (heroName) heroName.textContent = displayName;
-            if (heroComps) heroComps.textContent = `${data.total_companies ?? 0}`;
-            const companiesPill = document.getElementById('dash-companies-count-pill');
-            const companyCount = Number(data.total_companies ?? 0);
-            if (companiesPill) companiesPill.textContent = `${companyCount} ${companyCount === 1 ? 'Company' : 'Companies'}`;
-            
-            document.getElementById('dash-card-portfolio-count').textContent = data.total_companies ?? 0;
-            document.getElementById('dash-uk-count').textContent = `${data.uk_companies ?? 0} UK`;
-            const intlEl = document.getElementById('dash-intl-count');
-            if (intlEl) intlEl.textContent = `${data.intl_companies ?? 0} International`;
-            
-            document.getElementById('dash-card-overdue-count').textContent = data.overdue_deadlines ?? 0;
-            const overdueBadge = document.getElementById('dash-overdue-badge');
-            if (overdueBadge) {
-                if (!data.overdue_deadlines) {
-                    overdueBadge.className = 'health-badge success';
-                    overdueBadge.innerHTML = `<i data-lucide="check-circle-2"></i> All on track`;
-                } else {
-                    overdueBadge.className = 'health-badge warning';
-                    overdueBadge.innerHTML = `<i data-lucide="alert-triangle"></i> ${data.overdue_deadlines} Overdue`;
-                }
-            }
-            
-            document.getElementById('dash-card-upcoming-count').textContent = data.upcoming_deadlines ?? 0;
-            const upcomingBadge = document.getElementById('dash-upcoming-badge');
-            if (upcomingBadge) {
-                if (!data.upcoming_deadlines) {
-                    upcomingBadge.className = 'health-badge info';
-                    upcomingBadge.innerHTML = `<i data-lucide="calendar"></i> No deadlines soon`;
-                } else {
-                    upcomingBadge.className = 'health-badge info';
-                    upcomingBadge.innerHTML = `<i data-lucide="clock"></i> ${data.upcoming_deadlines} Due Soon`;
-                }
-            }
-            
-            document.getElementById('dash-active-orders-num').textContent = data.active_orders_count ?? 0;
+            if (dateEl) dateEl.textContent = todayLabel;
+            if (hello) hello.textContent = displayName ? `${greeting}, ${displayName}` : greeting;
+
+            const setCount = (id, value) => {
+                const el = document.getElementById(id);
+                if (el) el.textContent = String(value ?? 0);
+            };
+            setCount('dash-card-businesses', data.total_companies);
+            setCount('dash-card-orders', data.active_orders_count);
+            setCount('dash-card-documents', data.documents_count);
+            setCount('dash-card-pending', data.pending_actions_count);
+
+            renderClientDashAttention(data.pending_actions || []);
             renderActiveOrdersGrid(data.active_orders || []);
             renderDashboardCompanies(data.companies || []);
-            lucide.createIcons();
+            renderClientDashDocuments(data.recent_documents || []);
+            showClientDashboardReady();
+            safeCreateIcons();
         } else {
             throw new Error('Unable to load dashboard data. Please try again.');
         }
     } catch (err) {
+        if (loadId !== clientDashLoadSeq || !currentUser) return;
         console.error('Error loading dashboard:', err);
+        const skel = document.getElementById('portal-home-skel');
+        const ready = document.getElementById('portal-home');
+        if (skel) {
+            skel.hidden = true;
+            skel.setAttribute('aria-busy', 'false');
+        }
+        if (ready) ready.hidden = true;
         if (errorBox) {
             errorBox.style.display = 'block';
-            errorBox.textContent = 'Unable to load dashboard data. Please try again.';
+            errorBox.innerHTML = 'Unable to load dashboard data. <button type="button" class="portal-home-link" onclick="loadClientDashboard()">Retry</button>';
         }
-        if (grid) {
-            grid.innerHTML = `
-                <div style="grid-column: 1 / -1; text-align:center; padding:40px; background:#fff; border-radius:16px; border:1px solid #fee2e2;" role="alert">
-                    <i data-lucide="alert-circle" style="width:40px; height:40px; color:#ef4444;"></i>
-                    <h3 style="font-size:1.05rem; font-weight:700; color:#0f172a; margin-top:10px;">Unable to load dashboard data. Please try again.</h3>
-                    <button class="btn-primary" style="margin-top:16px;" onclick="loadClientDashboard()">
-                        <i data-lucide="refresh-cw"></i> Retry
-                    </button>
+        safeCreateIcons();
+    }
+}
+
+function runDashAttentionAction(btn) {
+    if (!btn) return;
+    const orderId = Number(btn.getAttribute('data-order-id') || 0);
+    const docId = Number(btn.getAttribute('data-document-id') || 0);
+    const view = btn.getAttribute('data-view') || '';
+    if (orderId) {
+        openOrderDetailsModal(orderId);
+        return;
+    }
+    if (docId) {
+        const doc = clientDashDocsById[docId];
+        if (doc) {
+            openDocumentPreview(doc.id, doc.name, doc.file_type);
+            return;
+        }
+        switchView('client-documents');
+        return;
+    }
+    if (view) switchView(view);
+}
+
+function renderClientDashAttention(actions) {
+    const box = document.getElementById('portal-home-attention');
+    if (!box) return;
+    const list = Array.isArray(actions) ? actions : [];
+    box.hidden = false;
+    if (!list.length) {
+        box.innerHTML = `<p class="portal-home-caught-up">You're all caught up.</p>`;
+        return;
+    }
+    box.innerHTML = `
+        <h2 class="portal-home-attention-title">Needs Your Attention</h2>
+        ${list.map((item) => {
+            const icon = escapeHtml(item.icon || 'alert-circle');
+            const view = escapeHtml(item.view || '');
+            const orderId = Number(item.order_id || 0) || '';
+            const docId = Number(item.document_id || 0) || '';
+            return `
+                <div class="portal-home-action">
+                    <div class="portal-home-action-icon" aria-hidden="true"><i data-lucide="${icon}"></i></div>
+                    <div>
+                        <h3>${escapeHtml(item.title || '')}</h3>
+                        <p>${escapeHtml(item.detail || '')}</p>
+                    </div>
+                    <button type="button" class="btn-primary" data-view="${view}" data-order-id="${orderId}" data-document-id="${docId}" onclick="runDashAttentionAction(this)">${escapeHtml(item.action_label || 'View')}</button>
                 </div>
             `;
-        }
-        if (companiesGrid) {
-            companiesGrid.innerHTML = `<div style="grid-column:1/-1; color:#64748b; padding:24px; text-align:center;">Unable to load companies.</div>`;
-        }
-        lucide.createIcons();
-    }
+        }).join('')}
+    `;
 }
 
 function renderActiveOrdersGrid(orders) {
     const grid = document.getElementById('dash-active-orders-grid');
+    const section = document.getElementById('portal-home-orders');
     if (!grid) return;
-    
-    if (orders.length === 0) {
-        grid.innerHTML = `
-            <div style="grid-column: 1 / -1; text-align:center; padding:48px; background:#fff; border-radius:16px; border:1px solid #e2e8f0;" role="status">
-                <i data-lucide="check-circle-2" style="width:48px; height:48px; color:#10b981;"></i>
-                <h3 style="font-size:1.1rem; font-weight:700; color:#0f172a; margin-top:12px;">No active orders</h3>
-                <p style="color:#64748b; font-size:0.85rem; margin-top:4px;">Completed orders can be viewed in your order history.</p>
-                <button class="btn-secondary" style="margin-top:16px;" onclick="switchView('client-orders')">View Order History</button>
-            </div>
-        `;
-        lucide.createIcons();
+    const list = (Array.isArray(orders) ? orders : []).slice(0, 4);
+    if (!list.length) {
+        if (section) section.hidden = true;
+        grid.innerHTML = '';
         return;
     }
-    
-    grid.innerHTML = orders.map(order => {
-        const isCompleted = order.status === 'Completed';
-        const statusClass = String(order.status || '').toLowerCase().replace(/\s+/g, '-');
-        const serviceCount = Number(order.total_items_count || (order.service_items || []).length || 1);
-        const servicesLabel = `${serviceCount} service${serviceCount === 1 ? '' : 's'}`;
-        const stages = Array.isArray(order.stages) ? order.stages : [];
-        const items = Array.isArray(order.service_items) ? order.service_items : [];
-        
-        const stagesHtml = stages.map((stg, i) => {
-            const iconSymbol = stg.status === 'completed' ? '✓' : (i + 1).toString();
-            return `
-                <div class="timeline-stage-item ${escapeHtml(stg.status || 'pending')}">
-                    <div class="stage-icon-circle">${iconSymbol}</div>
-                    <div class="stage-label-text">${escapeHtml(stg.name || '')}</div>
-                </div>
-            `;
-        }).join('');
-        
-        const servicesRowsHtml = items.map(s => {
-            const badgeClass = s.status === 'Done' || s.status === 'Completed' ? 'completed' : (s.status === 'In Progress' || s.status === 'Processing' ? 'processing' : 'pending');
-            const label = s.category ? `${s.category} · ${s.name}` : s.name;
-            return `
-                <tr>
-                    <td>${escapeHtml(label || '')}</td>
-                    <td style="text-align:right;"><span class="status-badge ${badgeClass}">${escapeHtml(s.status || '')}</span></td>
-                </tr>
-            `;
-        }).join('');
-        
+    if (section) section.hidden = false;
+    grid.innerHTML = list.map((order) => {
+        const progress = Math.max(0, Math.min(100, Number(order.progress_percent || 0)));
+        const statusClass = dashStatusClass(order.status);
         return `
-            <div class="order-card order-card-clickable tracker-order-card" role="button" tabindex="0" onclick="openOrderDetailsModal(${order.id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openOrderDetailsModal(${order.id});}">
-                <div class="order-card-header">
-                    <div>
-                        <div class="order-number">${escapeHtml(order.order_number)}</div>
-                        <div class="order-date">${servicesLabel}</div>
-                    </div>
-                    <span class="status-badge ${statusClass}">${escapeHtml(order.status || '')}</span>
+            <button type="button" class="portal-home-row" onclick="openOrderDetailsModal(${Number(order.id)})">
+                <div>
+                    <div class="portal-home-row-title">${escapeHtml(order.order_number || 'Order')}</div>
+                    <div class="portal-home-row-meta">${escapeHtml(order.service_name || '')}</div>
                 </div>
-
-                <div class="order-progress-section">
-                    <div class="progress-labels">
-                        <span>${escapeHtml(order.service_name || '')}</span>
-                        <span>${Number(order.progress_percent || 0)}%</span>
-                    </div>
-                    <div class="progress-track">
-                        <div class="progress-bar ${isCompleted ? 'completed' : ''}" style="width: ${Number(order.progress_percent || 0)}%;"></div>
-                    </div>
+                <div class="portal-home-row-meta">${escapeHtml(formatDate(order.created_at) || '')}</div>
+                <span class="status-badge ${statusClass}">${escapeHtml(order.status || '')}</span>
+                <div class="portal-home-row-progress">
+                    <div class="portal-home-progress-track" aria-hidden="true"><div class="portal-home-progress-bar" style="width:${progress}%;"></div></div>
+                    <span class="portal-home-progress-label">${progress}%</span>
                 </div>
-
-                <div class="card-horizontal-timeline">
-                    ${stagesHtml}
-                </div>
-
-                <table class="card-services-table">
-                    <thead>
-                        <tr>
-                            <th>SERVICE</th>
-                            <th style="text-align:right;">STATUS</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${servicesRowsHtml}
-                    </tbody>
-                </table>
-            </div>
+            </button>
         `;
     }).join('');
 }
@@ -1642,6 +1661,55 @@ function looksLikeUkCompanyNumber(companyNumber) {
     return /^(\d{6,8}|[A-Z]{2}\d{5,6})$/.test(num);
 }
 
+function normalizeCompanyNameKey(name) {
+    return String(name || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/(LTD|LIMITED|PLC|LLP|CIC)$/, '');
+}
+
+function companiesHouseMatchForName(name, matches) {
+    const needle = normalizeCompanyNameKey(name);
+    if (!needle || needle.length < 4) return null;
+    const hits = (matches || []).filter((match) => normalizeCompanyNameKey(match && match.name) === needle);
+    if (hits.length === 1) return hits[0];
+    const active = hits.filter((match) => String((match && match.status) || '').toLowerCase() === 'active');
+    if (active.length === 1) return active[0];
+    if ((matches || []).length && normalizeCompanyNameKey(matches[0].name) === needle) return matches[0];
+    return null;
+}
+
+function portfolioDetailCompanySnapshot() {
+    const company = { ...((portfolioDetailCache && portfolioDetailCache.company) || {}) };
+    const numberEl = document.getElementById('portfolio-detail-number-field');
+    const numberText = String((numberEl && numberEl.textContent) || '').trim();
+    if (numberText && numberText !== '—') {
+        company.company_number = numberText;
+    }
+    if (looksLikeUkCompanyNumber(company.company_number)) {
+        company.is_registered = true;
+    }
+    return company;
+}
+
+function portfolioCompanyCanRename(company) {
+    if (!isAdminShellUser(currentUser)) return false;
+    if (company && company.is_registered === true) return false;
+    if (isRegisteredCompany(company)) return false;
+    if (looksLikeUkCompanyNumber(company && company.company_number)) return false;
+    return true;
+}
+
+function portfolioCompanyNeedsChMatch(company) {
+    return isRegisteredCompany(company);
+}
+
+function portfolioDirectorNames(company) {
+    if (Array.isArray(company && company.directors) && company.directors.length) {
+        return company.directors.map((name) => String(name || '').trim()).filter(Boolean);
+    }
+    const raw = String((company && (company.owner_name || company.director)) || '').trim();
+    if (!raw || raw === '—') return [];
+    return raw.split(/\s*·\s*|\s*;\s*|\n+/).map((part) => part.trim()).filter(Boolean);
+}
+
 function isUkCompany(company) {
     return /united kingdom|\buk\b/i.test(companyCountryLabel(company));
 }
@@ -1663,9 +1731,29 @@ function formatUkNumericDate(dateStr) {
 }
 
 function portfolioDeadlineText(company) {
+    const attention = portfolioAttentionIssues(company);
+    if (attention.length) {
+        return attention.map((item) => item.title || item.code).filter(Boolean).join(' · ');
+    }
     const items = Array.isArray(company && company.deadlines) ? company.deadlines : [];
     if (!items.length) return 'No upcoming deadlines';
     return items.map((item) => `${item.label}: ${formatUkNumericDate(item.date)}`).join(' · ');
+}
+
+function portfolioAttentionIssues(company) {
+    const items = Array.isArray(company && company.attention)
+        ? company.attention.filter((item) => item && item.code)
+        : [];
+    if (items.length) return items;
+    const addr = String((company && (company.registered_address || company.reg_office)) || '');
+    if (/companies house default address/i.test(addr) || (/cf14\s*8lh/i.test(addr) && /default/i.test(addr))) {
+        return [{ code: 'default_address', title: 'Default Companies House address' }];
+    }
+    return [];
+}
+
+function companyNeedsAttention(company) {
+    return Boolean(company && company.needs_attention) || portfolioAttentionIssues(company).length > 0;
 }
 
 function isRegisteredCompany(company) {
@@ -1774,19 +1862,27 @@ function portfolioGridHeading(title, copy) {
 
 function renderRegisteredCompanyCard(company, isAdmin) {
     const active = isCompanyActive(company);
+    const attention = portfolioAttentionIssues(company);
+    const needsAttention = attention.length > 0;
     const companyId = Number(company.id);
     return `
-        <article class="portfolio-card" data-company-id="${companyId}" role="button" tabindex="0" onclick="openCompanyPortfolioDetail(${companyId})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openCompanyPortfolioDetail(${companyId});}">
+        <article class="portfolio-card${needsAttention ? ' is-attention' : ''}" data-company-id="${companyId}" role="button" tabindex="0" onclick="openCompanyPortfolioDetail(${companyId})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openCompanyPortfolioDetail(${companyId});}">
             <div class="portfolio-card-head">
                 <div class="portfolio-card-icon" aria-hidden="true"><i data-lucide="building-2"></i></div>
                 <div class="portfolio-card-titles">
                     <h3>${escapeHtml(company.name || 'Company')}</h3>
                     <p>${escapeHtml(company.company_number || '—')}</p>
+                    ${(() => {
+                        const names = portfolioDirectorNames(company);
+                        if (!isRegisteredCompany(company) || !names.length) return '';
+                        return `<p class="portfolio-card-owner">${names.length > 1 ? 'Directors' : 'Director'} · ${escapeHtml(names.join(' · '))}</p>`;
+                    })()}
                     <p class="portfolio-card-address">${escapeHtml(portfolioRegisteredAddressText(company))}</p>
                     ${isAdmin && !isRegisteredCompany(company) ? '<p class="portfolio-card-rename-hint">Open to change the name before application.</p>' : ''}
                 </div>
                 <div class="portfolio-card-badges">
                     ${countryBadgeHtml(company)}
+                    ${needsAttention ? '<span class="portfolio-badge-status is-attention">attention</span>' : ''}
                     <span class="portfolio-badge-status${active ? '' : ' is-pending'}">${escapeHtml(companyStatusLabel(company))}</span>
                 </div>
             </div>
@@ -1801,16 +1897,34 @@ function renderRegisteredCompanyCard(company, isAdmin) {
     `;
 }
 
-function updateCompanyRegFilterButtons(scope, filter, chCount, pendingCount) {
+function updateCompanyRegFilterButtons(scope, filter, chCount, pendingCount, attentionCount) {
     document.querySelectorAll(`[data-company-reg-scope="${scope}"]`).forEach((btn) => {
         const value = btn.getAttribute('data-company-reg-filter');
         btn.classList.toggle('is-active', value === filter);
+        btn.classList.toggle('has-items', value === 'attention' && attentionCount > 0);
         const countEl = btn.querySelector('[data-count]');
         if (!countEl) return;
         if (value === 'all') countEl.textContent = String(chCount + pendingCount);
         if (value === 'ch') countEl.textContent = String(chCount);
         if (value === 'pending') countEl.textContent = String(pendingCount);
+        if (value === 'attention') countEl.textContent = String(attentionCount);
     });
+}
+
+function updatePortfolioAttentionBanner(scope, attentionCompanies) {
+    const bannerId = scope === 'admin' ? 'admin-attention-banner' : 'client-attention-banner';
+    const banner = document.getElementById(bannerId);
+    if (!banner) return;
+    const list = Array.isArray(attentionCompanies) ? attentionCompanies : [];
+    if (!list.length) {
+        banner.hidden = true;
+        banner.innerHTML = '';
+        return;
+    }
+    const names = list.slice(0, 3).map((company) => company.name || company.company_number || 'Company');
+    const more = list.length > 3 ? ` and ${list.length - 3} more` : '';
+    banner.hidden = false;
+    banner.innerHTML = `<strong>${list.length} ${list.length === 1 ? 'company needs' : 'companies need'} attention</strong> at Companies House — ${escapeHtml(names.join(', '))}${escapeHtml(more)}.`;
 }
 
 function setCompanyRegFilter(scope, value) {
@@ -1832,10 +1946,14 @@ function renderPortfolioCompanies(companies, targetGridId = 'portfolio-companies
     const filter = companyRegFilter[scope] || 'all';
     const onCompaniesHouse = list.filter((company) => isRegisteredCompany(company));
     const notRegistered = list.filter((company) => !isRegisteredCompany(company));
+    const attentionCompanies = onCompaniesHouse.filter((company) => companyNeedsAttention(company));
+    const attentionIds = new Set(attentionCompanies.map((company) => Number(company.id)));
     const pendingCount = waiting.length + notRegistered.length;
     const chCount = onCompaniesHouse.length;
+    const attentionCount = attentionCompanies.length;
     if (countPill) countPill.textContent = `${list.length} UK`;
-    updateCompanyRegFilterButtons(scope, filter, chCount, pendingCount);
+    updateCompanyRegFilterButtons(scope, filter, chCount, pendingCount, attentionCount);
+    updatePortfolioAttentionBanner(scope, attentionCompanies);
     if (!grid) return;
     if (!list.length && !waiting.length) {
         grid.innerHTML = `
@@ -1848,11 +1966,22 @@ function renderPortfolioCompanies(companies, targetGridId = 'portfolio-companies
         if (window.lucide) lucide.createIcons();
         return;
     }
+    const showAttention = filter === 'all' || filter === 'attention';
     const showPending = filter === 'all' || filter === 'pending';
     const showCh = filter === 'all' || filter === 'ch';
+    const chWithoutAttention = filter === 'all'
+        ? onCompaniesHouse.filter((company) => !attentionIds.has(Number(company.id)))
+        : onCompaniesHouse;
+    const attentionHtml = showAttention
+        ? attentionCompanies.map((company) => renderRegisteredCompanyCard(company, isAdmin)).join('')
+        : '';
     const pendingHtml = showPending ? `${renderPendingRegistrationCards(waiting, isAdmin)}${notRegistered.map((company) => renderRegisteredCompanyCard(company, isAdmin)).join('')}` : '';
-    const chHtml = showCh ? onCompaniesHouse.map((company) => renderRegisteredCompanyCard(company, isAdmin)).join('') : '';
+    const chHtml = showCh ? chWithoutAttention.map((company) => renderRegisteredCompanyCard(company, isAdmin)).join('') : '';
     const parts = [];
+    if (showAttention && (filter === 'attention' || attentionCount > 0)) {
+        parts.push(portfolioGridHeading('Attention', 'Accounts overdue, confirmation statement pending, default Companies House address, or strike-off.'));
+        parts.push(attentionHtml || `<div class="portfolio-empty portfolio-empty-inline" role="status"><p>No Companies House attention items right now.</p></div>`);
+    }
     if (showPending) {
         parts.push(portfolioGridHeading('Not registered yet', 'Waiting on a Companies House number. Live records are checked when you open this page.'));
         parts.push(pendingHtml || `<div class="portfolio-empty portfolio-empty-inline" role="status"><p>Every named company already has a Companies House number.</p></div>`);
@@ -1866,6 +1995,110 @@ function renderPortfolioCompanies(companies, targetGridId = 'portfolio-companies
 }
 
 let companiesHouseSearchTimer = null;
+let portfolioRenameSearchTimer = null;
+
+function clearPortfolioRenameChMatch() {
+    const tick = document.getElementById('portfolio-rename-ch-tick');
+    const number = document.getElementById('portfolio-rename-ch-number');
+    const statusField = document.getElementById('portfolio-rename-ch-status');
+    const box = document.getElementById('portfolio-rename-ch-results');
+    if (tick) tick.hidden = true;
+    if (number) number.value = '';
+    if (statusField) statusField.value = '';
+    if (box) {
+        box.hidden = true;
+        box.innerHTML = '';
+    }
+}
+
+function setPortfolioRenameChMatch(company, options) {
+    const opts = options || {};
+    const tick = document.getElementById('portfolio-rename-ch-tick');
+    const number = document.getElementById('portfolio-rename-ch-number');
+    const statusField = document.getElementById('portfolio-rename-ch-status');
+    const statusEl = document.getElementById('portfolio-rename-status');
+    if (number) number.value = (company && company.company_number) || '';
+    if (statusField) statusField.value = (company && company.status) || '';
+    if (tick) tick.hidden = !company;
+    if (statusEl && company) {
+        statusEl.textContent = opts.message || `On record at Companies House (${company.company_number}). Save to link official details.`;
+        statusEl.style.color = '#047857';
+    }
+    if (window.lucide) lucide.createIcons();
+}
+
+function searchCompaniesHouseForRename(inputEl) {
+    const box = document.getElementById('portfolio-rename-ch-results');
+    if (!inputEl || !box) return;
+    const query = String(inputEl.value || '').trim();
+    clearPortfolioRenameChMatch();
+    const statusEl = document.getElementById('portfolio-rename-status');
+    window.clearTimeout(portfolioRenameSearchTimer);
+    if (query.length < 2) {
+        if (statusEl) statusEl.textContent = '';
+        return;
+    }
+    portfolioRenameSearchTimer = window.setTimeout(async () => {
+        box.hidden = false;
+        box.innerHTML = '<button type="button" class="ch-search-item is-status" disabled>Searching Companies House…</button>';
+        if (statusEl) {
+            statusEl.textContent = 'Checking Companies House…';
+            statusEl.style.color = '#64748b';
+        }
+        try {
+            const res = await fetch(`/api/admin/companies/search?q=${encodeURIComponent(query)}`, { credentials: 'same-origin' });
+            const data = await res.json().catch(() => ({}));
+            const matches = data.companies || [];
+            if (!res.ok || data.status !== 'success') {
+                box.innerHTML = `<button type="button" class="ch-search-item is-status" disabled>${escapeHtml(data.message || 'Companies House search is unavailable.')}</button>`;
+                if (statusEl) {
+                    statusEl.textContent = data.message || 'Companies House search is unavailable.';
+                    statusEl.style.color = '#dc2626';
+                }
+                return;
+            }
+            const exact = companiesHouseMatchForName(query, matches);
+            if (exact) {
+                setPortfolioRenameChMatch(exact);
+                hideCompaniesHouseResults(inputEl);
+                return;
+            }
+            if (!matches.length) {
+                box.innerHTML = '<button type="button" class="ch-search-item is-status" disabled>Not on record at Companies House yet. You can still save the desired application name.</button>';
+                if (statusEl) {
+                    statusEl.textContent = 'Not on record yet — save keeps this as the desired application name.';
+                    statusEl.style.color = '#64748b';
+                }
+                return;
+            }
+            box.innerHTML = matches.slice(0, 6).map((company, index) => `
+                <button type="button" class="ch-search-item" data-ch-index="${index}">
+                    <strong>${escapeHtml(company.name)}</strong>
+                    <span>${escapeHtml(company.company_number)}${company.status ? ` · ${escapeHtml(company.status)}` : ''}</span>
+                </button>
+            `).join('');
+            box.querySelectorAll('.ch-search-item[data-ch-index]').forEach((btn) => {
+                btn.addEventListener('click', () => {
+                    const picked = matches[Number(btn.getAttribute('data-ch-index'))];
+                    if (!picked) return;
+                    inputEl.value = picked.name || query;
+                    setPortfolioRenameChMatch(picked);
+                    hideCompaniesHouseResults(inputEl);
+                });
+            });
+            if (statusEl) {
+                statusEl.textContent = 'Pick the official Companies House record, or save the desired name if it is not registered yet.';
+                statusEl.style.color = '#64748b';
+            }
+        } catch (err) {
+            box.innerHTML = '<button type="button" class="ch-search-item is-status" disabled>Could not reach Companies House.</button>';
+            if (statusEl) {
+                statusEl.textContent = 'Could not reach Companies House.';
+                statusEl.style.color = '#dc2626';
+            }
+        }
+    }, 350);
+}
 
 function pendingFormValue(formEl, name) {
     const field = formEl && formEl.querySelector(`[name="${name}"]`);
@@ -2379,20 +2612,58 @@ function fillCompanyPortfolioModal(payload) {
     const renameInput = document.getElementById('portfolio-rename-input');
     const renameStatus = document.getElementById('portfolio-rename-status');
     const nameField = document.getElementById('portfolio-detail-name-field');
-    const canRename = isAdminShellUser(currentUser) && !isRegisteredCompany(company);
+    const saveBtn = document.getElementById('portfolio-rename-save');
+    const canRename = portfolioCompanyCanRename(company);
+    const needsChMatch = portfolioCompanyNeedsChMatch(company);
     if (renameForm) renameForm.hidden = !canRename;
-    if (renameHint) renameHint.hidden = !canRename;
-    if (nameField) nameField.hidden = canRename;
-    if (renameInput) renameInput.value = company.name || '';
+    if (renameHint) {
+        renameHint.hidden = !canRename;
+        if (canRename) {
+            renameHint.textContent = needsChMatch
+                ? 'Type the correct Companies House name. Save once the green tick appears to pull official details.'
+                : 'Type a name to check Companies House. Save once the green tick appears, or save the desired application name if it is not registered yet.';
+        }
+    }
+    if (nameField) nameField.hidden = false;
+    if (renameInput) {
+        renameInput.value = company.name || '';
+        renameInput.disabled = !canRename;
+    }
+    if (saveBtn) saveBtn.disabled = !canRename;
     if (renameStatus) {
         renameStatus.textContent = '';
         renameStatus.style.color = '';
+    }
+    if (!canRename) {
+        clearPortfolioRenameChMatch();
+    } else if (renameInput && String(renameInput.value || '').trim().length >= 2) {
+        searchCompaniesHouseForRename(renameInput);
+    } else {
+        clearPortfolioRenameChMatch();
     }
     setPortfolioText('portfolio-detail-number-field', company.company_number || '—');
     setPortfolioText('portfolio-detail-status', companyStatusLabel(company));
     setPortfolioText('portfolio-detail-country', companyCountryLabel(company));
     setPortfolioText('portfolio-detail-inc', formatUkNumericDate(company.inc_date));
-    setPortfolioText('portfolio-detail-director', company.director || '—');
+    const ownerLabel = document.getElementById('portfolio-detail-owner-label');
+    const directors = portfolioDirectorNames(company);
+    if (ownerLabel) ownerLabel.textContent = directors.length > 1 ? 'Directors' : 'Director';
+    setPortfolioText('portfolio-detail-director', directors.length ? directors.join(' · ') : '—');
+    setPortfolioText('portfolio-detail-email', company.registered_email || '—');
+    const attentionBox = document.getElementById('portfolio-detail-attention');
+    if (attentionBox) {
+        const attention = portfolioAttentionIssues(company);
+        if (!attention.length) {
+            attentionBox.hidden = true;
+            attentionBox.innerHTML = '';
+        } else {
+            attentionBox.hidden = false;
+            attentionBox.innerHTML = `
+                <strong>Attention required at Companies House</strong>
+                <ul>${attention.map((item) => `<li>${escapeHtml(item.title || item.code)}${item.due ? ` — due ${escapeHtml(formatUkNumericDate(item.due))}` : ''}</li>`).join('')}</ul>
+            `;
+        }
+    }
     const officeAddress = office.address || portfolioRegisteredAddressText(company);
     setPortfolioText('portfolio-detail-office', officeAddress === '——————' ? '—' : (officeAddress || '—'));
     setPortfolioText('portfolio-detail-postcode', office.postcode || '—');
@@ -2407,7 +2678,23 @@ function fillCompanyPortfolioModal(payload) {
         statusBadge.textContent = companyStatusLabel(company);
     }
     const activity = document.getElementById('portfolio-detail-activity');
-    if (activity) activity.textContent = 'No SIC or business activity details on file.';
+    if (activity) {
+        const items = Array.isArray(company.sic_activities) ? company.sic_activities.filter((item) => item && item.code) : [];
+        if (!items.length) {
+            activity.innerHTML = '<p class="portfolio-empty-copy">No SIC or business activity details on file.</p>';
+        } else {
+            activity.innerHTML = `
+                <div class="portfolio-detail-grid">
+                    ${items.map((item) => `
+                        <div class="full">
+                            <span>SIC ${escapeHtml(item.code)}</span>
+                            <strong>${escapeHtml(item.description || 'Business activity on Companies House')}</strong>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+    }
 
     const deadlines = Array.isArray(company.deadlines) ? company.deadlines : [];
     const complianceEl = document.getElementById('portfolio-detail-compliance');
@@ -2533,25 +2820,6 @@ function fillCompanyPortfolioModal(payload) {
         `;
     }
 
-    const tickets = Array.isArray(payload.tickets) ? payload.tickets : [];
-    const supportEl = document.getElementById('portfolio-detail-support');
-    if (supportEl) {
-        const ticketRows = tickets.length ? tickets.map((ticket) => `
-            <div class="portfolio-related-row">
-                <div>
-                    <strong>${escapeHtml(ticket.ticket_number || 'Ticket')}</strong>
-                    <span>${escapeHtml(ticket.subject || '')} · ${escapeHtml(ticket.status || '')}</span>
-                </div>
-                <button type="button" class="btn-secondary" style="padding:4px 10px; font-size:0.75rem;" onclick="openPortfolioSupportTicket(${Number(ticket.id)})">Open</button>
-            </div>
-        `).join('') : `<p class="portfolio-related-empty">No support tickets for this company.</p>`;
-        supportEl.innerHTML = `
-            <div class="portfolio-related-list">${ticketRows}</div>
-            <div style="margin-top:12px;">
-                <button type="button" class="btn-primary" onclick="openPortfolioCompanySupport()">Contact Support</button>
-            </div>
-        `;
-    }
     const deleteBtn = document.getElementById('portfolio-delete-company-btn');
     if (deleteBtn) {
         const companyId = Number((payload.company && payload.company.id) || 0);
@@ -2567,7 +2835,8 @@ async function openCompanyPortfolioDetail(companyId, options) {
     if (!requestedId) return;
     const stayOnTab = options && options.tab;
     const modal = document.getElementById('modal-company-portfolio');
-    const cached = clientCompaniesCache.find((item) => Number(item.id) === requestedId);
+    const cachedSource = isAdminShellUser(currentUser) ? adminCompaniesCache : clientCompaniesCache;
+    const cached = (cachedSource || []).find((item) => Number(item.id) === requestedId);
     if (cached) fillCompanyPortfolioModal({ company: cached, registered_office: { address: cached.reg_office, postcode: '' }, orders: [], documents: [], tickets: [] });
     if (modal) modal.classList.add('active');
     switchPortfolioDetailTab(stayOnTab || 'overview');
@@ -2591,13 +2860,45 @@ async function openCompanyPortfolioDetail(companyId, options) {
 async function savePendingCompanyName(event) {
     event.preventDefault();
     if (!isAdminShellUser(currentUser)) return;
-    const company = (portfolioDetailCache && portfolioDetailCache.company) || {};
+    const company = portfolioDetailCompanySnapshot();
     const companyId = Number(company.id);
-    if (!companyId || isRegisteredCompany(company)) return;
-    const input = document.getElementById('portfolio-rename-input');
     const statusEl = document.getElementById('portfolio-rename-status');
     const saveBtn = document.getElementById('portfolio-rename-save');
+    if (!companyId) {
+        if (statusEl) {
+            statusEl.textContent = 'Company not found.';
+            statusEl.style.color = '#dc2626';
+        }
+        return;
+    }
+    if (!portfolioCompanyCanRename(company)) {
+        if (statusEl) {
+            statusEl.textContent = 'Only staff can update company names.';
+            statusEl.style.color = '#dc2626';
+        }
+        return;
+    }
+    const needsChMatch = portfolioCompanyNeedsChMatch(company);
+    const input = document.getElementById('portfolio-rename-input');
     const name = ((input && input.value) || '').trim();
+    const chNumber = ((document.getElementById('portfolio-rename-ch-number') || {}).value || '').trim();
+    if (needsChMatch && !chNumber) {
+        if (statusEl) {
+            statusEl.textContent = 'Select the official Companies House record first (green tick).';
+            statusEl.style.color = '#dc2626';
+        }
+        if (input) searchCompaniesHouseForRename(input);
+        return;
+    }
+    if (!name) {
+        if (statusEl) {
+            statusEl.textContent = 'Enter the company name.';
+            statusEl.style.color = '#dc2626';
+        }
+        return;
+    }
+    const payload = { name };
+    if (chNumber) payload.companies_house_number = chNumber;
     if (statusEl) {
         statusEl.textContent = 'Saving…';
         statusEl.style.color = '';
@@ -2608,7 +2909,7 @@ async function savePendingCompanyName(event) {
             method: 'PUT',
             credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name }),
+            body: JSON.stringify(payload),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.status !== 'success' || !data.company) {
@@ -2755,42 +3056,65 @@ function openPortfolioCompanyOrder(orderId) {
     openOrderDetailsModal(orderId);
 }
 
-function openPortfolioSupportTicket(ticketId) {
-    const tickets = (portfolioDetailCache && portfolioDetailCache.tickets) || [];
-    const ticket = tickets.find((item) => Number(item.id) === Number(ticketId)) || {};
-    closeCompanyPortfolioDetail();
-    openChatModal(ticketId, ticket.subject || 'Support', ticket.ticket_number || '');
-}
-
-function openPortfolioCompanySupport() {
-    closeCompanyPortfolioDetail();
-    switchView('client-support');
-}
-
 function renderDashboardCompanies(companies) {
     const grid = document.getElementById('dash-companies-grid');
+    const section = document.getElementById('portal-home-companies');
     if (!grid) return;
-    const list = Array.isArray(companies) ? companies : [];
+    const list = (Array.isArray(companies) ? companies : []).slice(0, 4);
     if (!list.length) {
-        grid.innerHTML = `
-            <div style="grid-column: 1 / -1; text-align:center; padding:36px; background:#fff; border-radius:16px; border:1px solid #e2e8f0;" role="status">
-                <i data-lucide="building-2" style="width:40px; height:40px; color:#94a3b8;"></i>
-                <h3 style="font-size:1.05rem; font-weight:700; color:#0f172a; margin-top:10px;">No companies found</h3>
-                <p style="color:#64748b; font-size:0.85rem; margin-top:4px;">Registered companies linked to your account will appear here.</p>
-            </div>
-        `;
+        if (section) section.hidden = true;
+        grid.innerHTML = '';
         return;
     }
-    grid.innerHTML = list.map((company) => `
-        <button type="button" class="company-card" onclick="switchView('client-companies')">
-            <div class="company-card-name">${escapeHtml(company.name || 'Company')}</div>
-            <div class="company-card-meta">${escapeHtml(company.company_number || '—')}</div>
-            <div class="company-card-footer">
-                <span>UK</span>
-                <span class="status-badge ${(company.status || company.account_status) === 'Active' || (company.account_status === 'Good Standing') ? 'completed' : 'pending'}">${escapeHtml(company.status || company.account_status || '—')}</span>
-            </div>
-        </button>
-    `).join('');
+    if (section) section.hidden = false;
+    grid.innerHTML = list.map((company) => {
+        const status = company.status || company.account_status || '—';
+        const country = company.country || companyCountryLabel(company);
+        return `
+            <button type="button" class="portal-home-row" onclick="switchView('client-companies')">
+                <div>
+                    <div class="portal-home-row-title">${escapeHtml(company.name || 'Company')}</div>
+                    <div class="portal-home-row-meta">${escapeHtml(company.company_number || '—')}</div>
+                </div>
+                <div class="portal-home-row-meta">${escapeHtml(country)}</div>
+                <span class="status-badge ${dashStatusClass(status)}">${escapeHtml(status)}</span>
+                <span class="portal-home-row-meta">View</span>
+            </button>
+        `;
+    }).join('');
+}
+
+function renderClientDashDocuments(documents) {
+    const grid = document.getElementById('dash-recent-documents');
+    const section = document.getElementById('portal-home-documents');
+    if (!grid) return;
+    const list = (Array.isArray(documents) ? documents : []).slice(0, 4);
+    clientDashDocsById = {};
+    list.forEach((doc) => {
+        if (doc && doc.id) clientDashDocsById[doc.id] = doc;
+    });
+    if (!list.length) {
+        if (section) section.hidden = true;
+        grid.innerHTML = '';
+        return;
+    }
+    if (section) section.hidden = false;
+    grid.innerHTML = list.map((doc) => {
+        const related = doc.company_name || doc.order_number || doc.category || '';
+        const nameJs = JSON.stringify(String(doc.name || 'Document'));
+        const typeJs = JSON.stringify(String(doc.file_type || ''));
+        return `
+            <button type="button" class="portal-home-row" onclick='openDocumentPreview(${Number(doc.id)}, ${nameJs}, ${typeJs})'>
+                <div>
+                    <div class="portal-home-row-title">${escapeHtml(doc.name || 'Document')}</div>
+                    <div class="portal-home-row-meta">${escapeHtml(related)}</div>
+                </div>
+                <div class="portal-home-row-meta">${escapeHtml(formatDate(doc.created_at) || '')}</div>
+                <span class="status-badge ${documentStatusClass(doc.status)}">${escapeHtml(doc.status || '—')}</span>
+                <span class="portal-home-row-meta">View</span>
+            </button>
+        `;
+    }).join('');
 }
 
 async function loadClientCompanies() {
@@ -3269,8 +3593,8 @@ async function loadClientInvoices() {
                     <td>${i.service_name}</td>
                     <td style="font-weight:800;">£${parseFloat(i.total).toFixed(2)}</td>
                     <td>${i.due_date}</td>
-                    <td><span class="status-badge ${i.status.toLowerCase()}">${i.status}</span></td>
-                    <td><button class="btn-secondary" style="padding:4px 10px; font-size:0.75rem;">Download PDF</button></td>
+                    <td><span class="status-badge ${invoiceStatusBadgeClass(invoiceDisplayStatus(i))}">${escapeHtml(invoiceDisplayStatus(i))}</span></td>
+                    <td><a class="btn-secondary" style="padding:4px 10px; font-size:0.75rem; text-decoration:none;" href="${escapeHtml(i.document_url || `/api/client/invoices/${i.id}/document`)}" target="_blank" rel="noopener">View invoice</a></td>
                 </tr>
             `).join('');
         }
@@ -3373,6 +3697,75 @@ async function loadClientDocuments() {
             `).join('');
         }
     } catch (err) { console.error(err); }
+}
+
+function openUploadDocumentModal() {
+    if (!currentUser || currentUser.role !== 'CLIENT') {
+        switchView('client-documents');
+        return;
+    }
+    const err = document.getElementById('client-upload-error');
+    if (err) {
+        err.style.display = 'none';
+        err.textContent = '';
+    }
+    const form = document.getElementById('client-upload-document-form');
+    if (form) form.reset();
+    const modal = document.getElementById('modal-client-upload-document');
+    if (modal) modal.classList.add('active');
+    safeCreateIcons();
+}
+
+function closeUploadDocumentModal() {
+    const modal = document.getElementById('modal-client-upload-document');
+    if (modal) modal.classList.remove('active');
+}
+
+async function submitClientUploadDocument(event) {
+    if (event) event.preventDefault();
+    if (!currentUser || currentUser.role !== 'CLIENT') return;
+    const err = document.getElementById('client-upload-error');
+    const nameInput = document.getElementById('client-upload-name');
+    const fileInput = document.getElementById('client-upload-file');
+    const submitBtn = document.getElementById('client-upload-submit');
+    const file = fileInput && fileInput.files && fileInput.files[0];
+    const name = (nameInput && nameInput.value || '').trim() || (file && file.name) || '';
+    if (!file || !name) {
+        if (err) {
+            err.textContent = 'Choose a file and enter a document name.';
+            err.style.display = 'block';
+        }
+        return;
+    }
+    try {
+        if (submitBtn) submitBtn.disabled = true;
+        const b64 = await readFileAsBase64(file);
+        const res = await fetch('/api/client/documents/upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+                name,
+                category: 'Company Documents',
+                file_name: file.name,
+                file_content_base64: b64
+            })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Unable to upload the document.');
+        }
+        closeUploadDocumentModal();
+        if (activeView === 'client-documents') loadClientDocuments();
+        if (activeView === 'client-dashboard') loadClientDashboard();
+    } catch (ex) {
+        if (err) {
+            err.textContent = ex.message || 'Unable to upload the document.';
+            err.style.display = 'block';
+        }
+    } finally {
+        if (submitBtn) submitBtn.disabled = false;
+    }
 }
 
 async function loadClientTickets() {
@@ -3826,7 +4219,6 @@ async function loadAdminOrders() {
         const showFinance = canViewRevenue();
         tbody.innerHTML = data.orders.map(o => {
             const product = o.products_summary || o.service_name || '—';
-            const category = o.category_name ? `${escapeHtml(o.category_name)} · ` : '';
             const financeCells = showFinance ? `
                     <td class="cell-price">${adminOrderPriceCell(o)}</td>
                     <td class="cell-payment">
@@ -3846,7 +4238,7 @@ async function loadAdminOrders() {
                         ${ownerEmail ? `<div class="owner-cell-email">${escapeHtml(ownerEmail)}</div>` : ''}
                     </td>
                     <td class="cell-company">${escapeHtml(o.company_name || '—')}</td>
-                    <td class="cell-product">${category}${escapeHtml(product)}</td>
+                    <td class="cell-product">${renderProductPills(product, o.category_name)}</td>
                     ${financeCells}
                     <td class="cell-status">
                         <select class="table-select" data-order-action="status" data-order-id="${o.id}">
@@ -3969,7 +4361,12 @@ async function deleteSelectedAdminOrders() {
 }
 
 function formatOrderPrice(total) {
-    return `£${parseFloat(total || 0).toFixed(2)}`;
+    const value = parseFloat(total || 0);
+    if (!Number.isFinite(value)) return '£0';
+    if (Math.abs(value - Math.round(value)) < 0.001) {
+        return `£${Math.round(value)}`;
+    }
+    return `£${value.toFixed(2)}`;
 }
 
 function adminOrderPriceCell(order) {
@@ -4138,6 +4535,7 @@ let staffOrderClientId = null;
 let staffOrderCompanyId = null;
 let staffOrderProgress = 0;
 let staffOrderRecord = null;
+let staffOrderInvoice = null;
 let staffCheckoutFormEditing = false;
 let staffCheckoutFormDraft = [];
 
@@ -4298,6 +4696,7 @@ async function confirmDeleteOrder() {
             staffOrderId = null;
         }
         if (typeof loadAdminOrders === 'function') loadAdminOrders();
+        if (typeof loadAdminCompanies === 'function') loadAdminCompanies();
     } catch (ex) {
         if (err) {
             err.style.display = 'block';
@@ -4594,9 +4993,9 @@ async function openStaffOrderWorkspace(orderId, options) {
         setPortfolioText('staff-order-owner-email', owner.form_email || '—');
         setPortfolioText('staff-order-owner-phone', owner.phone || '—');
         setPortfolioText('staff-order-portal-email', order.portal_login_email || order.client_email || '—');
-        const category = order.category_name ? `${order.category_name} · ` : '';
         const productSummary = order.products_summary || order.service_name || '—';
-        setPortfolioText('staff-order-product', `${category}${productSummary}`.trim() || '—');
+        const productEl = document.getElementById('staff-order-product');
+        if (productEl) productEl.innerHTML = renderProductPills(productSummary, order.category_name);
         const priceBits = showFinance ? [`£${parseFloat(order.total || 0).toFixed(2)}`] : [];
         if (showFinance && order.price != null && order.vat != null) {
             priceBits.push(`(£${parseFloat(order.price || 0).toFixed(2)} + £${parseFloat(order.vat || 0).toFixed(2)} VAT)`);
@@ -4646,6 +5045,7 @@ async function openStaffOrderWorkspace(orderId, options) {
         if (deleteBtn) deleteBtn.style.display = canDeleteOrders() ? 'inline-flex' : 'none';
         const progressBtn = document.getElementById('staff-order-progress-btn');
         if (progressBtn) progressBtn.style.display = canAdvanceOrderProgress(order) ? 'inline-flex' : 'none';
+        fillStaffOrderPaymentPlan(data.invoice, order);
         const checkoutFields = staffCheckoutFormEditing
             ? staffCheckoutFieldsForEdit(order)
             : collapseCheckoutFormFields(order.checkout_form || []);
@@ -4776,6 +5176,58 @@ function showModalError(id, message) {
     }
     box.textContent = message;
     box.style.display = 'block';
+}
+
+const PRODUCT_BANKS = [
+    { re: /\btide\b/, tone: 'tide' },
+    { re: /\bwise\b/, tone: 'wise' },
+    { re: /\bmonzo\b/, tone: 'monzo' },
+    { re: /\bzempler\b/, tone: 'zempler' },
+    { re: /\bifast\b/, tone: 'ifast' },
+    { re: /\bcounting\s*up\b|\bcountingup\b/, tone: 'countingup' },
+    { re: /\btranswap\b/, tone: 'transwap' },
+    { re: /\brevolut\b/, tone: 'bank' },
+    { re: /\bstarling\b/, tone: 'bank' },
+];
+
+function matchProductBanks(name) {
+    const n = String(name || '').toLowerCase();
+    return PRODUCT_BANKS.filter((bank) => bank.re.test(n));
+}
+
+function productVisual(name) {
+    const n = String(name || '').toLowerCase();
+    const banks = matchProductBanks(name);
+    if (banks.length) return { tone: banks[0].tone };
+    if (/identity|kyc|verification/.test(n)) return { tone: 'kyc' };
+    if (/all inclusive|all-inclusive/.test(n)) return { tone: 'inclusive' };
+    if (/professional/.test(n)) return { tone: 'pro' };
+    if (/digital/.test(n)) return { tone: 'digital' };
+    if (/\bbank\b/.test(n)) return { tone: 'bank' };
+    if (/vat|tax|hmrc/.test(n)) return { tone: 'tax' };
+    if (/registered office|office address/.test(n)) return { tone: 'address' };
+    if (/mail/.test(n)) return { tone: 'mail' };
+    if (/website|web design|marketing/.test(n)) return { tone: 'web' };
+    if (/confirmation statement/.test(n)) return { tone: 'forms' };
+    if (/dissolution/.test(n)) return { tone: 'forms' };
+    if (/name change/.test(n)) return { tone: 'forms' };
+    if (/dormant/.test(n)) return { tone: 'forms' };
+    if (/director/.test(n)) return { tone: 'forms' };
+    if (/formation|incorporat|company registration/.test(n)) return { tone: 'digital' };
+    if (/forms/.test(n)) return { tone: 'forms' };
+    return { tone: 'default' };
+}
+
+function renderProductPills(summary, categoryName) {
+    const parts = String(summary || '')
+        .split(',')
+        .map((part) => part.trim())
+        .filter(Boolean);
+    if (!parts.length) return '—';
+    return `<div class="product-pills">${parts.map((name) => {
+        const visual = productVisual(`${categoryName || ''} ${name}`);
+        return `<span class="product-pill product-pill-${visual.tone}" title="${escapeHtml(name)}"><span class="product-pill-text">${escapeHtml(name)}</span></span>`;
+    }).join('')}</div>`;
 }
 
 function escapeHtml(value) {
@@ -5742,7 +6194,7 @@ async function openCrmClientModal(clientId) {
                 const amountBit = canViewRevenue() && inv.total != null ? ` — £${parseFloat(inv.total).toFixed(2)}` : '';
                 return `
                 <div style="padding:10px; border:1px solid #e2e8f0; border-radius:8px; margin-bottom:8px;">
-                    <strong>${escapeHtml(inv.invoice_number || '')}</strong>${amountBit} (${escapeHtml(inv.status || '')})
+                    <strong>${escapeHtml(inv.invoice_number || '')}</strong>${amountBit} (${escapeHtml(inv.display_status || inv.status || '')})
                 </div>`;
             }).join('') : '<p style="color:#64748b;">No invoices available.</p>';
         }
@@ -6050,13 +6502,10 @@ function readFileAsBase64(file) {
 }
 
 function formatDeliverSuccess(data) {
-    const lines = ['Document uploaded successfully.'];
-    lines.push('✓ Document uploaded');
+    const lines = ['✓ Document uploaded successfully'];
     if (data.notification_created) lines.push('✓ Client notification created');
-    if (data.email_sent) {
-        lines.push('✓ Email notification sent');
-    } else if (data.email_status) {
-        lines.push(`Email notification logged (${data.email_status}).`);
+    if (data.email_sent || data.email_status === 'queued' || data.email_status) {
+        lines.push('✓ Email notification queued');
     }
     return lines.join('\n');
 }
@@ -6081,6 +6530,8 @@ async function submitDeliverDocumentForm(event) {
         showDeliverDocumentError('Choose a file to upload.');
         return;
     }
+    const visibleCheckbox = document.getElementById('deliver-document-client-visible');
+    const clientVisible = visibleCheckbox ? (visibleCheckbox.checked ? 1 : 0) : 1;
     const submitBtn = document.getElementById('deliver-document-submit');
     if (submitBtn) submitBtn.disabled = true;
     try {
@@ -6091,7 +6542,8 @@ async function submitDeliverDocumentForm(event) {
             file_name: file.name,
             category: document.getElementById('deliver-document-category')?.value || 'Order Documents',
             client_message: document.getElementById('deliver-document-message')?.value || '',
-            file_content_base64: b64
+            file_content_base64: b64,
+            client_visible: clientVisible
         };
         const companyId = document.getElementById('deliver-document-company')?.value;
         const orderId = document.getElementById('deliver-document-order')?.value;
@@ -6420,14 +6872,326 @@ async function deleteAdminService(serviceId) {
     }
 }
 
+let adminInvoicesCache = [];
+let pendingEditInvoiceId = null;
+
+function invoicePaymentMethodOptions(selected) {
+    const modes = ['Website Charge', 'PKR(Bank Transfer)', 'GBP(Bank Transfer)', 'Credit Card (Stripe)'];
+    if (selected && !modes.includes(selected)) modes.unshift(selected);
+    return modes.map((mode) => `<option value="${escapeHtml(mode)}"${mode === (selected || '') ? ' selected' : ''}>${escapeHtml(mode)}</option>`).join('');
+}
+
+function invoiceStatusBadgeClass(status) {
+    if (status === 'Paid') return 'completed';
+    if (status === 'Partial Paid' || status === 'Part paid') return 'in-progress';
+    if (status === 'Overdue' || status === 'Cancelled') return 'cancelled';
+    return 'pending';
+}
+
+function invoiceWhenLabel(inv) {
+    if (!inv) return 'After work';
+    if (inv.payment_timing === 'Deposit') {
+        const deposit = parseFloat(inv.deposit_amount || 0);
+        return deposit > 0 ? `Deposit £${deposit.toFixed(2)}` : 'Deposit';
+    }
+    return inv.payment_timing === 'Advance' ? 'Advance' : 'After work';
+}
+
+function invoiceDisplayStatus(inv) {
+    if (!inv) return 'Pending';
+    if (inv.display_status === 'Part paid') return 'Partial Paid';
+    if (inv.display_status) return inv.display_status;
+    if (inv.status === 'Paid' || inv.status === 'Overdue' || inv.status === 'Cancelled' || inv.status === 'Partial Paid') {
+        return inv.status;
+    }
+    const paid = parseFloat(inv.amount_paid || 0);
+    const total = parseFloat(inv.total || 0);
+    if (paid > 0.004 && paid + 0.004 < total) return 'Partial Paid';
+    return inv.status || 'Pending';
+}
+
+function fillStaffOrderPaymentPlan(invoice, order) {
+    const card = document.getElementById('staff-order-pay-plan');
+    if (!card) return;
+    const show = canManageOrders() && canViewRevenue() && invoice && invoice.id;
+    card.hidden = !show;
+    if (!show) return;
+    staffOrderInvoice = invoice;
+    const timingEl = document.getElementById('staff-order-pay-timing');
+    const depositEl = document.getElementById('staff-order-deposit-amount');
+    const total = parseFloat((invoice.total != null ? invoice.total : order && order.total) || 0);
+    const timing = invoice.payment_timing === 'Advance' || invoice.payment_timing === 'Deposit' ? invoice.payment_timing : 'After work';
+    if (timingEl) timingEl.value = timing;
+    const deposit = parseFloat(invoice.deposit_amount || 0) || Math.round(total * 50) / 100;
+    if (depositEl) {
+        depositEl.value = deposit.toFixed(2);
+        depositEl.oninput = () => toggleStaffOrderDepositField();
+    }
+    toggleStaffOrderDepositField();
+    const paid = parseFloat(invoice.amount_paid || 0);
+    const due = invoice.amount_due != null ? parseFloat(invoice.amount_due) : Math.max(0, total - paid);
+    const summary = document.getElementById('staff-order-pay-summary');
+    if (summary) {
+        summary.textContent = `${invoice.invoice_number || 'Invoice'} · ${invoiceDisplayStatus(invoice)} · received £${paid.toFixed(2)} · due £${due.toFixed(2)}`;
+    }
+    const markDeposit = document.getElementById('staff-order-mark-deposit');
+    const markPaid = document.getElementById('staff-order-mark-paid');
+    if (markDeposit) markDeposit.style.display = (timing === 'Deposit' && due > 0.004) ? 'inline-flex' : 'none';
+    if (markPaid) markPaid.style.display = due > 0.004 ? 'inline-flex' : 'none';
+}
+
+function toggleStaffOrderDepositField() {
+    const timing = ((document.getElementById('staff-order-pay-timing') || {}).value || '');
+    const wrap = document.getElementById('staff-order-deposit-wrap');
+    const hint = document.getElementById('staff-order-deposit-hint');
+    const invoice = staffOrderInvoice || {};
+    const total = parseFloat(invoice.total || (staffOrderRecord && staffOrderRecord.total) || 0);
+    if (wrap) wrap.hidden = timing !== 'Deposit';
+    if (hint && timing === 'Deposit') {
+        const raw = parseFloat(((document.getElementById('staff-order-deposit-amount') || {}).value || '').replace(/[^0-9.]/g, ''));
+        const deposit = Number.isFinite(raw) ? raw : Math.round(total * 50) / 100;
+        hint.textContent = `Balance later: £${Math.max(0, total - deposit).toFixed(2)}`;
+    }
+}
+
+async function saveStaffOrderPaymentPlan(extra) {
+    const invoice = staffOrderInvoice || {};
+    if (!invoice.id) return;
+    const timing = ((document.getElementById('staff-order-pay-timing') || {}).value || 'After work').trim();
+    const payload = Object.assign({
+        payment_timing: timing,
+        payment_method: ((document.getElementById('staff-order-payment-mode') || {}).value || '').trim(),
+    }, extra || {});
+    if (timing === 'Deposit') {
+        payload.deposit_amount = ((document.getElementById('staff-order-deposit-amount') || {}).value || '').trim();
+    }
+    try {
+        const res = await fetch(`/api/admin/invoices/${invoice.id}`, {
+            method: 'PUT',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') throw new Error(data.message || 'Unable to save the payment plan.');
+        if (staffOrderId) await openStaffOrderWorkspace(staffOrderId);
+        const mailNote = data.email_sent ? ' Payment email sent to the company owner.' : '';
+        setStaffOrderNotice('success', extra && extra.send_payment_details
+            ? `Payment details emailed to the company owner.${mailNote}`
+            : ((data.invoice && (data.invoice.display_status === 'Partial Paid' || data.invoice.display_status === 'Part paid'))
+                ? `Deposit recorded.${mailNote}`
+                : `Payment plan saved.${mailNote}`));
+        if (typeof loadAdminInvoices === 'function') loadAdminInvoices();
+    } catch (err) {
+        setStaffOrderNotice('error', err.message || 'Unable to save the payment plan.');
+    }
+}
+
+function markStaffOrderDepositReceived() {
+    const amount = ((document.getElementById('staff-order-deposit-amount') || {}).value || '').trim();
+    return saveStaffOrderPaymentPlan({ payment_timing: 'Deposit', deposit_amount: amount, amount_paid: amount });
+}
+
+function markStaffOrderPaidInFull() {
+    return saveStaffOrderPaymentPlan({ status: 'Paid' });
+}
+
+function emailStaffOrderPaymentDetails() {
+    return saveStaffOrderPaymentPlan({ send_payment_details: true });
+}
+
+function openStaffOrderInvoice() {
+    const id = staffOrderInvoice && staffOrderInvoice.id;
+    if (id) openInvoiceDocument(id);
+}
+
+function toggleEditInvoiceDepositField() {
+    const timing = ((document.getElementById('edit-invoice-timing') || {}).value || '');
+    const wrap = document.getElementById('edit-invoice-deposit-wrap');
+    if (wrap) wrap.hidden = timing !== 'Deposit';
+}
+
+function openInvoiceDocument(invoiceId) {
+    const id = Number(invoiceId);
+    if (!id) return;
+    window.open(`/api/admin/invoices/${id}/document`, '_blank', 'noopener');
+}
+
+function closeEditInvoiceModal() {
+    const modal = document.getElementById('modal-edit-invoice');
+    if (modal) modal.classList.remove('active');
+    pendingEditInvoiceId = null;
+}
+
+function openEditInvoiceModal(invoiceId) {
+    const invoice = (adminInvoicesCache || []).find((row) => Number(row.id) === Number(invoiceId));
+    if (!invoice) return;
+    pendingEditInvoiceId = Number(invoice.id);
+    const numEl = document.getElementById('edit-invoice-number');
+    const clientEl = document.getElementById('edit-invoice-client');
+    const statusEl = document.getElementById('edit-invoice-status');
+    const timingEl = document.getElementById('edit-invoice-timing');
+    const methodEl = document.getElementById('edit-invoice-method');
+    const dueEl = document.getElementById('edit-invoice-due');
+    const totalEl = document.getElementById('edit-invoice-total');
+    const err = document.getElementById('edit-invoice-error');
+    if (numEl) numEl.textContent = invoice.invoice_number || 'Invoice';
+    if (clientEl) {
+        const bits = [invoice.owner_name || invoice.client_name, invoice.owner_form_email || invoice.client_email, invoice.order_number].filter(Boolean);
+        clientEl.textContent = bits.join(' · ');
+    }
+    if (statusEl) {
+        const stored = invoice.status || 'Pending';
+        const display = invoiceDisplayStatus(invoice);
+        statusEl.value = (stored === 'Partial Paid' || stored === 'Part paid' || display === 'Partial Paid' || display === 'Part paid')
+            ? 'Partial Paid'
+            : stored;
+    }
+    if (timingEl) {
+        timingEl.value = (invoice.payment_timing === 'Advance' || invoice.payment_timing === 'Deposit')
+            ? invoice.payment_timing
+            : 'After work';
+    }
+    if (methodEl) methodEl.innerHTML = invoicePaymentMethodOptions(invoice.payment_method || '');
+    if (dueEl) dueEl.value = String(invoice.due_date || '').slice(0, 10);
+    if (totalEl) {
+        totalEl.value = invoice.total != null ? parseFloat(invoice.total || 0).toFixed(2) : '';
+        totalEl.disabled = !canEditOrderPrice();
+    }
+    const depositEl = document.getElementById('edit-invoice-deposit');
+    if (depositEl) {
+        const fallback = Math.round(parseFloat(invoice.total || 0) * 50) / 100;
+        depositEl.value = parseFloat(invoice.deposit_amount || fallback || 0).toFixed(2);
+    }
+    const paidEl = document.getElementById('edit-invoice-paid');
+    if (paidEl) paidEl.value = parseFloat(invoice.amount_paid || 0).toFixed(2);
+    toggleEditInvoiceDepositField();
+    if (err) {
+        err.style.display = 'none';
+        err.textContent = '';
+    }
+    applyAdminOrderFinanceVisibility();
+    const modal = document.getElementById('modal-edit-invoice');
+    if (modal) modal.classList.add('active');
+    if (window.lucide) lucide.createIcons();
+}
+
+async function submitEditInvoiceForm(event) {
+    event.preventDefault();
+    if (!pendingEditInvoiceId) return;
+    const err = document.getElementById('edit-invoice-error');
+    const submitBtn = document.getElementById('edit-invoice-submit');
+    const payload = {
+        status: ((document.getElementById('edit-invoice-status') || {}).value || '').trim(),
+        payment_timing: ((document.getElementById('edit-invoice-timing') || {}).value || '').trim(),
+        payment_method: ((document.getElementById('edit-invoice-method') || {}).value || '').trim(),
+        due_date: ((document.getElementById('edit-invoice-due') || {}).value || '').trim(),
+    };
+    if (canEditOrderPrice()) {
+        payload.total = ((document.getElementById('edit-invoice-total') || {}).value || '').trim();
+    }
+    if (payload.payment_timing === 'Deposit') {
+        payload.deposit_amount = ((document.getElementById('edit-invoice-deposit') || {}).value || '').trim();
+    }
+    payload.amount_paid = ((document.getElementById('edit-invoice-paid') || {}).value || '').trim();
+    if (err) {
+        err.style.display = 'none';
+        err.textContent = '';
+    }
+    if (submitBtn) submitBtn.disabled = true;
+    try {
+        const res = await fetch(`/api/admin/invoices/${pendingEditInvoiceId}`, {
+            method: 'PUT',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Unable to update this invoice.');
+        }
+        closeEditInvoiceModal();
+        await loadAdminInvoices();
+        const box = document.getElementById('adm-invoices-error');
+        if (box) {
+            if (data.email_sent) {
+                box.style.display = 'block';
+                box.style.background = '#ecfdf5';
+                box.style.color = '#047857';
+                box.textContent = 'Invoice saved. Email sent to the company owner.';
+            } else if (payload.status === 'Paid') {
+                box.style.display = 'block';
+                box.style.background = '#fff7ed';
+                box.style.color = '#9a3412';
+                box.textContent = data.email_status
+                    ? `Invoice saved. Email: ${data.email_status}`
+                    : 'Invoice saved. No payment email was sent.';
+            }
+        }
+    } catch (ex) {
+        if (err) {
+            err.style.display = 'block';
+            err.textContent = ex.message || 'Unable to update this invoice.';
+        }
+    } finally {
+        if (submitBtn) submitBtn.disabled = false;
+    }
+}
+
+async function emailAdminInvoice(invoiceId) {
+    const id = Number(invoiceId || pendingEditInvoiceId || 0);
+    if (!id) return;
+    const box = document.getElementById('adm-invoices-error');
+    const sendBtn = document.getElementById('edit-invoice-send');
+    if (sendBtn) sendBtn.disabled = true;
+    try {
+        const res = await fetch(`/api/admin/invoices/${id}`, {
+            method: 'PUT',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ send_payment_details: true }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || data.email_status || 'Unable to send this invoice.');
+        }
+        if (!data.email_sent) {
+            throw new Error(data.email_status || 'Invoice email was not sent.');
+        }
+        if (pendingEditInvoiceId) closeEditInvoiceModal();
+        await loadAdminInvoices();
+        if (box) {
+            box.style.display = 'block';
+            box.style.background = '#ecfdf5';
+            box.style.color = '#047857';
+            const inv = data.invoice || {};
+            const to = inv.owner_form_email || inv.client_email || 'the company owner';
+            box.textContent = `Invoice emailed to ${to}.`;
+        }
+    } catch (err) {
+        if (box) {
+            box.style.display = 'block';
+            box.style.background = '#fef2f2';
+            box.style.color = '#dc2626';
+            box.textContent = err.message || 'Unable to send this invoice.';
+        } else {
+            alert(err.message || 'Unable to send this invoice.');
+        }
+    } finally {
+        if (sendBtn) sendBtn.disabled = false;
+    }
+}
+
 async function loadAdminInvoices() {
     const tbody = document.getElementById('adm-invoices-table-body');
     const errBox = document.getElementById('adm-invoices-error');
     const showFinance = canViewRevenue();
-    const colCount = showFinance ? 6 : 5;
+    const colCount = showFinance ? 8 : 7;
     if (errBox) {
         errBox.style.display = 'none';
         errBox.textContent = '';
+        errBox.style.background = '';
+        errBox.style.color = '';
     }
     if (tbody) {
         tbody.innerHTML = `<tr><td colspan="${colCount}" style="text-align:center; color:#64748b; padding:28px;">Loading invoices…</td></tr>`;
@@ -6439,6 +7203,7 @@ async function loadAdminInvoices() {
             throw new Error(data.message || 'Unable to load invoices.');
         }
         const invoices = Array.isArray(data.invoices) ? data.invoices : [];
+        adminInvoicesCache = invoices;
         if (!tbody) return;
         if (!invoices.length) {
             tbody.innerHTML = `<tr><td colspan="${colCount}" style="text-align:center; color:#64748b; padding:28px;">No invoices yet.</td></tr>`;
@@ -6447,13 +7212,22 @@ async function loadAdminInvoices() {
         tbody.innerHTML = invoices.map((inv) => `
             <tr>
                 <td style="font-weight:700;">${escapeHtml(inv.invoice_number || '—')}</td>
-                <td>${escapeHtml(inv.client_name || '—')}<div style="font-size:0.72rem; color:#64748b;">${escapeHtml(inv.client_email || '')}</div></td>
+                <td>${escapeHtml(inv.owner_name || inv.client_name || '—')}<div style="font-size:0.72rem; color:#64748b;">${escapeHtml(inv.owner_form_email || inv.client_email || '')}</div></td>
                 <td>${escapeHtml(inv.order_number || '—')}</td>
                 ${showFinance ? `<td class="cell-inv-total">£${parseFloat(inv.total || 0).toFixed(2)}</td>` : ''}
-                <td><span class="status-badge ${inv.status === 'Paid' ? 'completed' : (inv.status === 'Overdue' ? 'cancelled' : 'pending')}">${escapeHtml(inv.status || '')}</span></td>
+                <td>${escapeHtml(invoiceWhenLabel(inv))}</td>
+                <td><span class="status-badge ${invoiceStatusBadgeClass(invoiceDisplayStatus(inv))}">${escapeHtml(invoiceDisplayStatus(inv))}</span></td>
                 <td>${escapeHtml(formatDate(inv.created_at))}</td>
+                <td class="cell-actions">
+                    <div class="table-action-btns">
+                        <button type="button" class="btn-secondary btn-table" onclick="openInvoiceDocument(${Number(inv.id)})">Invoice</button>
+                        <button type="button" class="btn-secondary btn-table" onclick="emailAdminInvoice(${Number(inv.id)})">Send</button>
+                        <button type="button" class="btn-secondary btn-table" onclick="openEditInvoiceModal(${Number(inv.id)})">Edit</button>
+                    </div>
+                </td>
             </tr>
         `).join('');
+        if (window.lucide) lucide.createIcons();
     } catch (err) {
         console.error(err);
         if (errBox) {
@@ -7013,7 +7787,7 @@ async function loadAdminAccountancy() {
                         <strong>${escapeHtml(row.name || 'Company')}</strong>
                         <div class="cell-subtext">${escapeHtml(row.company_number || '')}</div>
                     </td>
-                    <td>${escapeHtml(row.director || row.client_name || '—')}<div class="cell-subtext">${escapeHtml(row.director_email || row.client_email || '')}</div></td>
+                    <td>${escapeHtml(row.owner_name || row.director || row.client_name || '—')}<div class="cell-subtext">${escapeHtml(row.director_email || row.client_email || '')}</div></td>
                     <td>${accountancyAddressBadge(readiness)}</td>
                     <td>${accountancyVerifyBadge(readiness.identity)}</td>
                     <td>${accountancyVerifyBadge(readiness.psc)}</td>
@@ -7607,4 +8381,176 @@ function formatDate(dateStr) {
     if (!dateStr) return '';
     const d = new Date(dateStr);
     return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+// ==================================================
+// SMART DOCUMENT INTAKE & AUTO-FILING FRONTEND LOGIC
+// ==================================================
+let intakeSelectedFiles = [];
+
+function onIntakeFilesSelected(event) {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+    for (let i = 0; i < files.length; i++) {
+        intakeSelectedFiles.push(files[i]);
+    }
+    renderIntakeFilePreview();
+}
+
+function renderIntakeFilePreview() {
+    const container = document.getElementById('intake-file-preview-list');
+    const submitBtn = document.getElementById('btn-intake-submit');
+    if (!container) return;
+    if (intakeSelectedFiles.length === 0) {
+        container.innerHTML = '';
+        if (submitBtn) submitBtn.disabled = true;
+        return;
+    }
+    if (submitBtn) submitBtn.disabled = false;
+    container.innerHTML = intakeSelectedFiles.map((file, idx) => `
+        <div style="background:#e2e8f0; border-radius:6px; padding:6px 12px; font-size:0.8rem; font-weight:600; color:#334155; display:flex; align-items:center; gap:8px;">
+            <i data-lucide="file" style="width:14px; height:14px;"></i>
+            <span>${escapeHtml(file.name)} (${formatDocumentSize(file.size)})</span>
+            <button type="button" onclick="removeIntakeFile(${idx})" style="background:none; border:none; color:#ef4444; cursor:pointer; font-weight:bold; font-size:1rem; padding:0 2px;">&times;</button>
+        </div>
+    `).join('');
+    if (window.lucide && typeof window.lucide.createIcons === 'function') {
+        window.lucide.createIcons();
+    }
+}
+
+function removeIntakeFile(index) {
+    intakeSelectedFiles.splice(index, 1);
+    renderIntakeFilePreview();
+}
+
+function resetSmartIntakeForm() {
+    intakeSelectedFiles = [];
+    const input = document.getElementById('intake-files-input');
+    if (input) input.value = '';
+    renderIntakeFilePreview();
+    const resultsPanel = document.getElementById('intake-results-panel');
+    if (resultsPanel) resultsPanel.style.display = 'none';
+    const errBanner = document.getElementById('adm-intake-error');
+    if (errBanner) errBanner.style.display = 'none';
+    const succBanner = document.getElementById('adm-intake-success');
+    if (succBanner) succBanner.style.display = 'none';
+}
+
+async function submitSmartIntakeForm(event) {
+    event.preventDefault();
+    if (intakeSelectedFiles.length === 0) return;
+    const submitBtn = document.getElementById('btn-intake-submit');
+    const errBanner = document.getElementById('adm-intake-error');
+    const succBanner = document.getElementById('adm-intake-success');
+    if (errBanner) errBanner.style.display = 'none';
+    if (succBanner) succBanner.style.display = 'none';
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = `<i data-lucide="loader" class="spin"></i> Processing &amp; Auto-Filing...`;
+    }
+    try {
+        const payloadFiles = [];
+        for (const file of intakeSelectedFiles) {
+            const b64 = await readFileAsBase64(file);
+            payloadFiles.push({
+                file_name: file.name,
+                file_content_base64: b64
+            });
+        }
+        const res = await fetch('/api/admin/documents/intake/process', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ files: payloadFiles })
+        });
+        const data = await res.json();
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Smart intake failed.');
+        }
+        if (succBanner) {
+            succBanner.style.display = 'block';
+            succBanner.innerHTML = `✓ ${escapeHtml(data.message || 'Processing complete.')}`;
+        }
+        renderIntakeResults(data);
+    } catch (err) {
+        if (errBanner) {
+            errBanner.style.display = 'block';
+            errBanner.textContent = err.message || 'Smart intake processing failed.';
+        }
+    } finally {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = `<i data-lucide="cpu"></i> Process &amp; Auto-File Documents`;
+        }
+        if (window.lucide && typeof window.lucide.createIcons === 'function') {
+            window.lucide.createIcons();
+        }
+    }
+}
+
+function renderIntakeResults(data) {
+    const resultsPanel = document.getElementById('intake-results-panel');
+    if (!resultsPanel) return;
+    resultsPanel.style.display = 'block';
+
+    const client = data.client || {};
+    const company = data.company || {};
+    const missing = data.missing_fields || [];
+    const filedDocs = data.filed_documents || [];
+
+    // Client card
+    document.getElementById('res-client-name').textContent = client.full_name || 'Unassigned / Anonymous';
+    document.getElementById('res-client-dob').textContent = client.dob ? `DOB: ${client.dob}` : 'DOB: Not detected';
+    const clientBadge = document.getElementById('res-client-status-badge');
+    if (clientBadge) {
+        clientBadge.innerHTML = client.id ? `<span class="badge-status-approved">Linked Client #${client.id}</span>` : `<span class="badge-status-pending">No Client Created</span>`;
+    }
+    const clientAction = document.getElementById('res-client-action-btn');
+    if (clientAction && client.id) {
+        clientAction.innerHTML = `<button type="button" class="btn-secondary" style="font-size:0.8rem;" onclick="openCrmClientModal(${client.id})"><i data-lucide="user"></i> View Customer File</button>`;
+    }
+
+    // Company card
+    document.getElementById('res-company-name').textContent = company.name || 'No Company Matched';
+    document.getElementById('res-company-num').textContent = company.company_number ? `Company #: ${company.company_number}` : 'Company #: None';
+    const compBadge = document.getElementById('res-company-status-badge');
+    if (compBadge) {
+        compBadge.innerHTML = company.id ? `<span class="badge-status-approved">Imported / Linked #${company.id}</span>` : `<span class="badge-status-pending">No CH Match</span>`;
+    }
+
+    // Pending Alert card
+    const pendingText = document.getElementById('res-pending-alert-text');
+    const pendingBtn = document.getElementById('res-pending-action-btn');
+    if (missing && missing.length > 0) {
+        if (pendingText) pendingText.textContent = `Missing client contact information: ${missing.join(', ')}. You can add missing contact details later in the customer profile.`;
+        if (pendingBtn && client.id) {
+            pendingBtn.innerHTML = `<button type="button" class="btn-primary" style="font-size:0.8rem; background:#d97706;" onclick="openCrmClientModal(${client.id})"><i data-lucide="edit-3"></i> Add Missing Details</button>`;
+        }
+    } else {
+        if (pendingText) pendingText.textContent = `✓ All client details (email & phone) are complete. No action required.`;
+        if (pendingBtn) pendingBtn.innerHTML = '';
+    }
+
+    // Filed docs table
+    const tbody = document.getElementById('intake-filed-docs-tbody');
+    if (tbody) {
+        tbody.innerHTML = filedDocs.map(doc => `
+            <tr>
+                <td><strong>${escapeHtml(doc.name || 'Document')}</strong></td>
+                <td><span class="badge-status-completed">${escapeHtml(doc.category || 'General')}</span></td>
+                <td>${escapeHtml(client.full_name || 'Client')}</td>
+                <td>${escapeHtml(company.name || 'Unassigned')}</td>
+                <td><span class="badge-status-approved">Filed</span></td>
+                <td>
+                    <a href="/api/documents/${doc.id}/view" target="_blank" class="btn-action"><i data-lucide="eye"></i> View</a>
+                    <a href="/api/documents/${doc.id}/download" class="btn-action"><i data-lucide="download"></i> Download</a>
+                </td>
+            </tr>
+        `).join('');
+    }
+
+    if (window.lucide && typeof window.lucide.createIcons === 'function') {
+        window.lucide.createIcons();
+    }
 }
