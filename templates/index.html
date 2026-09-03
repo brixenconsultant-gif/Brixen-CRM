@@ -1292,7 +1292,7 @@
                     <!-- UPLOAD CONTAINER CARD -->
                     <div class="modal-card" style="max-width:100%; margin:0 0 24px 0; padding:24px;">
                         <form id="intake-upload-form" onsubmit="submitSmartIntakeForm(event)">
-                            <div id="intake-drop-zone" style="border: 2px dashed #cbd5e1; border-radius:12px; padding:36px 20px; text-align:center; background:#f8fafc; cursor:pointer; transition: all 0.2s ease;" onclick="document.getElementById('intake-files-input').click()">
+                            <div id="intake-drop-zone" ondragover="onIntakeDragOver(event)" ondragleave="onIntakeDragLeave(event)" ondrop="onIntakeDrop(event)" style="border: 2px dashed #cbd5e1; border-radius:12px; padding:36px 20px; text-align:center; background:#f8fafc; cursor:pointer; transition: all 0.2s ease;" onclick="document.getElementById('intake-files-input').click()">
                                 <i data-lucide="file-up" style="width:48px; height:48px; color:#475569; margin-bottom:12px;"></i>
                                 <h3 style="margin:0 0 8px 0; font-size:1.1rem; font-weight:700; color:#1e293b;">Drag &amp; Drop Unorganized Files Here</h3>
                                 <p style="margin:0 0 16px 0; color:#64748b; font-size:0.875rem;">Supports bank statements, passports, CNIC, utility bills, company docs (PDF, PNG, JPG, DOCX)</p>

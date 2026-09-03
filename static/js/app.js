@@ -8397,6 +8397,39 @@ function onIntakeFilesSelected(event) {
     renderIntakeFilePreview();
 }
 
+function onIntakeDragOver(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    const zone = document.getElementById('intake-drop-zone');
+    if (zone) {
+        zone.style.background = '#e0f2fe';
+        zone.style.borderColor = '#0284c7';
+    }
+}
+
+function onIntakeDragLeave(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    const zone = document.getElementById('intake-drop-zone');
+    if (zone) {
+        zone.style.background = '#f8fafc';
+        zone.style.borderColor = '#cbd5e1';
+    }
+}
+
+function onIntakeDrop(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    onIntakeDragLeave(event);
+    const dt = event.dataTransfer;
+    if (dt && dt.files && dt.files.length > 0) {
+        for (let i = 0; i < dt.files.length; i++) {
+            intakeSelectedFiles.push(dt.files[i]);
+        }
+        renderIntakeFilePreview();
+    }
+}
+
 function renderIntakeFilePreview() {
     const container = document.getElementById('intake-file-preview-list');
     const submitBtn = document.getElementById('btn-intake-submit');
@@ -8407,11 +8440,17 @@ function renderIntakeFilePreview() {
         return;
     }
     if (submitBtn) submitBtn.disabled = false;
-    container.innerHTML = intakeSelectedFiles.map((file, idx) => `
-        <div style="background:#e2e8f0; border-radius:6px; padding:6px 12px; font-size:0.8rem; font-weight:600; color:#334155; display:flex; align-items:center; gap:8px;">
-            <i data-lucide="file" style="width:14px; height:14px;"></i>
-            <span>${escapeHtml(file.name)} (${formatDocumentSize(file.size)})</span>
-            <button type="button" onclick="removeIntakeFile(${idx})" style="background:none; border:none; color:#ef4444; cursor:pointer; font-weight:bold; font-size:1rem; padding:0 2px;">&times;</button>
+    container.innerHTML = `
+        <div style="width:100%; margin-bottom:8px; font-size:0.85rem; font-weight:700; color:#0f172a;">
+            Selected Files for Intake (${intakeSelectedFiles.length}):
+        </div>
+        ` + intakeSelectedFiles.map((file, idx) => `
+        <div style="background:#ffffff; border:1px solid #cbd5e1; border-radius:8px; padding:8px 14px; font-size:0.85rem; font-weight:600; color:#1e293b; display:flex; align-items:center; gap:10px; box-shadow:0 1px 2px rgba(0,0,0,0.05);">
+            <i data-lucide="file-text" style="width:16px; height:16px; color:#0284c7;"></i>
+            <span>${escapeHtml(file.name)}</span>
+            <span style="color:#64748b; font-size:0.75rem;">(${formatDocumentSize(file.size)})</span>
+            <span class="badge-status-pending" style="font-size:0.7rem; margin-left:auto;">Pending Upload</span>
+            <button type="button" onclick="removeIntakeFile(${idx})" style="background:none; border:none; color:#ef4444; cursor:pointer; font-weight:bold; font-size:1.1rem; padding:0 4px;" title="Remove file">&times;</button>
         </div>
     `).join('');
     if (window.lucide && typeof window.lucide.createIcons === 'function') {

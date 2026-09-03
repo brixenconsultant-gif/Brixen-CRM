@@ -5347,11 +5347,11 @@ def extract_document_text_and_metadata(filename, b64_content):
     
     category = 'Company Documents'
     lower_text = combined_text.lower()
-    if any(k in lower_text for k in ('statement', 'bank', 'account', 'balance', 'hsbc', 'barclays', 'lloyds', 'natwest', 'tide', 'revolut', 'monzo')):
+    if any(k in lower_text for k in ('statement', 'bank', 'account', 'balance', 'hsbc', 'barclays', 'lloyds', 'natwest', 'tide', 'revolut', 'monzo', 'santander')):
         category = 'Bank statement'
-    elif any(k in lower_text for k in ('passport', 'cnic', 'id card', 'driving licence', 'identity', 'driving license')):
+    elif any(k in lower_text for k in ('passport', 'cnic', 'id card', 'driving licence', 'identity', 'driving license', 'nic', 'nid')):
         category = 'ID Document'
-    elif any(k in lower_text for k in ('utility', 'bill', 'council tax', 'tenancy', 'proof of address', 'water', 'electric')):
+    elif any(k in lower_text for k in ('utility', 'bill', 'council tax', 'tenancy', 'proof of address', 'water', 'electric', 'gas')):
         category = 'Proof of Address'
     elif any(k in lower_text for k in ('certificate of incorporation', 'companies house', 'incorporation', 'articles of association', 'utr', 'vat', 'annual return', 'confirmation statement')):
         category = 'Certificate of Incorporation'
@@ -5361,12 +5361,16 @@ def extract_document_text_and_metadata(filename, b64_content):
     if name_match:
         person_name = name_match.group(1).strip()
     else:
-        fn_words = re.findall(r'[A-Z][a-z]+', filename_clean.replace('_', ' ').replace('-', ' '))
-        if len(fn_words) >= 2:
-            person_name = ' '.join(fn_words[:3])
+        ignore_words = {'bank', 'statement', 'passport', 'cnic', 'id', 'proof', 'address', 'doc', 'docx', 'pdf', 'png', 'jpg', 'jpeg', 'certificate', 'incorporation', 'utility', 'bill', 'ltd', 'limited', 'company'}
+        cleaned_fn = re.sub(r'[\._\-\(\)\[\]]', ' ', filename_clean)
+        words = [w for w in cleaned_fn.split() if w.lower() not in ignore_words and len(w) >= 2]
+        if len(words) >= 2:
+            person_name = ' '.join(w.capitalize() for w in words[:3])
 
     dob = None
     dob_match = re.search(r'(?:DOB|Date of Birth|Birth Date|Born)\.?\s*[:\-]?\s*(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2}|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{2,4})', combined_text, re.IGNORECASE)
+    if not dob_match:
+        dob_match = re.search(r'\b(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.](?:19\d\d|20[01]\d))\b', combined_text)
     if dob_match:
         dob = dob_match.group(1).strip()
 
@@ -5376,7 +5380,7 @@ def extract_document_text_and_metadata(filename, b64_content):
         company_number = normalize_company_number(comp_num_match.group(1))
 
     company_name = None
-    comp_name_match = re.search(r'([A-Z0-9\s\,\.\&\-]{3,60}\s+(?:LTD|LIMITED|LLP|PLC|HOLDINGS|SERVICES|SOLUTIONS))', combined_text, re.IGNORECASE)
+    comp_name_match = re.search(r'([A-Za-z0-9\s\,\.\&\-]{3,60}\s+(?:LTD|LIMITED|LLP|PLC|HOLDINGS|SERVICES|SOLUTIONS))', combined_text, re.IGNORECASE)
     if comp_name_match:
         company_name = comp_name_match.group(1).strip()
 
@@ -13560,9 +13564,9 @@ def application(environ, start_response):
             clean_username = re.sub(r'[^a-z0-9]', '.', extracted_client_name.lower().strip())
             provisional_email = f"{clean_username}@brixen-pending.local"
             user_id = execute_db("""
-                INSERT INTO users (full_name, email, role, status, created_at)
-                VALUES (?, ?, 'CLIENT', 'Active', CURRENT_TIMESTAMP);
-            """, (extracted_client_name, provisional_email))
+                INSERT INTO users (full_name, email, password_hash, role, status, created_at)
+                VALUES (?, ?, ?, 'CLIENT', 'Active', CURRENT_TIMESTAMP);
+            """, (extracted_client_name, provisional_email, unusable_password_hash()))
             client_user = query_db("SELECT * FROM users WHERE id = ?;", (user_id,), one=True)
 
         client_id = client_user['id'] if client_user else None
