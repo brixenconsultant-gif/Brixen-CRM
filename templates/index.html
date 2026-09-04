@@ -61,7 +61,7 @@
     </script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-    <link rel="stylesheet" href="/static/css/styles.css?v=113.0">
+    <link rel="stylesheet" href="/static/css/styles.css?v=115.0">
 </head>
 <body>
     <div id="auth-loading-screen" role="status" aria-live="polite">
@@ -1254,21 +1254,42 @@
                 <div id="view-admin-documents" class="view-panel" style="display: none;">
                     <div class="page-title-row">
                         <div class="page-title-text">
-                            <h1>Documents Review Center</h1>
-                            <p>Files uploaded in the CRM. Website order products are not documents.</p>
+                            <h1>Documents Lifecycle</h1>
+                            <p>Customer uploads stay in triage until approved. Posted Documents are the permanent client vault.</p>
                         </div>
                         <button type="button" class="btn-primary" id="btn-admin-upload-document" onclick="openDeliverDocumentModalFromReview()"><i data-lucide="upload"></i> Upload Document</button>
                     </div>
                     <div id="adm-documents-error" class="dash-banner-error" style="display:none;" role="alert"></div>
+                    <div id="adm-documents-job-status" class="dash-banner-success" style="display:none;" role="status"></div>
+
+                    <div class="portfolio-tabs lifecycle-tabs" id="adm-documents-lifecycle-tabs" role="tablist" aria-label="Document lifecycle">
+                        <button type="button" class="portfolio-tab active" data-lifecycle="CUSTOMER_UPLOADS" onclick="switchAdminDocumentsLifecycle('CUSTOMER_UPLOADS')">Customer Uploads <span class="lifecycle-count" data-count="CUSTOMER_UPLOADS">0</span></button>
+                        <button type="button" class="portfolio-tab" data-lifecycle="PROCESSING" onclick="switchAdminDocumentsLifecycle('PROCESSING')">Processing <span class="lifecycle-count" data-count="PROCESSING">0</span></button>
+                        <button type="button" class="portfolio-tab" data-lifecycle="REVIEW_REQUIRED" onclick="switchAdminDocumentsLifecycle('REVIEW_REQUIRED')">Review Required <span class="lifecycle-count" data-count="REVIEW_REQUIRED">0</span></button>
+                        <button type="button" class="portfolio-tab" data-lifecycle="READY_FOR_APPROVAL" onclick="switchAdminDocumentsLifecycle('READY_FOR_APPROVAL')">Ready for Approval <span class="lifecycle-count" data-count="READY_FOR_APPROVAL">0</span></button>
+                        <button type="button" class="portfolio-tab" data-lifecycle="POSTED_DOCUMENTS" onclick="switchAdminDocumentsLifecycle('POSTED_DOCUMENTS')">Posted Documents <span class="lifecycle-count" data-count="POSTED_DOCUMENTS">0</span></button>
+                        <button type="button" class="portfolio-tab" data-lifecycle="QUARANTINE" onclick="switchAdminDocumentsLifecycle('QUARANTINE')">Quarantine <span class="lifecycle-count" data-count="QUARANTINE">0</span></button>
+                    </div>
+
+                    <div class="lifecycle-toolbar" id="adm-documents-toolbar">
+                        <label class="lifecycle-check-label"><input type="checkbox" id="adm-docs-select-page" onchange="toggleAdminDocumentsPageSelection(this.checked)"> Select page</label>
+                        <button type="button" class="btn-secondary btn-table" onclick="clearAdminDocumentsSelection()">Clear</button>
+                        <button type="button" class="btn-primary btn-table" onclick="bulkApproveAdminDocuments(false)">Bulk Approve Selected</button>
+                        <button type="button" class="btn-secondary btn-table" onclick="bulkApproveAdminDocuments(true)">Bulk Approve + Override</button>
+                        <button type="button" class="btn-secondary btn-table" onclick="bulkQuarantineAdminDocuments()">Bulk Quarantine</button>
+                        <span id="adm-docs-selection-count" style="font-size:0.8rem;color:#64748b;"></span>
+                    </div>
+
                     <div class="data-table-container">
                         <table class="data-table">
                             <thead>
                                 <tr>
+                                    <th style="width:36px;"></th>
                                     <th>Client</th>
-                                    <th>Order</th>
                                     <th>Document</th>
-                                    <th>Category</th>
-                                    <th>Status</th>
+                                    <th>Company</th>
+                                    <th>Confidence</th>
+                                    <th>Lifecycle</th>
                                     <th>Action</th>
                                 </tr>
                             </thead>
@@ -1277,12 +1298,24 @@
                     </div>
                 </div>
 
+                <!-- Document triage review modal -->
+                <div id="modal-document-triage" class="modal-overlay" onclick="if(event.target===this)closeDocumentTriageModal()">
+                    <div class="modal-card" style="max-width:720px;" role="dialog" aria-modal="true" aria-labelledby="doc-triage-title">
+                        <div class="modal-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
+                            <h2 id="doc-triage-title" style="margin:0;font-size:1.15rem;">Document Review</h2>
+                            <button type="button" class="btn-secondary btn-table" onclick="closeDocumentTriageModal()">Close</button>
+                        </div>
+                        <div id="doc-triage-body" style="padding:8px 0 16px;"></div>
+                        <div id="doc-triage-actions" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
+                    </div>
+                </div>
+
                 <!-- SMART DOCUMENT INTAKE & AUTO-FILING VIEW -->
                 <div id="view-admin-intake" class="view-panel" style="display: none;">
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>Smart Document Intake &amp; Auto-Filing</h1>
-                            <p>Upload unorganized client files (bank statements, passports, ID documents, company formation docs). The system automatically reads name &amp; DOB, searches Companies House, imports the company, links the customer, and files all documents.</p>
+                            <p>Upload unorganized client files (bank statements, passports, ID documents, company formation docs). Files are confirmed as soon as you add them. Processing then OCRs scans, reads name and date of birth, and files against Companies House.</p>
                         </div>
                     </div>
 
@@ -1292,19 +1325,51 @@
                     <!-- UPLOAD CONTAINER CARD -->
                     <div class="modal-card" style="max-width:100%; margin:0 0 24px 0; padding:24px;">
                         <form id="intake-upload-form" onsubmit="submitSmartIntakeForm(event)">
-                            <div id="intake-drop-zone" ondragover="onIntakeDragOver(event)" ondragleave="onIntakeDragLeave(event)" ondrop="onIntakeDrop(event)" style="border: 2px dashed #cbd5e1; border-radius:12px; padding:36px 20px; text-align:center; background:#f8fafc; cursor:pointer; transition: all 0.2s ease;" onclick="document.getElementById('intake-files-input').click()">
-                                <i data-lucide="file-up" style="width:48px; height:48px; color:#475569; margin-bottom:12px;"></i>
-                                <h3 style="margin:0 0 8px 0; font-size:1.1rem; font-weight:700; color:#1e293b;">Drag &amp; Drop Unorganized Files Here</h3>
-                                <p style="margin:0 0 16px 0; color:#64748b; font-size:0.875rem;">Supports bank statements, passports, CNIC, utility bills, company docs (PDF, PNG, JPG, DOCX)</p>
-                                <button type="button" class="btn-secondary" style="pointer-events:none;"><i data-lucide="folder-open"></i> Browse Files</button>
+                            <div id="intake-drop-zone" class="intake-drop-zone" ondragover="onIntakeDragOver(event)" ondragleave="onIntakeDragLeave(event)" ondrop="onIntakeDrop(event)" onclick="document.getElementById('intake-files-input').click()">
+                                <div id="intake-drop-zone-empty">
+                                    <i data-lucide="file-up" style="width:48px; height:48px; color:#475569; margin-bottom:12px;"></i>
+                                    <h3 style="margin:0 0 8px 0; font-size:1.1rem; font-weight:700; color:#1e293b;">Drag &amp; Drop Unorganized Files Here</h3>
+                                    <p style="margin:0 0 16px 0; color:#64748b; font-size:0.875rem;">Supports bank statements, passports, CNIC, utility bills, company docs (PDF, PNG, JPG, DOCX).</p>
+                                    <button type="button" class="btn-secondary" style="pointer-events:none;"><i data-lucide="folder-open"></i> Browse Files</button>
+                                </div>
+                                <div id="intake-drop-zone-ready" style="display:none;">
+                                    <i data-lucide="check-circle-2" style="width:48px; height:48px; color:#16a34a; margin-bottom:12px;"></i>
+                                    <h3 id="intake-drop-zone-ready-title" style="margin:0 0 8px 0; font-size:1.1rem; font-weight:700; color:#166534;">Documents uploaded successfully</h3>
+                                    <p style="margin:0 0 16px 0; color:#166534; font-size:0.875rem;">Files are queued in the browser. Click Process to OCR and file each document one-by-one (avoids gateway timeouts).</p>
+                                    <button type="button" class="btn-secondary" style="pointer-events:none; border-color:#86efac; color:#166534;"><i data-lucide="plus"></i> Add More Files</button>
+                                </div>
                                 <input type="file" id="intake-files-input" multiple accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.zip,.txt" style="display:none;" onchange="onIntakeFilesSelected(event)">
                             </div>
 
-                            <div id="intake-file-preview-list" style="margin-top:16px; display:flex; flex-wrap:wrap; gap:8px;"></div>
+                            <!-- UPLOADED DOCUMENTS QUEUE TABLE -->
+                            <div id="intake-file-preview-container" style="display:none; margin-top:20px;">
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                                    <h4 style="margin:0; font-size:0.95rem; font-weight:700; color:#0f172a; display:flex; align-items:center; gap:8px;">
+                                        <i data-lucide="files" style="width:18px; height:18px; color:#0284c7;"></i>
+                                        Uploaded Documents Queue (<span id="intake-file-count">0</span>)
+                                    </h4>
+                                    <span id="intake-queue-status-badge" class="badge-status-uploaded">✓ Queued — click Process</span>
+                                </div>
+                                <div class="data-table-container" style="background:#fff; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden;">
+                                    <table class="data-table" style="margin:0;">
+                                        <thead>
+                                            <tr>
+                                                <th>File Name</th>
+                                                <th>Category</th>
+                                                <th>Size</th>
+                                                <th>Upload Status</th>
+                                                <th>Processing Status</th>
+                                                <th>Action</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="intake-file-preview-list"></tbody>
+                                    </table>
+                                </div>
+                            </div>
 
                             <div style="display:flex; justify-content:flex-end; gap:12px; margin-top:20px;">
                                 <button type="button" class="btn-secondary" onclick="resetSmartIntakeForm()"><i data-lucide="rotate-ccw"></i> Reset</button>
-                                <button type="submit" class="btn-primary" id="btn-intake-submit" disabled><i data-lucide="cpu"></i> Process &amp; Auto-File Documents</button>
+                                <button type="button" class="btn-primary" id="btn-intake-submit" disabled onclick="submitSmartIntakeForm(event)"><i data-lucide="cpu"></i> Process &amp; Auto-File Documents</button>
                             </div>
                         </form>
                     </div>
@@ -1317,30 +1382,42 @@
 
                         <!-- CARDS GRID FOR MATCHED ENTITIES -->
                         <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap:16px; margin-bottom:24px;">
-                            <!-- CLIENT CARD -->
+                            <!-- CLIENT PROFILE CARD -->
                             <div class="modal-card" style="margin:0; padding:18px; border-top:4px solid #0284c7;">
                                 <div style="font-size:0.75rem; font-weight:700; text-transform:uppercase; color:#64748b; margin-bottom:6px;">Extracted Client Profile</div>
                                 <h3 id="res-client-name" style="margin:0 0 4px 0; font-size:1.1rem; color:#0f172a;">-</h3>
                                 <div style="font-size:0.85rem; color:#475569;" id="res-client-dob">DOB: -</div>
+                                <div style="font-size:0.85rem; color:#475569; margin-top:4px;" id="res-client-meta"></div>
                                 <div style="margin-top:12px;" id="res-client-status-badge"></div>
                                 <div style="margin-top:12px;" id="res-client-action-btn"></div>
                             </div>
 
-                            <!-- COMPANY CARD -->
-                            <div class="modal-card" style="margin:0; padding:18px; border-top:4px solid #16a34a;">
+                            <!-- COMPANIES HOUSE CARD -->
+                            <div id="res-company-card" class="modal-card" style="margin:0; padding:18px; border-top:4px solid #0284c7;">
                                 <div style="font-size:0.75rem; font-weight:700; text-transform:uppercase; color:#64748b; margin-bottom:6px;">Companies House Auto-Match</div>
                                 <h3 id="res-company-name" style="margin:0 0 4px 0; font-size:1.1rem; color:#0f172a;">-</h3>
                                 <div style="font-size:0.85rem; color:#475569;" id="res-company-num">Company #: -</div>
+                                <div style="font-size:0.85rem; color:#64748b; margin-top:6px; line-height:1.4;" id="res-company-explanation"></div>
+                                <div id="res-company-candidates" style="margin-top:10px;"></div>
                                 <div style="margin-top:12px;" id="res-company-status-badge"></div>
                             </div>
 
-                            <!-- PENDING ACTION ALERT -->
+                            <!-- PENDING ACTION ALERT CARD -->
                             <div class="modal-card" style="margin:0; padding:18px; border-top:4px solid #eab308; background:#fffbeb;">
                                 <div style="font-size:0.75rem; font-weight:700; text-transform:uppercase; color:#b45309; margin-bottom:6px;">Pending Information Alert</div>
                                 <div id="res-pending-alert-text" style="font-size:0.875rem; color:#92400e; line-height:1.4;">
                                     Email or phone number missing. You can add missing contact details later in the customer profile.
                                 </div>
                                 <div style="margin-top:12px;" id="res-pending-action-btn"></div>
+                            </div>
+
+                            <!-- OCR ACCURACY CARD -->
+                            <div id="res-accuracy-card" class="modal-card" style="margin:0; padding:18px; border-top:4px solid #0f766e;">
+                                <div style="font-size:0.75rem; font-weight:700; text-transform:uppercase; color:#64748b; margin-bottom:6px;">Document Scan Accuracy</div>
+                                <h3 id="res-accuracy-score" style="margin:0 0 4px 0; font-size:1.1rem; color:#0f172a;">-</h3>
+                                <div style="font-size:0.85rem; color:#475569;" id="res-accuracy-fields">Fields detected: -</div>
+                                <div style="font-size:0.85rem; color:#64748b; margin-top:6px; line-height:1.4;" id="res-accuracy-preview"></div>
+                                <div style="margin-top:12px;" id="res-accuracy-badge"></div>
                             </div>
                         </div>
 
@@ -1354,6 +1431,7 @@
                                         <th>Auto-Detected Category</th>
                                         <th>Assigned Client</th>
                                         <th>Assigned Company</th>
+                                        <th>Scan</th>
                                         <th>Status</th>
                                         <th>Action</th>
                                     </tr>
@@ -2683,6 +2761,6 @@
     </div>
 
     <div id="global-search-results" class="global-search-results" hidden></div>
-    <script src="/static/js/app.js?v=173.0"></script>
+    <script src="/static/js/app.js?v=185.0"></script>
 </body>
 </html>

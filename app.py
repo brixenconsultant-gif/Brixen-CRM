@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import time
 import re
 import gzip
 import urllib.parse
@@ -9,7 +10,10 @@ import urllib.error
 import base64
 import mimetypes
 from wsgiref.simple_server import make_server
+from concurrent.futures import ThreadPoolExecutor
 from db import query_db, execute_db, hash_password, verify_password, needs_rehash, unusable_password_hash, get_db, ensure_schema
+
+BULK_JOB_POOL = ThreadPoolExecutor(max_workers=4)
 
 PORT = int(os.environ.get('PORT', '5050'))
 HOST = os.environ.get('HOST', '127.0.0.1')
@@ -39,6 +43,8 @@ import datetime
 import calendar
 import hmac
 import hashlib
+import secrets
+import unicodedata
 
 # Storage directory for private client files (P2)
 STORAGE_DIR = os.path.join(BASE_DIR, 'storage')
@@ -84,8 +90,11 @@ def get_current_user(environ):
         """, (token,), one=True)
         
         if session_rec:
-            # Update last activity timestamp
-            execute_db("UPDATE user_sessions SET last_activity_at = datetime('now') WHERE session_token = ?;", (token,))
+            # Update last activity timestamp (best-effort; never fail auth on lock)
+            try:
+                execute_db("UPDATE user_sessions SET last_activity_at = datetime('now') WHERE session_token = ?;", (token,))
+            except Exception:
+                pass
             return dict(session_rec)
     return None
 
@@ -3953,9 +3962,40 @@ def public_document(row, for_client=False):
         'client_visible': int(src.get('client_visible') or 0),
         'shared_at': src.get('shared_at'),
         'is_customer_upload': is_customer_upload,
+        'file_hash': src.get('file_hash'),
+        'ocr_status': src.get('ocr_status') or 'COMPLETED',
+        'identity_status': src.get('identity_status') or 'COMPLETED',
+        'crm_status': src.get('crm_status') or 'MATCHED',
+        'ch_status': src.get('ch_status') or 'NOT_APPLICABLE',
+        'overall_status': src.get('overall_status') or 'COMPLETED',
+        'lifecycle_status': src.get('lifecycle_status') or 'POSTED_DOCUMENTS',
+        'is_posted': int(src.get('is_posted') if src.get('is_posted') is not None else 1),
+        'ocr_confidence': float(src.get('ocr_confidence') if src.get('ocr_confidence') is not None else 100.0),
+        'classification_confidence': float(src.get('classification_confidence') if src.get('classification_confidence') is not None else 100.0),
+        'identity_confidence': float(src.get('identity_confidence') if src.get('identity_confidence') is not None else 100.0),
+        'customer_match_confidence': float(src.get('customer_match_confidence') if src.get('customer_match_confidence') is not None else 100.0),
+        'company_match_confidence': float(src.get('company_match_confidence') if src.get('company_match_confidence') is not None else 100.0),
+        'duplicate_confidence': float(src.get('duplicate_confidence') if src.get('duplicate_confidence') is not None else 0.0),
+        'uploaded_at': src.get('uploaded_at') or src.get('created_at'),
+        'processed_at': src.get('processed_at'),
+        'matched_at': src.get('matched_at'),
+        'approved_at': src.get('approved_at'),
+        'posted_at': src.get('posted_at'),
+        'company_number': src.get('company_number') or src.get('companies_house_number'),
     }
     if not for_client:
         out['review_notes'] = src.get('review_notes')
+        meta = None
+        if src.get('match_meta_json'):
+            try:
+                meta = json.loads(src.get('match_meta_json'))
+            except Exception:
+                meta = None
+        out['match_meta'] = meta
+        out['matching_evidence'] = (meta or {}).get('matching_evidence') or (meta or {}).get('reasons') or []
+        out['conflicting_evidence'] = (meta or {}).get('conflicting_evidence') or []
+        out['score_gap'] = (meta or {}).get('score_gap')
+        out['top_candidates'] = (meta or {}).get('top_candidates') or []
     return out
 
 
@@ -4306,6 +4346,368 @@ def validate_uploaded_document(original_name, file_bytes, require_bytes=False, u
     return ext, None
 
 
+DOCUMENT_LIFECYCLE_STATES = (
+    'CUSTOMER_UPLOADS',
+    'PROCESSING',
+    'REVIEW_REQUIRED',
+    'READY_FOR_APPROVAL',
+    'POSTED_DOCUMENTS',
+    'QUARANTINE',
+)
+DOC_AI_MODEL_VERSION = 'v2.0'
+
+
+def log_document_audit(
+    document_id,
+    actor_type,
+    actor_id,
+    actor_name,
+    action,
+    previous_state=None,
+    new_state=None,
+    reason_evidence=None,
+    ai_model_version=DOC_AI_MODEL_VERSION,
+):
+    evidence = reason_evidence
+    if evidence is not None and not isinstance(evidence, str):
+        evidence = json.dumps(evidence)
+    execute_db(
+        """
+        INSERT INTO document_audit_log (
+            document_id, actor_type, actor_id, actor_name, action,
+            previous_state, new_state, ai_model_version, reason_evidence_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """,
+        (
+            document_id,
+            actor_type or 'AI',
+            actor_id,
+            actor_name or 'System',
+            action,
+            previous_state,
+            new_state,
+            ai_model_version,
+            evidence,
+        ),
+    )
+
+
+def find_document_by_file_hash(file_hash, exclude_id=None):
+    if not file_hash:
+        return None
+    if exclude_id:
+        return query_db(
+            "SELECT id, name, user_id, lifecycle_status, is_posted FROM documents WHERE file_hash = ? AND id != ? ORDER BY id DESC LIMIT 1;",
+            (file_hash, exclude_id),
+            one=True,
+        )
+    return query_db(
+        "SELECT id, name, user_id, lifecycle_status, is_posted FROM documents WHERE file_hash = ? ORDER BY id DESC LIMIT 1;",
+        (file_hash,),
+        one=True,
+    )
+
+
+def _file_bytes_look_corrupt(file_bytes, filename=''):
+    if not file_bytes or len(file_bytes) < 32:
+        return True, 'Empty or truncated file'
+    ext = document_extension(filename)
+    head = file_bytes[:16]
+    if ext == '.pdf' and not head.startswith(b'%PDF'):
+        return True, 'PDF header missing'
+    if ext in ('.png',) and not head.startswith(b'\x89PNG'):
+        return True, 'PNG header missing'
+    if ext in ('.jpg', '.jpeg') and not (head.startswith(b'\xff\xd8') or head.startswith(b'\xff\xd8\xff')):
+        return True, 'JPEG header missing'
+    return False, None
+
+
+def _classification_confidence_for_category(category, raw_text, scan_method):
+    cat = category or 'Company Documents'
+    text_len = len(raw_text or '')
+    if cat in ('ID Document', 'Passport'):
+        base = 88.0 if text_len > 40 else 55.0
+    elif cat in ('Bank statement', 'Proof of Address', 'Certificate of Incorporation'):
+        base = 82.0 if text_len > 40 else 50.0
+    else:
+        base = 45.0 if text_len > 80 else 25.0
+    if scan_method == 'ocr':
+        base = min(100.0, base + 5.0)
+    return round(base, 1)
+
+
+def triage_uploaded_document(file_bytes, filename, user_id, client_id=None, actor=None, run_company_match=True):
+    """
+    AI triage for customer uploads. Never marks is_posted.
+    Returns a result dict used by insert/update handlers.
+    """
+    name = (filename or 'upload.bin').strip() or 'upload.bin'
+    file_hash = hashlib.sha256(file_bytes or b'').hexdigest() if file_bytes else None
+    reasons = []
+    conflicting = []
+    result = {
+        'lifecycle_status': 'REVIEW_REQUIRED',
+        'is_posted': 0,
+        'file_hash': file_hash,
+        'category': 'Company Documents',
+        'ocr_confidence': 0.0,
+        'classification_confidence': 0.0,
+        'identity_confidence': 0.0,
+        'customer_match_confidence': 0.0,
+        'company_match_confidence': 0.0,
+        'duplicate_confidence': 0.0,
+        'company_id': None,
+        'match_meta': {},
+        'extracted_name': None,
+        'extracted_dob': None,
+        'extracted_nationality': None,
+        'review_notes': 'AI triage',
+        'matching_evidence': reasons,
+        'conflicting_evidence': conflicting,
+        'quarantine_reason': None,
+        'ai_model_version': DOC_AI_MODEL_VERSION,
+    }
+
+    corrupt, corrupt_reason = _file_bytes_look_corrupt(file_bytes, name)
+    if corrupt:
+        result.update({
+            'lifecycle_status': 'QUARANTINE',
+            'classification_confidence': 0.0,
+            'quarantine_reason': corrupt_reason or 'Unreadable file',
+            'review_notes': f"Quarantined: {corrupt_reason or 'Unreadable file'}",
+        })
+        conflicting.append(result['quarantine_reason'])
+        return result
+
+    dup = find_document_by_file_hash(file_hash)
+    if dup:
+        result.update({
+            'lifecycle_status': 'QUARANTINE',
+            'duplicate_confidence': 100.0,
+            'quarantine_reason': f"Exact duplicate of document #{dup['id']}",
+            'review_notes': f"Quarantined: exact duplicate of document #{dup['id']} ({dup.get('name')})",
+            'classification_confidence': 100.0,
+        })
+        conflicting.append(result['quarantine_reason'])
+        return result
+
+    # Reuse intake OCR / classification pipeline
+    parsed = None
+    try:
+        b64 = base64.b64encode(file_bytes).decode('ascii')
+        parsed = extract_document_text_and_metadata(name, b64)
+        if isinstance(parsed, dict) and parsed.get('error'):
+            raise RuntimeError(parsed.get('error'))
+    except Exception as exc:
+        result.update({
+            'lifecycle_status': 'QUARANTINE',
+            'quarantine_reason': f'OCR failed: {exc}',
+            'review_notes': f'Quarantined: OCR failed ({exc})',
+        })
+        conflicting.append(str(exc))
+        return result
+
+    category = (parsed or {}).get('category') or 'Company Documents'
+    quality = (parsed or {}).get('extraction_quality') or {}
+    ocr_conf = float(quality.get('score') or 0)
+    scan_method = (parsed or {}).get('scan_method') or 'none'
+    raw_preview = (parsed or {}).get('text_preview') or ''
+    class_conf = _classification_confidence_for_category(category, raw_preview, scan_method)
+    person_name = (parsed or {}).get('extracted_name')
+    dob = (parsed or {}).get('extracted_dob')
+    nationality = (parsed or {}).get('extracted_nationality')
+
+    identity_conf = 0.0
+    if person_name:
+        identity_conf += 50.0
+        reasons.append('Person name extracted')
+    if dob:
+        identity_conf += 35.0
+        reasons.append('Date of birth extracted')
+    if nationality:
+        identity_conf += 15.0
+        reasons.append('Nationality extracted')
+    identity_conf = min(100.0, identity_conf)
+
+    customer_conf = 0.0
+    target_client_id = client_id or user_id
+    if target_client_id and person_name:
+        client_row = query_db("SELECT id, full_name FROM users WHERE id = ?;", (target_client_id,), one=True)
+        if client_row:
+            client_key = normalize_match_person_name(client_row.get('full_name'))
+            person_key = normalize_match_person_name(person_name)
+            if client_key and person_key and client_key == person_key:
+                customer_conf = 95.0
+                reasons.append('Exact CRM customer name match')
+            elif person_key and client_key and (person_key in client_key or client_key in person_key):
+                customer_conf = 70.0
+                reasons.append('Partial CRM customer name match')
+            else:
+                customer_conf = 40.0
+                conflicting.append('Extracted name differs from CRM customer')
+        else:
+            customer_conf = 20.0
+    elif target_client_id:
+        customer_conf = 55.0
+        reasons.append('Uploaded under known customer account')
+
+    company_conf = 0.0
+    company_id = None
+    match_meta = {}
+    score_gap = 0
+    if run_company_match and person_name:
+        try:
+            company_obj, status, message, ranked, meta = resolve_intake_company_match(
+                target_client_id,
+                person_name,
+                extracted_dob=dob,
+                extracted_nationality=nationality,
+                actor=actor,
+            )
+            match_meta = meta or {}
+            match_meta['status'] = status
+            match_meta['message'] = message
+            match_meta['top_candidates'] = ranked or []
+            company_conf = float((meta or {}).get('confidence') or 0)
+            score_gap = int((meta or {}).get('score_gap') or 0)
+            if company_obj:
+                company_id = company_obj.get('id')
+                reasons.append(f"Company match: {company_obj.get('name')}")
+            if status == 'review_required':
+                conflicting.append(message or 'Ambiguous company match')
+            elif status == 'not_applicable' and person_name:
+                conflicting.append(message or 'No safe company match')
+        except Exception as exc:
+            conflicting.append(f'Company match error: {exc}')
+            match_meta = {'error': str(exc)}
+
+    # Junk / irrelevant: unreadable text and generic category
+    if class_conf < 30 and ocr_conf < 20 and not person_name:
+        result.update({
+            'lifecycle_status': 'QUARANTINE',
+            'category': category,
+            'ocr_confidence': ocr_conf,
+            'classification_confidence': class_conf,
+            'identity_confidence': identity_conf,
+            'customer_match_confidence': customer_conf,
+            'company_match_confidence': company_conf,
+            'quarantine_reason': 'Irrelevant or unreadable content',
+            'review_notes': 'Quarantined: irrelevant or unreadable content',
+            'match_meta': match_meta,
+            'extracted_name': person_name,
+            'extracted_dob': dob,
+            'extracted_nationality': nationality,
+        })
+        conflicting.append('Irrelevant or unreadable content')
+        return result
+
+    lifecycle = 'REVIEW_REQUIRED'
+    if company_conf >= 75 and score_gap >= 20 and not any('Incompatible DOB' in (c or '') for c in conflicting):
+        lifecycle = 'READY_FOR_APPROVAL'
+        reasons.append(f'High-confidence company match (gap={score_gap})')
+    elif identity_conf >= 75 and customer_conf >= 70 and company_conf < 65:
+        # Strong person identity but no safe company — still review for company link
+        lifecycle = 'REVIEW_REQUIRED'
+        reasons.append('Identity strong; company assignment needs review')
+    elif identity_conf >= 85 and customer_conf >= 90 and (not run_company_match or company_conf >= 75):
+        lifecycle = 'READY_FOR_APPROVAL'
+    elif not person_name and class_conf >= 70:
+        lifecycle = 'REVIEW_REQUIRED'
+        reasons.append('Document classified; person identity incomplete')
+
+    result.update({
+        'lifecycle_status': lifecycle,
+        'category': category,
+        'ocr_confidence': ocr_conf,
+        'classification_confidence': class_conf,
+        'identity_confidence': identity_conf,
+        'customer_match_confidence': customer_conf,
+        'company_match_confidence': company_conf,
+        'company_id': company_id,
+        'match_meta': match_meta,
+        'extracted_name': person_name,
+        'extracted_dob': dob,
+        'extracted_nationality': nationality,
+        'review_notes': f"AI triage → {lifecycle}",
+        'matching_evidence': reasons,
+        'conflicting_evidence': conflicting,
+    })
+    return result
+
+
+def apply_triage_to_document_row(doc_id, triage, actor=None, previous_state='CUSTOMER_UPLOADS'):
+    if not doc_id or not triage:
+        return
+    meta = triage.get('match_meta') or {}
+    meta['matching_evidence'] = triage.get('matching_evidence') or []
+    meta['conflicting_evidence'] = triage.get('conflicting_evidence') or []
+    new_state = triage.get('lifecycle_status') or 'REVIEW_REQUIRED'
+    execute_db(
+        """
+        UPDATE documents SET
+            lifecycle_status = ?,
+            is_posted = 0,
+            file_hash = COALESCE(?, file_hash),
+            category = COALESCE(?, category),
+            company_id = COALESCE(?, company_id),
+            ocr_confidence = ?,
+            classification_confidence = ?,
+            identity_confidence = ?,
+            customer_match_confidence = ?,
+            company_match_confidence = ?,
+            duplicate_confidence = ?,
+            processed_at = CURRENT_TIMESTAMP,
+            matched_at = CASE WHEN ? >= 65 THEN CURRENT_TIMESTAMP ELSE matched_at END,
+            processed_by_id = ?,
+            matched_by_id = ?,
+            match_meta_json = ?,
+            review_notes = ?,
+            overall_status = ?
+        WHERE id = ?;
+        """,
+        (
+            new_state,
+            triage.get('file_hash'),
+            triage.get('category'),
+            triage.get('company_id'),
+            float(triage.get('ocr_confidence') or 0),
+            float(triage.get('classification_confidence') or 0),
+            float(triage.get('identity_confidence') or 0),
+            float(triage.get('customer_match_confidence') or 0),
+            float(triage.get('company_match_confidence') or 0),
+            float(triage.get('duplicate_confidence') or 0),
+            float(triage.get('company_match_confidence') or 0),
+            (actor or {}).get('id') if isinstance(actor, dict) else None,
+            (actor or {}).get('id') if isinstance(actor, dict) else None,
+            json.dumps(meta),
+            triage.get('review_notes') or 'AI triage',
+            new_state,
+            doc_id,
+        ),
+    )
+    action = 'AI_QUARANTINE' if new_state == 'QUARANTINE' else 'AI_TRIAGE'
+    log_document_audit(
+        doc_id,
+        'AI',
+        (actor or {}).get('id') if isinstance(actor, dict) else None,
+        (actor or {}).get('full_name') if isinstance(actor, dict) else 'AI Triage',
+        action,
+        previous_state,
+        new_state,
+        {
+            'ocr_confidence': triage.get('ocr_confidence'),
+            'classification_confidence': triage.get('classification_confidence'),
+            'identity_confidence': triage.get('identity_confidence'),
+            'customer_match_confidence': triage.get('customer_match_confidence'),
+            'company_match_confidence': triage.get('company_match_confidence'),
+            'duplicate_confidence': triage.get('duplicate_confidence'),
+            'matching_evidence': triage.get('matching_evidence'),
+            'conflicting_evidence': triage.get('conflicting_evidence'),
+            'quarantine_reason': triage.get('quarantine_reason'),
+        },
+    )
+
+
 def store_client_document_file(client_id, order_id, ext, file_bytes):
     cid = str(client_id) if (client_id is not None and str(client_id).strip() != '' and str(client_id).strip() != 'None') else 'unassigned'
     order_folder = str(order_id or 'general')
@@ -4456,8 +4858,10 @@ def import_order_checkout_attachments(order_id, client_id, company_id, o_data):
         execute_db("""
             INSERT INTO documents (
                 user_id, company_id, order_id, name, category, file_path, file_type, file_size,
-                status, uploaded_by, review_notes, client_visible
-            ) VALUES (?, ?, ?, ?, 'Checkout Upload', ?, ?, ?, 'Pending Review', 'Customer Upload', ?, 0);
+                status, uploaded_by, review_notes, client_visible,
+                file_hash, lifecycle_status, is_posted, uploaded_at, uploaded_by_id, overall_status
+            ) VALUES (?, ?, ?, ?, 'Checkout Upload', ?, ?, ?, 'Pending Review', 'Customer Upload', ?, 0,
+                      ?, 'CUSTOMER_UPLOADS', 0, CURRENT_TIMESTAMP, ?, 'CUSTOMER_UPLOADS');
         """, (
             client_id,
             company_id,
@@ -4467,6 +4871,8 @@ def import_order_checkout_attachments(order_id, client_id, company_id, o_data):
             DOCUMENT_TYPE_LABELS.get(ext, 'Document'),
             format_document_size(len(file_bytes)),
             f'Checkout source: {url}',
+            hashlib.sha256(file_bytes).hexdigest(),
+            client_id,
         ))
         imported += 1
     return imported
@@ -5187,6 +5593,66 @@ def guest_unlinked_user_id():
     return guest['id'] if guest else None
 
 
+def ensure_smart_intake_client(extracted_name=None, extracted_email=None, extracted_phone=None):
+    """Always return a CLIENT user row so documents.user_id is never NULL."""
+    name = (extracted_name or '').strip()
+    email = (extracted_email or '').strip() or None
+    phone = (extracted_phone or '').strip() or None
+
+    client_user = None
+    if name:
+        client_user = query_db(
+            "SELECT * FROM users WHERE role = 'CLIENT' AND lower(full_name) = lower(?);",
+            (name,),
+            one=True,
+        )
+        if not client_user:
+            like_name = '%' + '%'.join(name.lower().split()) + '%'
+            client_user = query_db(
+                "SELECT * FROM users WHERE role = 'CLIENT' AND lower(full_name) LIKE ? ORDER BY id DESC LIMIT 1;",
+                (like_name,),
+                one=True,
+            )
+        if not client_user:
+            clean_username = re.sub(r'[^a-z0-9]', '.', name.lower().strip()).strip('.') or 'intake.client'
+            provisional_email = email or f"{clean_username}@brixen-pending.local"
+            user_id = execute_db("""
+                INSERT INTO users (full_name, email, password_hash, role, status, phone, created_at)
+                VALUES (?, ?, ?, 'CLIENT', 'Active', ?, CURRENT_TIMESTAMP);
+            """, (name, provisional_email, unusable_password_hash(), phone))
+            client_user = query_db("SELECT * FROM users WHERE id = ?;", (user_id,), one=True)
+        elif client_user:
+            updates = []
+            params = []
+            if email and 'brixen-pending.local' in (client_user.get('email') or ''):
+                updates.append('email = ?')
+                params.append(email)
+            if phone and not client_user.get('phone'):
+                updates.append('phone = ?')
+                params.append(phone)
+            if updates:
+                params.append(client_user['id'])
+                execute_db(f"UPDATE users SET {', '.join(updates)} WHERE id = ?;", tuple(params))
+                client_user = query_db("SELECT * FROM users WHERE id = ?;", (client_user['id'],), one=True)
+        return client_user
+
+    client_user = query_db(
+        "SELECT * FROM users WHERE email = 'intake.unassigned@brixen-pending.local';",
+        one=True,
+    )
+    if client_user:
+        return client_user
+    user_id = execute_db("""
+        INSERT INTO users (full_name, email, password_hash, role, status, created_at)
+        VALUES (?, ?, ?, 'CLIENT', 'Active', CURRENT_TIMESTAMP);
+    """, (
+        'Unassigned Document Intake',
+        'intake.unassigned@brixen-pending.local',
+        unusable_password_hash(),
+    ))
+    return query_db("SELECT * FROM users WHERE id = ?;", (user_id,), one=True)
+
+
 def public_pending_registration(row, for_client=False):
     item = {
         'order_id': row['id'],
@@ -5266,6 +5732,22 @@ def companies_house_request(path_qs):
         return None, 'Could not reach Companies House'
 
 
+_CH_API_CACHE = {}
+_CH_API_CACHE_TTL = 600  # 10 minutes cache TTL for batch processing
+
+
+def cached_companies_house_request(path_qs):
+    now = time.time()
+    if path_qs in _CH_API_CACHE:
+        cached_time, res, err = _CH_API_CACHE[path_qs]
+        if now - cached_time < _CH_API_CACHE_TTL:
+            return res, err
+    res, err = companies_house_request(path_qs)
+    if res is not None or err:
+        _CH_API_CACHE[path_qs] = (now, res, err)
+    return res, err
+
+
 def public_companies_house_match(item):
     if not isinstance(item, dict):
         return None
@@ -5306,6 +5788,532 @@ def search_companies_house(query):
     return matches, None
 
 
+def search_companies_house_officers(person_name, extracted_dob=None):
+    """Return company candidates for a person (CRM + CH officers with company numbers)."""
+    q = (person_name or '').strip()
+    if len(q) < 3:
+        return [], 'Enter at least 3 characters'
+
+    matches = []
+    seen_nums = set()
+
+    def add_match(name, company_number, address='', company_id=None, appointment_count=1,
+                  officer_name='', officer_dob=None, source='companies_house', company_status=''):
+        num = normalize_company_number(company_number)
+        if not num and not company_id:
+            return
+        key = num or f'crm:{company_id}'
+        if key in seen_nums:
+            return
+        seen_nums.add(key)
+        matches.append({
+            'company_id': company_id,
+            'name': (name or f'Company {num or company_id}').strip(),
+            'company_number': num or '',
+            'address': (address or '').strip() or 'United Kingdom',
+            'appointment_count': appointment_count or 1,
+            'source': source,
+            'officer_name': (officer_name or '').strip(),
+            'officer_dob': officer_dob if isinstance(officer_dob, dict) else None,
+            'company_status': (company_status or '').strip().lower(),
+        })
+
+    local_matches = query_db("""
+        SELECT id, name, company_number, director, reg_office, status, user_id
+        FROM companies
+        WHERE lower(director) LIKE lower(?) OR lower(name) LIKE lower(?)
+        ORDER BY id DESC LIMIT 12;
+    """, (f"%{q}%", f"%{q}%")) or []
+    for comp in local_matches:
+        add_match(
+            comp.get('name'),
+            comp.get('company_number'),
+            comp.get('reg_office') or 'Existing CRM company',
+            company_id=comp.get('id'),
+            officer_name=comp.get('director') or '',
+            source='crm',
+            company_status=comp.get('status') or '',
+        )
+
+    # Pull enough officer hits — common names bury the DOB-correct person past page size 8.
+    path_qs = '/search/officers?' + urllib.parse.urlencode({'q': q, 'items_per_page': 20})
+    payload, error = cached_companies_house_request(path_qs)
+    if payload and isinstance(payload, dict):
+        items = list(payload.get('items') or [])
+
+        def officer_dob_priority(item):
+            """Prefer officers whose CH birth month/year matches passport DOB."""
+            dob = item.get('date_of_birth') if isinstance(item.get('date_of_birth'), dict) else None
+            pts, _reason = score_intake_dob_match(extracted_dob, dob)
+            # Compatible DOB first (25/35/10), then unknown (0), incompatible last (-50).
+            return pts
+
+        if extracted_dob:
+            items.sort(key=officer_dob_priority, reverse=True)
+
+        for item in items:
+            links = item.get('links') or {}
+            self_link = (links.get('self') or '').strip()
+            if self_link.startswith('http'):
+                parsed = urllib.parse.urlparse(self_link)
+                self_link = parsed.path or ''
+            if not self_link.startswith('/'):
+                continue
+            address = (item.get('address_snippet') or '').strip()
+            officer_name = (item.get('title') or '').strip()
+            officer_dob = item.get('date_of_birth') if isinstance(item.get('date_of_birth'), dict) else None
+            app_payload, _app_err = cached_companies_house_request(self_link)
+            if not app_payload or not isinstance(app_payload, dict):
+                continue
+            for appt in app_payload.get('items') or []:
+                appointed_to = appt.get('appointed_to') or {}
+                c_name = (appointed_to.get('company_name') or appt.get('company_name') or '').strip()
+                c_num = (appointed_to.get('company_number') or appt.get('company_number') or '').strip()
+                if not c_num:
+                    continue
+                add_match(
+                    c_name,
+                    c_num,
+                    address,
+                    officer_name=officer_name,
+                    officer_dob=officer_dob,
+                    source='companies_house',
+                )
+
+    return matches, None
+
+
+def normalize_match_person_name(name):
+    text = unicodedata.normalize('NFKC', str(name or ''))
+    text = text.replace(',', ' ')
+    text = re.sub(r'[^\w\s\-]', ' ', text, flags=re.UNICODE)
+    text = re.sub(r'\s+', ' ', text).strip().lower()
+    return text
+
+
+def match_name_tokens(name):
+    return [t for t in normalize_match_person_name(name).split() if len(t) > 1]
+
+
+def score_intake_name_match(extracted_name, candidate_person_name):
+    a = normalize_match_person_name(extracted_name)
+    b = normalize_match_person_name(candidate_person_name)
+    if not a or not b:
+        return 0, None
+    if a == b:
+        return 50, 'Exact normalized full name'
+    ta, tb = match_name_tokens(a), match_name_tokens(b)
+    if not ta or not tb:
+        return 0, None
+    if set(ta) == set(tb):
+        return 50, 'Exact name tokens (order-independent)'
+    overlap = set(ta) & set(tb)
+    if len(overlap) >= 2 and (set(ta).issubset(set(tb)) or set(tb).issubset(set(ta))):
+        return 35, 'Very strong fuzzy name match'
+    if len(overlap) >= 2:
+        return 35, 'Very strong fuzzy name match'
+    if len(overlap) == 1:
+        return 15, 'Partial/weak name match'
+    return 0, None
+
+
+def parse_extracted_dob_parts(dob_value):
+    """Parse passport/OCR DOB into day/month/year ints. Returns dict or None."""
+    raw = str(dob_value or '').strip()
+    if not raw:
+        return None
+    named = re.match(
+        r'^(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{4})$',
+        raw,
+        re.IGNORECASE,
+    )
+    months = {
+        'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+        'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12,
+    }
+    if named:
+        return {
+            'day': int(named.group(1)),
+            'month': months[named.group(2)[:3].lower()],
+            'year': int(named.group(3)),
+        }
+    slash = re.match(r'^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})$', raw)
+    if slash:
+        return {'day': int(slash.group(1)), 'month': int(slash.group(2)), 'year': int(slash.group(3))}
+    return None
+
+
+def score_intake_dob_match(extracted_dob, ch_officer_dob):
+    """Score using only CH-provided DOB granularity (never invent CH DOB)."""
+    extracted = parse_extracted_dob_parts(extracted_dob)
+    if not extracted or not isinstance(ch_officer_dob, dict):
+        return 0, None
+    try:
+        ch_year = int(ch_officer_dob['year']) if ch_officer_dob.get('year') is not None else None
+        ch_month = int(ch_officer_dob['month']) if ch_officer_dob.get('month') is not None else None
+        ch_day = int(ch_officer_dob['day']) if ch_officer_dob.get('day') is not None else None
+    except (TypeError, ValueError):
+        return 0, None
+    if ch_year is None:
+        return 0, None
+    if extracted['year'] != ch_year:
+        return -50, 'Incompatible DOB year'
+    if ch_month is not None and extracted['month'] != ch_month:
+        return -50, 'Incompatible DOB month'
+    if ch_day is not None and extracted.get('day') is not None and extracted['day'] != ch_day:
+        return -50, 'Incompatible DOB day'
+    if ch_day is not None and ch_month is not None:
+        return 35, 'Exact available DOB match'
+    if ch_month is not None:
+        return 25, 'Compatible month/year DOB'
+    return 10, 'Compatible DOB year only'
+
+
+def _company_status_score(status_text):
+    status = (status_text or '').strip().lower()
+    if not status:
+        return 0, None
+    if status in ('active', 'live', 'open'):
+        return 10, 'Active company'
+    if any(x in status for x in ('dissolved', 'liquidation', 'closed', 'removed', 'inactive')):
+        return -20, 'Dissolved/inactive company'
+    return 0, None
+
+
+def score_intake_company_candidate(candidate, client_id, person_name, extracted_dob, extracted_nationality=None):
+    score = 0
+    reasons = []
+
+    # 1. Person Name Matching (Transposition & Token Overlap)
+    person_fields = [
+        candidate.get('officer_name'),
+        candidate.get('director'),
+    ]
+    best_name_score = 0
+    best_name_reason = None
+    for field in person_fields:
+        pts, reason = score_intake_name_match(person_name, field)
+        if pts > best_name_score:
+            best_name_score = pts
+            best_name_reason = reason
+    if best_name_score == 0:
+        cname_pts, _ = score_intake_name_match(person_name, candidate.get('name'))
+        if cname_pts >= 15:
+            best_name_score = 5
+            best_name_reason = 'Person name weakly related to company name'
+    if best_name_score:
+        score += best_name_score
+        if best_name_reason:
+            reasons.append(best_name_reason)
+
+    # 2. DOB Compatibility Matching (Month & Year)
+    dob_pts, dob_reason = score_intake_dob_match(extracted_dob, candidate.get('officer_dob'))
+    if dob_pts:
+        score += dob_pts
+        if dob_reason:
+            reasons.append(dob_reason)
+
+    # 3. Nationality / Country Compatibility
+    cand_nat = (candidate.get('officer_nationality') or candidate.get('nationality') or '').strip().lower()
+    ext_nat = (extracted_nationality or '').strip().lower()
+    if ext_nat and cand_nat:
+        if ext_nat in cand_nat or cand_nat in ext_nat or (ext_nat.startswith('pak') and 'pak' in cand_nat) or (ext_nat.startswith('brit') and 'brit' in cand_nat):
+            score += 10
+            reasons.append('Nationality/country compatible')
+
+    # 4. Existing CRM Relationship
+    cid = candidate.get('company_id')
+    if client_id and cid:
+        owned = query_db(
+            "SELECT id FROM companies WHERE id = ? AND user_id = ?;",
+            (cid, client_id),
+            one=True,
+        )
+        if owned:
+            score += 40
+            reasons.append('Existing CRM client already associated with company')
+        order_link = query_db(
+            "SELECT id FROM orders WHERE user_id = ? AND company_id = ? LIMIT 1;",
+            (client_id, cid),
+            one=True,
+        )
+        if order_link:
+            score += 30
+            reasons.append('Existing order associated with company')
+
+    # 5. Companies House Officer Source
+    if candidate.get('source') == 'companies_house' and candidate.get('company_number'):
+        score += 15
+        reasons.append('Verified Companies House officer appointment')
+    elif candidate.get('source') == 'crm' and best_name_score >= 35:
+        score += 25
+        reasons.append('Strong CRM director/name relationship')
+
+    # 6. Active Company Status
+    status_pts, status_reason = _company_status_score(candidate.get('company_status'))
+    if status_pts:
+        score += status_pts
+        if status_reason:
+            reasons.append(status_reason)
+
+    final_score = max(0, min(100, score))
+
+    if final_score >= 75:
+        label = 'HIGH'
+    elif final_score >= 60:
+        label = 'MEDIUM'
+    else:
+        label = 'LOW'
+
+    return {
+        'score': final_score,
+        'confidence_label': label,
+        'reasons': reasons,
+        'candidate': candidate,
+    }
+
+
+def enrich_candidate_company_status(candidate, status_cache):
+    num = normalize_company_number(candidate.get('company_number'))
+    if not num:
+        return candidate
+    if num in status_cache:
+        candidate['company_status'] = status_cache[num]
+        return candidate
+    if candidate.get('company_status'):
+        status_cache[num] = candidate['company_status']
+        return candidate
+    payload, _err = cached_companies_house_request('/company/' + urllib.parse.quote(num))
+    status = ''
+    if payload and isinstance(payload, dict):
+        status = str(payload.get('company_status') or '').strip().lower()
+    status_cache[num] = status
+    candidate['company_status'] = status
+    return candidate
+
+
+def enrich_candidate_company_officers(candidate, person_name, officer_cache):
+    num = normalize_company_number(candidate.get('company_number'))
+    if not num or candidate.get('officer_name'):
+        return candidate
+    if num in officer_cache:
+        matched_officer = officer_cache[num]
+        if matched_officer:
+            candidate['officer_name'] = matched_officer.get('name') or ''
+            candidate['officer_dob'] = matched_officer.get('dob')
+        return candidate
+
+    payload, _err = cached_companies_house_request(f'/company/{urllib.parse.quote(num)}/officers')
+    matched = None
+    if payload and isinstance(payload, dict):
+        for item in payload.get('items') or []:
+            off_name = (item.get('name') or '').strip()
+            pts, _ = score_intake_name_match(person_name, off_name)
+            if pts >= 35:
+                matched = {
+                    'name': off_name,
+                    'dob': item.get('date_of_birth') if isinstance(item.get('date_of_birth'), dict) else None,
+                }
+                break
+    officer_cache[num] = matched
+    if matched:
+        candidate['officer_name'] = matched.get('name') or ''
+        candidate['officer_dob'] = matched.get('dob')
+    return candidate
+
+
+def resolve_intake_company_match(client_id, person_name, extracted_dob=None, extracted_nationality=None, actor=None):
+    """
+    Two-Stage Identity Resolution Engine:
+    Stage 1: Resolve Person / Officer Identity against Companies House & CRM.
+    Stage 2: Evaluate & rank officer company appointments with confidence score and gap analysis.
+    Returns (company_row_or_None, status, message, ranked_candidates, match_meta)
+    """
+    name = (person_name or '').strip()
+    empty_meta = {
+        'confidence': 0,
+        'confidence_label': 'LOW',
+        'score': 0,
+        'reasons': [],
+        'score_gap': 0,
+        'top_candidates': [],
+    }
+    if not name:
+        return None, 'not_applicable', 'No person name to match against companies.', [], empty_meta
+
+    # Check existing CRM client company relationships
+    owned = []
+    if client_id:
+        owned = query_db(
+            "SELECT * FROM companies WHERE user_id = ? ORDER BY id DESC LIMIT 5;",
+            (client_id,),
+        ) or []
+    if len(owned) == 1:
+        row = owned[0]
+        meta = {
+            'confidence': 95,
+            'confidence_label': 'HIGH',
+            'score': 95,
+            'reasons': [
+                'Existing CRM client already associated with company',
+                'Single company relationship on client file',
+            ],
+            'score_gap': 95,
+            'top_candidates': [{
+                'name': row.get('name'),
+                'company_number': row.get('company_number'),
+                'score': 95,
+                'confidence_label': 'HIGH',
+                'reasons': ['Existing CRM client already associated with company'],
+            }],
+        }
+        if actor:
+            log_activity(
+                actor,
+                'DOCUMENT_AUTO_MATCHED',
+                'companies',
+                str(row['id']),
+                f"Auto-matched client #{client_id} to existing CRM company #{row.get('company_number') or row['id']} (score=95)",
+            )
+        return row, 'matched', f"Automatically matched {row.get('name')} (existing CRM relationship)", [], meta
+
+    raw_candidates, _err = search_companies_house_officers(name, extracted_dob=extracted_dob)
+    if not raw_candidates:
+        if actor:
+            log_activity(
+                actor,
+                'DOCUMENT_MATCH_REVIEW_REQUIRED',
+                'users',
+                str(client_id or ''),
+                f"No reliable company candidates for client #{client_id}",
+            )
+        return None, 'not_applicable', (
+            f'No reliable company candidates for {name}. Document filed under client profile.'
+        ), [], empty_meta
+
+    status_cache = {}
+    officer_cache = {}
+    scored = []
+    for cand in raw_candidates:
+        enrich_candidate_company_status(cand, status_cache)
+        enrich_candidate_company_officers(cand, name, officer_cache)
+        if cand.get('company_id') and not cand.get('officer_name'):
+            row = query_db("SELECT director FROM companies WHERE id = ?;", (cand['company_id'],), one=True)
+            if row:
+                cand['officer_name'] = row.get('director') or ''
+        scored.append(score_intake_company_candidate(
+            cand, client_id, name, extracted_dob, extracted_nationality=extracted_nationality
+        ))
+
+    scored.sort(key=lambda x: x['score'], reverse=True)
+    top = scored[0]
+    second = scored[1] if len(scored) > 1 else None
+    top_score = top['score']
+    second_score = second['score'] if second else 0
+    score_gap = top_score - second_score
+
+    ranked_preview = []
+    for item in scored[:5]:
+        c = item['candidate']
+        ranked_preview.append({
+            'name': c.get('name'),
+            'company_number': c.get('company_number'),
+            'company_id': c.get('company_id'),
+            'address': c.get('address'),
+            'score': item['score'],
+            'confidence_label': item['confidence_label'],
+            'reasons': item['reasons'],
+            'source': c.get('source'),
+            'officer_dob': c.get('officer_dob'),
+        })
+
+    meta = {
+        'confidence': top_score,
+        'confidence_label': top['confidence_label'],
+        'score': top_score,
+        'reasons': top['reasons'],
+        'score_gap': score_gap,
+        'top_candidates': ranked_preview,
+    }
+
+    # Auto-assign ONLY when top score >= 75 AND confidence gap >= 20 (or no second candidate)
+    auto_ok = False
+    if top_score >= 75 and (score_gap >= 20 or second is None) and not any(
+        'Incompatible DOB' in (r or '') for r in top['reasons']
+    ):
+        auto_ok = True
+
+    if auto_ok:
+        chosen = top['candidate']
+        company_obj = None
+        if chosen.get('company_id'):
+            company_obj = query_db("SELECT * FROM companies WHERE id = ?;", (chosen['company_id'],), one=True)
+            if company_obj and client_id and not company_obj.get('user_id'):
+                execute_db("UPDATE companies SET user_id = ? WHERE id = ?;", (client_id, company_obj['id']))
+                company_obj = query_db("SELECT * FROM companies WHERE id = ?;", (company_obj['id'],), one=True)
+        if not company_obj and chosen.get('company_number'):
+            company_obj = auto_import_companies_house_from_intake(
+                chosen.get('name'),
+                chosen.get('company_number'),
+                client_user_id=client_id,
+            )
+        if company_obj:
+            msg = (
+                f"Automatically matched {company_obj.get('name')} "
+                f"(Confidence: {meta['confidence']}% — {meta['confidence_label']})"
+            )
+            if actor:
+                log_activity(
+                    actor,
+                    'DOCUMENT_AUTO_MATCHED',
+                    'companies',
+                    str(company_obj['id']),
+                    f"Auto-matched client #{client_id} to CH/CRM #{company_obj.get('company_number') or company_obj['id']} (score={top_score}, gap={score_gap})",
+                )
+            return company_obj, 'matched', msg, ranked_preview, meta
+
+        status = 'review_required'
+        msg = (
+            f"Review required: top candidates have similar confidence "
+            f"({ranked_preview[0]['name']} {top_score}% vs {ranked_preview[1]['name']} {second_score}%)."
+        )
+    elif top_score < 65:
+        status = 'not_applicable'
+        dob_blocked = any('Incompatible DOB' in (r or '') for r in (top.get('reasons') or []))
+        if dob_blocked:
+            msg = (
+                f'No safe company match for {name}: Companies House officers with this name have different '
+                f'birth details than the passport DOB ({extracted_dob or "unknown"}). '
+                f'Best score {top_score}%. Document filed under the client; company left unassigned.'
+            )
+        else:
+            msg = (
+                f'No high-confidence company match for {name} (best {top_score}%). '
+                'Document filed under the client; company left unassigned.'
+            )
+    else:
+        status = 'review_required'
+        msg = f'Review required for {name}: insufficient score gap for safe auto-assignment.'
+
+    if actor:
+        log_activity(
+            actor,
+            'DOCUMENT_MATCH_REVIEW_REQUIRED',
+            'users',
+            str(client_id or ''),
+            f"Match review client #{client_id}: top={top_score} second={second_score} gap={score_gap}",
+        )
+    return None, status, msg, ranked_preview, meta
+
+
+def pick_unique_intake_company(client_id, person_name, extracted_dob=None, actor=None):
+    """Backward-compatible wrapper around resolve_intake_company_match."""
+    company_obj, status, message, candidates, _meta = resolve_intake_company_match(
+        client_id, person_name, extracted_dob=extracted_dob, actor=actor,
+    )
+    return company_obj, status, message, candidates
+
+
 def normalize_company_number(raw):
     text = re.sub(r'[^A-Za-z0-9]', '', str(raw or '').strip().upper())
     if text.startswith('NO'):
@@ -5329,90 +6337,1322 @@ def parse_company_number_list(text):
     return numbers
 
 
+INTAKE_NAME_NOISE = frozenset({
+    'name', 'of', 'the', 'and', 'for', 'passport', 'republic', 'islamic', 'pakistan',
+    'united', 'kingdom', 'great', 'britain', 'nationality', 'gender', 'date', 'birth',
+    'place', 'issue', 'expiry', 'type', 'code', 'authority', 'holder', 'customer',
+    'account', 'statement', 'period', 'page', 'bank', 'ltd', 'limited', 'company',
+    'director', 'subscriber', 'each', 'mr', 'mrs', 'ms', 'miss', 'dr', 'dob',
+    'cnic', 'nic', 'nid', 'identity', 'card', 'document', 'utility', 'bill',
+    'given', 'names', 'surname', 'father', 'husband', 'wife', 'son', 'daughter',
+    'number', 'no', 'inc', 'corp', 'holdings', 'services', 'solutions', 'certificate',
+    'incorporation', 'articles', 'association', 'confirmation', 'hmrc', 'vat',
+})
+INTAKE_FILENAME_IGNORE = frozenset({
+    'bank', 'statement', 'passport', 'cnic', 'id', 'proof', 'address', 'doc', 'docx',
+    'pdf', 'png', 'jpg', 'jpeg', 'certificate', 'incorporation', 'utility', 'bill',
+    'ltd', 'limited', 'company', 'scan', 'copy', 'front', 'back', 'photo',
+})
+
+
+def _printable_text_ratio(text):
+    if not text:
+        return 0.0
+    good = sum(1 for ch in text if ch.isprintable() or ch.isspace())
+    return good / max(len(text), 1)
+
+
+def _bytes_as_loose_text(file_bytes):
+    if not file_bytes:
+        return ''
+    sample = file_bytes[:12000]
+    if b'\x00' in sample[:400] and not sample.startswith(b'%PDF'):
+        return ''
+    try:
+        text = file_bytes.decode('utf-8', errors='ignore')
+    except Exception:
+        text = ''
+    if _printable_text_ratio(text) >= 0.82:
+        return text
+    if sample.startswith(b'%PDF'):
+        return text
+    return ''
+
+
+def _mrz_quality_score(text):
+    compact = re.sub(r'[^A-Z0-9<]', '', (text or '').upper())
+    if not compact:
+        return 0
+    score = compact.count('<')
+    if '<<' in compact:
+        score += 25
+    if re.search(r'(?:P<|[A-Z]{3})[A-Z]+<<[A-Z<]{2,}', compact):
+        score += 40
+    if re.search(r'[A-Z]{3}\d{6}\d[MF<]', compact):
+        score += 30
+    if any(code in compact for code in ('PAK', 'GBR', 'IND', 'USA', 'IRL', 'CAN', 'AUS')):
+        score += 12
+    return score
+
+
+def _prepare_ocr_gray(image, sharpen=1.6, median=False, threshold=None, min_edge=1800):
+    from PIL import ImageOps, ImageEnhance, ImageFilter
+    gray = ImageOps.grayscale(image)
+    gray = ImageOps.autocontrast(gray)
+    if sharpen:
+        gray = ImageEnhance.Sharpness(gray).enhance(sharpen)
+    if median:
+        gray = gray.filter(ImageFilter.MedianFilter(size=3))
+    if threshold is not None:
+        gray = gray.point(lambda px: 255 if px > threshold else 0)
+    width, height = gray.size
+    edge = max(width, height)
+    if edge < min_edge:
+        scale = min_edge / edge
+        gray = gray.resize((max(1, int(width * scale)), max(1, int(height * scale))))
+    return gray
+
+
+def _tesseract_string(image, psm='6'):
+    try:
+        import pytesseract
+        return pytesseract.image_to_string(
+            image,
+            lang='eng',
+            config=f'--oem 3 --psm {psm}',
+        ) or ''
+    except Exception:
+        return ''
+
+
+def _ocr_image_to_text(image):
+    try:
+        from PIL import ImageOps
+    except Exception:
+        return ''
+    try:
+        width, height = image.size
+        candidates = []
+
+        # Full page — avoid median blur (it destroys thin MRZ strokes).
+        full = _prepare_ocr_gray(image, sharpen=1.5, median=False, min_edge=1700)
+        for psm in ('6', '4'):
+            chunk = _tesseract_string(full, psm)
+            if chunk.strip():
+                candidates.append(chunk)
+
+        # Mild denoise pass for noisy phone photos.
+        soft = _prepare_ocr_gray(image, sharpen=1.2, median=True, min_edge=1700)
+        chunk = _tesseract_string(soft, '6')
+        if chunk.strip():
+            candidates.append(chunk)
+
+        # Biodata page is usually the lower half of an open passport photo.
+        if height >= 900:
+            biodata = image.crop((0, int(height * 0.42), width, height))
+            bio_gray = _prepare_ocr_gray(biodata, sharpen=1.7, median=False, min_edge=2000)
+            for psm in ('6', '4'):
+                chunk = _tesseract_string(bio_gray, psm)
+                if chunk.strip():
+                    candidates.append(chunk)
+            bio_bin = _prepare_ocr_gray(biodata, sharpen=1.2, median=False, threshold=150, min_edge=2000)
+            chunk = _tesseract_string(bio_bin, '6')
+            if chunk.strip():
+                candidates.append(chunk)
+
+        # Thin MRZ strip at the bottom — high contrast, large scale.
+        if height >= 700:
+            mrz_band = image.crop((0, int(height * 0.82), width, height))
+            mrz_gray = _prepare_ocr_gray(mrz_band, sharpen=2.0, median=False, min_edge=2400)
+            for psm in ('6', '7'):
+                chunk = _tesseract_string(mrz_gray, psm)
+                if chunk.strip():
+                    candidates.append(chunk)
+            mrz_bin = _prepare_ocr_gray(mrz_band, sharpen=1.0, median=False, threshold=140, min_edge=2600)
+            chunk = _tesseract_string(mrz_bin, '6')
+            if chunk.strip():
+                candidates.append(chunk)
+
+        if not candidates:
+            return ''
+
+        # Prefer the pass that preserves MRZ structure; fall back to longest text.
+        return max(
+            candidates,
+            key=lambda t: (_mrz_quality_score(t), len(re.sub(r'\s+', '', t))),
+        )
+    except Exception:
+        return ''
+
+
+def _ocr_image_bytes(file_bytes):
+    try:
+        import io
+        from PIL import Image, ImageOps
+        image = Image.open(io.BytesIO(file_bytes))
+        image.load()
+        image = ImageOps.exif_transpose(image)
+        if image.mode not in ('L', 'RGB'):
+            image = image.convert('RGB')
+        return _ocr_image_to_text(image)
+    except Exception:
+        return ''
+
+
+def _extract_pdf_text(file_bytes):
+    text = ''
+    try:
+        import io
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(file_bytes))
+        text = '\n'.join((page.extract_text() or '') for page in reader.pages[:8])
+    except Exception:
+        text = ''
+    if len(re.sub(r'\s+', '', text)) >= 40:
+        return text, 'pdf-text'
+    ocr_chunks = []
+    try:
+        import pypdfium2
+        pdf = pypdfium2.PdfDocument(file_bytes)
+        page_count = min(len(pdf), 3)
+        for index in range(page_count):
+            page = pdf[index]
+            bitmap = page.render(scale=2.5)
+            pil_image = bitmap.to_pil()
+            ocr_chunks.append(_ocr_image_to_text(pil_image))
+            try:
+                page.close()
+            except Exception:
+                pass
+        try:
+            pdf.close()
+        except Exception:
+            pass
+    except Exception:
+        ocr_chunks = []
+    ocr_text = '\n'.join(chunk for chunk in ocr_chunks if chunk).strip()
+    if ocr_text:
+        return ((text + '\n' + ocr_text).strip() if text.strip() else ocr_text), 'ocr'
+    if text.strip():
+        return text, 'pdf-text'
+    loose = _bytes_as_loose_text(file_bytes)
+    return loose, ('embedded-text' if loose.strip() else 'none')
+
+
+def _extract_docx_text(file_bytes):
+    try:
+        import io
+        import zipfile
+        with zipfile.ZipFile(io.BytesIO(file_bytes)) as archive:
+            xml = archive.read('word/document.xml')
+        text = re.sub(r'</w:p>', '\n', xml.decode('utf-8', errors='ignore'))
+        text = re.sub(r'<[^>]+>', ' ', text)
+        return re.sub(r'[ \t]+', ' ', text)
+    except Exception:
+        return ''
+
+
+def _title_person_name(raw):
+    words = [w for w in re.split(r'\s+', str(raw or '').strip()) if w]
+    return ' '.join(w[:1].upper() + w[1:].lower() if w.isalpha() else w for w in words)
+
+
+def _looks_like_ocr_gibberish(word):
+    w = re.sub(r"[^a-z]", '', str(word or '').lower())
+    if len(w) < 2:
+        return True
+    if re.search(r'(.)\1{2,}', w):
+        return True
+    vowels = sum(1 for ch in w if ch in 'aeiou')
+    if len(w) >= 4 and vowels == 0:
+        return True
+    if len(w) >= 6 and vowels / len(w) < 0.18:
+        return True
+    if len(set(w)) <= 2 and len(w) >= 4:
+        return True
+    return False
+
+
+def _valid_person_name(raw):
+    text = re.sub(r'\s+', ' ', str(raw or '').strip())
+    text = re.sub(r'[^A-Za-z\s\'\-]', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    words = [w for w in text.split() if w]
+    if len(words) < 2 or len(words) > 4:
+        return None
+    if len(text) < 5 or len(text) > 48:
+        return None
+    if sum(1 for w in words if len(w) >= 3) < 1:
+        return None
+    lowered = [w.lower().strip("'-") for w in words]
+    if any(w in INTAKE_NAME_NOISE for w in lowered):
+        return None
+    if any(_looks_like_ocr_gibberish(w) for w in lowered):
+        return None
+    if not all(re.fullmatch(r"[A-Za-z][A-Za-z'\-]{0,24}", w) for w in words):
+        return None
+    return _title_person_name(' '.join(words))
+
+
+def _compact_mrz_text(text):
+    """Normalize noisy OCR into MRZ-friendly A-Z0-9< lines."""
+    def repair_line(compact):
+        if not compact:
+            return compact
+        # Common OCR: P misread as >, ), }, F, etc. before nationality code.
+        if re.match(r'^[>\}\)F]<(?:PAK|GBR|IND|USA|IRL|CAN|AUS|DEU|FRA)', compact):
+            compact = 'P' + compact[1:]
+        elif re.match(r'^[>\}\)F](?:PAK|GBR|IND|USA|IRL|CAN|AUS|DEU|FRA)', compact) and ('<<' in compact or re.search(r'[KFXH]<', compact)):
+            compact = 'P<' + compact[1:]
+        elif compact.startswith('PC') and compact[2:5] in ('PAK', 'GBR', 'IND', 'USA', 'IRL', 'CAN', 'AUS'):
+            compact = 'P<' + compact[2:]
+        # << between surname and given is often OCR'd as K< / F< / X< / H<.
+        compact = re.sub(
+            r'(P<[A-Z]{3}[A-Z]{2,})[KFXH]<([A-Z]{2,})',
+            r'\1<<\2',
+            compact,
+        )
+        compact = re.sub(
+            r'((?:PAK|GBR|IND|USA|IRL|CAN|AUS|DEU|FRA)[A-Z]{2,})[KFXH]<([A-Z]{2,})',
+            r'\1<<\2',
+            compact,
+        )
+        # Fillers after the name are often OCR'd as S/5/E/K between '<' marks.
+        if '<<' in compact:
+            head, _, tail = compact.partition('<<')
+            tail = re.sub(r'(?<=<)[S5EKFX]+', lambda m: '<' * len(m.group(0)), tail)
+            compact = head + '<<' + tail
+        return compact
+
+    cleaned_lines = []
+    for raw_line in str(text or '').upper().replace('£', '<').replace('¢', '<').splitlines():
+        compact = re.sub(r'[^A-Z0-9<]', '', raw_line)
+        if not compact:
+            continue
+        cleaned_lines.append(repair_line(compact))
+    blob = '\n'.join(cleaned_lines)
+    # Also keep a fully compacted blob for cross-line MRZ recovery.
+    full = repair_line(re.sub(r'[^A-Z0-9<]', '', str(text or '').upper().replace('£', '<').replace('¢', '<')))
+    return blob + ('\n' + full if full and full not in blob else '')
+
+
+def _parse_mrz_name(text):
+    compact = _compact_mrz_text(text)
+    match = re.search(r'P<[A-Z]{3}([A-Z]+)<<([A-Z<]{2,})', compact)
+    if not match:
+        # Recover when leading P< was lost but nationality+surname<<given remains.
+        match = re.search(r'(?:^|[^A-Z])(?:PAK|GBR|IND|USA|IRL|CAN|AUS|DEU|FRA)([A-Z]{2,})<<([A-Z<]{2,})', compact)
+        if not match:
+            return None
+        surname = match.group(1).replace('<', ' ').strip()
+        given_raw = match.group(2)
+    else:
+        surname = match.group(1).replace('<', ' ').strip()
+        given_raw = match.group(2)
+    # Keep only real given-name tokens; ignore trailing OCR junk after fillers (e.g. ...<<<C<).
+    given_match = re.match(r'^([A-Z]+(?:<[A-Z]+)*)', given_raw or '')
+    given = given_match.group(1).replace('<', ' ').strip() if given_match else ''
+    surname_words = [w for w in surname.split() if len(w) >= 2]
+    given_words = [w for w in given.split() if len(w) >= 2]
+    return _valid_person_name((' '.join(given_words + surname_words)).strip())
+
+
+def _parse_mrz_dob(text):
+    compact = _compact_mrz_text(text)
+    match = re.search(r'[A-Z]{3}(\d{6})\d[MF<]', compact)
+    if not match:
+        return None
+    yymmdd = match.group(1)
+    year = int(yymmdd[0:2])
+    month = int(yymmdd[2:4])
+    day = int(yymmdd[4:6])
+    if month < 1 or month > 12 or day < 1 or day > 31:
+        return None
+    full_year = 1900 + year if year >= 30 else 2000 + year
+    return f'{day:02d}/{month:02d}/{full_year}'
+
+
+def _parse_mrz_passport_num(text):
+    compact = re.sub(r'[^A-Z0-9<\n]', '', text.upper())
+    match = re.search(r'\b([A-Z0-9]{8,10})[A-Z]{3}\d{6}', compact)
+    if match:
+        return match.group(1).replace('<', '').strip()
+    match_labeled = re.search(
+        r'(?:passport\s*no\.?|passport\s*number|doc(?:ument)?\s*no\.?)\s*[:\-]?\s*([A-Z0-9]{7,12})',
+        text,
+        re.IGNORECASE,
+    )
+    if match_labeled:
+        return match_labeled.group(1).strip()
+    # Pakistani-style passport numbers often appear near PAK on the biodata page.
+    near_pak = re.search(r'\b([A-Z]{1,2}\d{7,8})\b', compact)
+    if near_pak and re.search(r'PAK|PASSPORT', compact):
+        return near_pak.group(1)
+    return None
+
+
+def _parse_mrz_nationality(text):
+    compact = _compact_mrz_text(text)
+    match = re.search(r'P<([A-Z]{3})', compact)
+    if not match:
+        match = re.search(r'(?:^|[^A-Z])(PAK|GBR|IND|USA|IRL|CAN|AUS|DEU|FRA)[A-Z]+<<', compact)
+    if match:
+        code = match.group(1)
+        country_map = {
+            'PAK': 'Pakistani', 'GBR': 'British', 'USA': 'American',
+            'IND': 'Indian', 'CAN': 'Canadian', 'AUS': 'Australian',
+            'DEU': 'German', 'FRA': 'French', 'IRL': 'Irish'
+        }
+        return country_map.get(code, code)
+    match_labeled = re.search(r'(?:nationality|citizenship)\s*[:\-]?\s*([A-Za-z]{3,20})', text, re.IGNORECASE)
+    if match_labeled:
+        return match_labeled.group(1).strip().title()
+    if re.search(r'\bpakistani\b', text, re.IGNORECASE):
+        return 'Pakistani'
+    return None
+
+
+def _extract_person_name(text, filename_clean):
+    mrz_name = _parse_mrz_name(text)
+    if mrz_name:
+        return mrz_name
+
+    # Pakistani passport OCR layout often stacks:
+    #   NASEEM ;
+    #   Given Names
+    #   PASSPORT ASIA
+    stacked = re.search(
+        r'(?ims)(?:^|\n)\s*([A-Za-z]{2,25})\s*;?\s*\n\s*Given Names?\s*\n\s*'
+        r'(?:PASSPORT\s+|TYPE\s+P?\s*)?([A-Za-z]{2,25}(?:\s+[A-Za-z]{2,25}){0,2})\b',
+        text,
+    )
+    if stacked:
+        surname = stacked.group(1).strip()
+        given = stacked.group(2).strip()
+        if given.upper().startswith('PASSPORT '):
+            given = given[9:].strip()
+        if surname.lower() not in INTAKE_NAME_NOISE and given.lower() not in INTAKE_NAME_NOISE:
+            candidate = _valid_person_name(f'{given} {surname}')
+            if candidate:
+                return candidate
+
+    labeled = [
+        r'(?:surname|family name)\s*[:\-]?\s*([A-Za-z][A-Za-z\'\-\s]{1,40})',
+        r'(?:given names?|forenames?|first names?)\s*[:\-]?\s*([A-Za-z][A-Za-z\'\-\s]{1,40})',
+        r'(?:account holder|customer name|client name|cardholder name|name of account holder)\s*[:\-]?\s*([A-Za-z][A-Za-z\'\-\s]{2,50})',
+        r'(?:full name|holder name|passenger name)\s*[:\-]?\s*([A-Za-z][A-Za-z\'\-\s]{2,50})',
+        r'(?:^|\n)\s*name\s*[:\-]\s*([A-Za-z][A-Za-z\'\-\s]{2,50})',
+        r'\bname\s*[:\-]\s*([A-Za-z][A-Za-z\'\-\s]{2,50})',
+    ]
+    surname = None
+    given = None
+    for pattern in labeled[:2]:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            candidate = _valid_person_name(match.group(1))
+            if 'surname' in pattern or 'family' in pattern:
+                surname = match.group(1).strip()
+            else:
+                given = match.group(1).strip()
+            if candidate and 'name' not in pattern[:20]:
+                pass
+    if surname and given:
+        if given.upper().startswith('PASSPORT '):
+            given = given[9:].strip()
+        combined = _valid_person_name(f'{given} {surname}')
+        if combined:
+            return combined
+    for pattern in labeled:
+        match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
+        if not match:
+            continue
+        raw = match.group(1).strip()
+        if raw.upper().startswith('PASSPORT '):
+            raw = raw[9:].strip()
+        candidate = _valid_person_name(raw)
+        if candidate:
+            return candidate
+    fallback = re.search(
+        r'(?:director|client|customer|holder)\.?\s*[:\-]\s*([A-Za-z]+(?:\s+[A-Za-z]+){1,3})',
+        text,
+        re.IGNORECASE,
+    )
+    if fallback:
+        candidate = _valid_person_name(fallback.group(1))
+        if candidate:
+            return candidate
+    cleaned_fn = re.sub(r'[\._\-\(\)\[\]]', ' ', filename_clean)
+    words = [w for w in cleaned_fn.split() if w.lower() not in INTAKE_FILENAME_IGNORE and w.isalpha() and len(w) >= 2]
+    if len(words) >= 2:
+        return _valid_person_name(' '.join(words[:3]))
+    return None
+
+
+def _normalize_display_dob(raw):
+    text = re.sub(r'\s+', ' ', str(raw or '').strip())
+    if not text:
+        return None
+    months = {
+        'jan': 1, 'january': 1, 'feb': 2, 'february': 2, 'mar': 3, 'march': 3,
+        'apr': 4, 'april': 4, 'may': 5, 'jun': 6, 'june': 6, 'jul': 7, 'july': 7,
+        'aug': 8, 'august': 8, 'sep': 9, 'sept': 9, 'september': 9,
+        'oct': 10, 'october': 10, 'nov': 11, 'november': 11, 'dec': 12, 'december': 12,
+    }
+    named = re.match(
+        r'^(\d{1,2})\s+([A-Za-z]{3,9})\.?\s+(\d{4})$',
+        text,
+        re.IGNORECASE,
+    )
+    if named:
+        day = int(named.group(1))
+        month = months.get(named.group(2).lower())
+        year = int(named.group(3))
+        if month and 1 <= day <= 31 and 1900 <= year <= 2100:
+            return f'{day:02d}/{month:02d}/{year}'
+    slash = re.match(r'^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})$', text)
+    if slash:
+        day, month, year = int(slash.group(1)), int(slash.group(2)), int(slash.group(3))
+        if year < 100:
+            year += 2000 if year < 30 else 1900
+        if 1 <= month <= 12 and 1 <= day <= 31 and 1900 <= year <= 2100:
+            return f'{day:02d}/{month:02d}/{year}'
+    return text
+
+
+def _extract_dob(text):
+    mrz_dob = _parse_mrz_dob(text)
+    if mrz_dob:
+        return mrz_dob
+    labeled = re.search(
+        r'(?:date of birth|birth date|d\.?o\.?b\.?|born on|born)\s*[:\-]?\s*'
+        r'(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2}|'
+        r'\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{2,4})',
+        text,
+        re.IGNORECASE,
+    )
+    if labeled:
+        return _normalize_display_dob(labeled.group(1))
+    named = re.search(
+        r'\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(?:19\d{2}|20[0-3]\d))\b',
+        text,
+        re.IGNORECASE,
+    )
+    if named:
+        return _normalize_display_dob(named.group(1))
+    loose = re.search(r'\b(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.](?:19\d{2}|20[01]\d))\b', text)
+    if loose:
+        return _normalize_display_dob(loose.group(1))
+    return None
+
+
+def _extract_company_number(text):
+    match = re.search(
+        r'(?:company(?:\s+(?:registration|registered))?\s+(?:number|no\.?)|co\.?\s*no\.?|registration no\.?|reg(?:istered)? no\.?)\s*[:\-]?\s*([0-9]{8}|[A-Za-z]{2}[0-9]{6})',
+        text,
+        re.IGNORECASE,
+    )
+    if match:
+        return normalize_company_number(match.group(1))
+    return None
+
+
+def _extract_company_name(text):
+    match = re.search(
+        r'\b([A-Z][A-Za-z0-9\&\'\.\-]+(?:\s+[A-Z][A-Za-z0-9\&\'\.\-]+){0,6}\s+(?:LTD|LIMITED|LLP|PLC))\b',
+        text,
+    )
+    if not match:
+        match = re.search(
+            r'([A-Za-z0-9\&\'\.\-]{2,40}(?:\s+[A-Za-z0-9\&\'\.\-]{2,40}){0,5}\s+(?:LTD|LIMITED|LLP|PLC))',
+            text,
+            re.IGNORECASE,
+        )
+    if not match:
+        return None
+    name = re.sub(r'\s+', ' ', match.group(1)).strip(' ,.-')
+    lowered = name.lower()
+    if lowered.startswith(('bank statement', 'name of', 'certificate of')):
+        return None
+    return name
+
+
+def _extract_email_phone(text):
+    email_match = re.search(r'\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b', text)
+    phone_match = re.search(r'(?:\+44\s?7\d{3}|\(?0\d{4}\)?)\s?\d{3}\s?\d{3}\b|\+92[0-9\s\-]{10,14}|\b03\d{2}[-\s]?\d{7}\b', text)
+    email = email_match.group(0) if email_match else None
+    if email and email.lower().endswith('@brixen-pending.local'):
+        email = None
+    return email, (phone_match.group(0).strip() if phone_match else None)
+
+
+def _looks_like_passport_text(filename_clean, text):
+    lower_text = f'{filename_clean}\n{text}'.lower()
+    compact = _compact_mrz_text(text)
+    if '<<' in compact and re.search(r'(?:P<|[A-Z]{3})[A-Z]+<<[A-Z<]{2,}', compact):
+        return True
+    if re.search(r'\b\d{5}-\d{7}-\d\b', text):  # Pakistani CNIC / citizenship no.
+        return True
+    if any(k in lower_text for k in (
+        'passport', 'cnic', 'id card', 'driving licence', 'driving license',
+        'national identity', 'nicop', 'islamic republic', 'pakistani',
+        'machine readable', 'given names', 'surname',
+    )):
+        return True
+    if _mrz_quality_score(text) >= 40:
+        return True
+    return False
+
+
+def _classify_intake_document(filename_clean, text):
+    lower_text = f'{filename_clean}\n{text}'.lower()
+    if _looks_like_passport_text(filename_clean, text):
+        return 'ID Document'
+    if any(k in lower_text for k in ('statement', 'sort code', 'iban', 'account number', 'hsbc', 'barclays', 'lloyds', 'natwest', 'tide', 'revolut', 'monzo', 'santander')):
+        return 'Bank statement'
+    if any(k in lower_text for k in ('utility', 'council tax', 'tenancy', 'proof of address', 'water bill', 'electric', 'gas bill')):
+        return 'Proof of Address'
+    if any(k in lower_text for k in ('certificate of incorporation', 'companies house', 'articles of association', 'confirmation statement', 'utr')):
+        return 'Certificate of Incorporation'
+    return 'Company Documents'
+
+
+def _intake_extraction_quality(person_name, dob, passport_num, nationality, cat, scan_method, raw_text):
+    hits = 0
+    total = 4
+    if person_name:
+        hits += 1
+    if dob:
+        hits += 1
+    if passport_num or nationality:
+        hits += 1
+    if cat in ('ID Document', 'Passport', 'Bank statement', 'Proof of Address', 'Certificate of Incorporation'):
+        hits += 1
+    pct = int(round((hits / total) * 100))
+    label = 'High' if pct >= 75 else ('Medium' if pct >= 50 else ('Low' if hits else 'None'))
+    return {
+        'score': pct,
+        'label': label,
+        'fields_found': hits,
+        'fields_checked': total,
+        'ocr_used': scan_method == 'ocr',
+        'mrz_score': _mrz_quality_score(raw_text or ''),
+    }
+
+
+def _extract_bank_account_holder_name(text):
+    """Pull account-holder / customer name from UK bank statement OCR text."""
+    blob = str(text or '')
+    patterns = [
+        r'(?im)^\s*account\s*holder\s*[:\-]?\s*([A-Z][A-Za-z\'\-\s]{2,60})\s*$',
+        r'(?im)^\s*account\s*name\s*[:\-]?\s*([A-Z][A-Za-z\'\-\s]{2,60})\s*$',
+        r'(?im)^\s*customer\s*name\s*[:\-]?\s*([A-Z][A-Za-z\'\-\s]{2,60})\s*$',
+        r'(?im)^\s*name\s*[:\-]\s*([A-Z][A-Za-z\'\-\s]{2,60})\s*$',
+        r'(?i)account\s*holder\s*[:\-]?\s*([A-Za-z][A-Za-z\'\-\s]{2,60})',
+        r'(?i)account\s*name\s*[:\-]?\s*([A-Za-z][A-Za-z\'\-\s]{2,60})',
+        r'(?i)customer\s*(?:name)?\s*[:\-]?\s*([A-Za-z][A-Za-z\'\-\s]{2,60})',
+        r'(?i)(?:mr|mrs|ms|miss)\s+([A-Za-z][A-Za-z\'\-]+(?:\s+[A-Za-z][A-Za-z\'\-]+){1,3})\b',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, blob)
+        if not match:
+            continue
+        raw = re.sub(r'\s+', ' ', match.group(1)).strip(' ,.-')
+        # Skip company-style account names here; those are handled as company names.
+        if re.search(r'\b(?:ltd|limited|llp|plc|cic)\b', raw, re.IGNORECASE):
+            continue
+        if any(tok in raw.lower() for tok in ('statement', 'period', 'sort code', 'account number', 'iban')):
+            continue
+        candidate = _valid_person_name(raw)
+        if candidate:
+            return candidate
+    return None
+
+
+def intake_person_names_match(left, right):
+    """True when passport/statement names are the same person (exact or strong fuzzy)."""
+    pts, reason = score_intake_name_match(left, right)
+    return pts >= 35, pts, reason
+
+
+def find_batch_identity_for_name(person_name, batch_identities):
+    best = None
+    best_pts = 0
+    best_reason = None
+    for identity in batch_identities or []:
+        if not isinstance(identity, dict):
+            continue
+        ok, pts, reason = intake_person_names_match(person_name, identity.get('full_name'))
+        if ok and pts > best_pts:
+            best = identity
+            best_pts = pts
+            best_reason = reason
+    return best, best_pts, best_reason
+
+
+def find_identity_mentioned_in_text(text, batch_identities):
+    """If structured name OCR missed, detect a known batch identity name inside document text."""
+    blob = normalize_match_person_name(text)
+    if not blob:
+        return None, 0, None
+    best = None
+    best_pts = 0
+    best_reason = None
+    for identity in batch_identities or []:
+        if not isinstance(identity, dict):
+            continue
+        name = identity.get('full_name')
+        tokens = match_name_tokens(name)
+        if len(tokens) < 2:
+            continue
+        if all(tok in blob for tok in tokens):
+            pts = 50 if set(tokens) == set(match_name_tokens(name)) else 35
+            if pts > best_pts:
+                best = identity
+                best_pts = pts
+                best_reason = 'Name found inside document text'
+    return best, best_pts, best_reason
+
+
+def find_recent_passport_identity_for_name(person_name, limit=40):
+    """Link any document name to a recently ingested passport/ID / intake identity in CRM."""
+    if not (person_name or '').strip():
+        return None, 0, None
+    rows = query_db(
+        """
+        SELECT d.id, d.user_id, d.company_id, d.category, d.match_meta_json, d.ch_status,
+               u.full_name as client_name, c.name as company_name, c.company_number
+        FROM documents d
+        LEFT JOIN users u ON d.user_id = u.id
+        LEFT JOIN companies c ON d.company_id = c.id
+        WHERE COALESCE(d.is_posted, 0) = 0
+          AND COALESCE(d.lifecycle_status, '') != 'QUARANTINE'
+          AND (
+                LOWER(COALESCE(d.category, '')) IN ('id document', 'passport')
+                OR LOWER(COALESCE(d.review_notes, '')) LIKE '%smart document intake%'
+              )
+        ORDER BY d.id DESC
+        LIMIT ?;
+        """,
+        (limit,),
+    ) or []
+    best = None
+    best_pts = 0
+    best_reason = None
+    for row in rows:
+        meta = {}
+        if row.get('match_meta_json'):
+            try:
+                meta = json.loads(row['match_meta_json']) or {}
+            except Exception:
+                meta = {}
+        candidates = [
+            row.get('client_name'),
+            meta.get('extracted_name'),
+            meta.get('person_name'),
+        ]
+        for top in (meta.get('top_candidates') or []):
+            if isinstance(top, dict) and top.get('officer_name'):
+                candidates.append(top.get('officer_name'))
+        for cand_name in candidates:
+            ok, pts, reason = intake_person_names_match(person_name, cand_name)
+            if ok and pts > best_pts:
+                best_pts = pts
+                best_reason = reason
+                best = {
+                    'full_name': cand_name,
+                    'dob': meta.get('extracted_dob') or meta.get('dob'),
+                    'nationality': meta.get('extracted_nationality') or meta.get('nationality'),
+                    'client_id': row.get('user_id'),
+                    'company_id': row.get('company_id'),
+                    'company_name': row.get('company_name'),
+                    'company_number': row.get('company_number'),
+                    'source_document_id': row.get('id'),
+                    'source': 'recent_id_or_intake',
+                    'confidence': meta.get('confidence') or pts,
+                }
+    return best, best_pts, best_reason
+
+
 def extract_document_text_and_metadata(filename, b64_content):
     file_bytes, decode_err = decode_document_base64(b64_content)
     if decode_err or not file_bytes:
         return {'error': decode_err or 'Empty file'}
-    
+
+    file_hash = hashlib.sha256(file_bytes).hexdigest()
+
+    # SHA-256 Deduplication Cache Check (<5ms hit)
+    cached_entry = query_db("SELECT extracted_text, metadata_json FROM ocr_cache WHERE file_hash = ? AND processing_version = 'v2.0';", (file_hash,), one=True)
+    if cached_entry:
+        try:
+            cached_meta = json.loads(cached_entry['metadata_json'])
+            cached_meta['file_bytes'] = file_bytes
+            cached_meta['file_hash'] = file_hash
+            cached_meta['cached'] = True
+            return cached_meta
+        except Exception:
+            pass
+
     filename_clean = (filename or 'document.pdf').strip()
     ext = os.path.splitext(filename_clean)[1].lower()
-    
+    scan_method = 'none'
     raw_text = ''
+
     if ext == '.pdf':
-        try:
-            import io
-            from pypdf import PdfReader
-            reader = PdfReader(io.BytesIO(file_bytes))
-            pages_text = [page.extract_text() or '' for page in reader.pages]
-            raw_text = "\n".join(pages_text)
-        except Exception:
-            raw_text = ''
-            
+        raw_text, scan_method = _extract_pdf_text(file_bytes)
+    elif ext in ('.png', '.jpg', '.jpeg', '.webp', '.tif', '.tiff'):
+        raw_text = _ocr_image_bytes(file_bytes)
+        scan_method = 'ocr' if raw_text.strip() else 'none'
+    elif ext in ('.doc', '.docx'):
+        raw_text = _extract_docx_text(file_bytes)
+        scan_method = 'docx-text' if raw_text.strip() else 'none'
+    elif ext in ('.txt',):
+        raw_text = _bytes_as_loose_text(file_bytes)
+        scan_method = 'embedded-text'
+
     if not raw_text.strip():
-        try:
-            raw_text = file_bytes.decode('utf-8', errors='ignore')
-        except Exception:
-            raw_text = ''
-        
+        raw_text = _bytes_as_loose_text(file_bytes)
+        if raw_text.strip() and scan_method == 'none':
+            scan_method = 'embedded-text'
+
     combined_text = f"{filename_clean}\n{raw_text}"
-    
-    category = 'Company Documents'
-    lower_text = combined_text.lower()
-    if any(k in lower_text for k in ('statement', 'bank', 'account', 'balance', 'hsbc', 'barclays', 'lloyds', 'natwest', 'tide', 'revolut', 'monzo', 'santander')):
-        category = 'Bank statement'
-    elif any(k in lower_text for k in ('passport', 'cnic', 'id card', 'driving licence', 'identity', 'driving license', 'nic', 'nid')):
-        category = 'ID Document'
-    elif any(k in lower_text for k in ('utility', 'bill', 'council tax', 'tenancy', 'proof of address', 'water', 'electric', 'gas')):
-        category = 'Proof of Address'
-    elif any(k in lower_text for k in ('certificate of incorporation', 'companies house', 'incorporation', 'articles of association', 'utr', 'vat', 'annual return', 'confirmation statement')):
-        category = 'Certificate of Incorporation'
-        
-    person_name = None
-    name_match = re.search(r'(?:Subscriber|Name of subscriber|Name of each subscriber|Director|Name|Client|Customer|Holder|Mr|Mrs|Ms|Dr)\.?\s*[:\-]?\s*([A-Za-z]+(?:\s+[A-Za-z]+){1,4})', combined_text, re.IGNORECASE)
-    if name_match:
-        raw_matched_name = name_match.group(1).strip()
-        clean_words = []
-        stop_keywords = {'dob', 'date', 'bank', 'statement', 'company', 'no', 'number', 'ltd', 'limited', 'inc', 'corp'}
-        for word in raw_matched_name.split():
-            if word.lower() in stop_keywords:
-                break
-            clean_words.append(word)
-        if clean_words:
-            person_name = ' '.join(w.capitalize() for w in clean_words)
-    else:
-        ignore_words = {'bank', 'statement', 'passport', 'cnic', 'id', 'proof', 'address', 'doc', 'docx', 'pdf', 'png', 'jpg', 'jpeg', 'certificate', 'incorporation', 'utility', 'bill', 'ltd', 'limited', 'company'}
-        cleaned_fn = re.sub(r'[\._\-\(\)\[\]]', ' ', filename_clean)
-        words = [w for w in cleaned_fn.split() if w.lower() not in ignore_words and len(w) >= 2]
-        if len(words) >= 2:
-            person_name = ' '.join(w.capitalize() for w in words[:3])
+    person_name = _extract_person_name(combined_text, filename_clean)
+    dob = _extract_dob(combined_text)
+    company_number = _extract_company_number(combined_text)
+    company_name = _extract_company_name(combined_text)
+    email, phone = _extract_email_phone(combined_text)
 
-    dob = None
-    dob_match = re.search(r'(?:DOB|Date of Birth|Birth Date|Born)\.?\s*[:\-]?\s*(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2}|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{2,4})', combined_text, re.IGNORECASE)
-    if not dob_match:
-        dob_match = re.search(r'\b(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.](?:19\d\d|20[01]\d))\b', combined_text)
-    if dob_match:
-        dob = dob_match.group(1).strip()
+    cat = _classify_intake_document(filename_clean, raw_text)
+    is_passport = cat in ('ID Document', 'Passport') or 'passport' in filename_clean.lower() or _looks_like_passport_text(filename_clean, raw_text)
+    if is_passport and cat == 'Company Documents':
+        cat = 'ID Document'
+    if cat == 'Bank statement':
+        holder = _extract_bank_account_holder_name(combined_text)
+        if holder:
+            person_name = holder
+    passport_num = _parse_mrz_passport_num(combined_text) if is_passport else None
+    nationality = _parse_mrz_nationality(combined_text) if is_passport else None
+    doc_type = 'Passport' if is_passport else cat
+    quality = _intake_extraction_quality(person_name, dob, passport_num, nationality, cat, scan_method, raw_text)
 
-    company_number = None
-    comp_num_match = re.search(r'(?:Company Number|Company No|Co\.? No\.?|Registration No|Reg No)?\s*[:\-]?\s*([0-9]{8}|[A-Za-z]{2}[0-9]{6})', combined_text, re.IGNORECASE)
-    if comp_num_match:
-        company_number = normalize_company_number(comp_num_match.group(1))
-
-    company_name = None
-    comp_name_match = re.search(r'([A-Za-z0-9\s\,\.\&\-]{2,60}\s+(?:LTD|LIMITED|LLP|PLC|HOLDINGS|SERVICES|SOLUTIONS))', combined_text, re.IGNORECASE)
-    if comp_name_match:
-        company_name = comp_name_match.group(1).strip()
-
-    return {
+    result_dict = {
         'file_bytes': file_bytes,
+        'file_hash': file_hash,
         'filename': filename_clean,
         'ext': ext,
-        'category': category,
+        'category': cat,
+        'doc_type': doc_type,
         'extracted_name': person_name,
         'extracted_dob': dob,
+        'extracted_passport_num': passport_num,
+        'extracted_nationality': nationality,
         'extracted_company_number': company_number,
         'extracted_company_name': company_name,
+        'extracted_email': email,
+        'extracted_phone': phone,
+        'scan_method': scan_method,
+        'extraction_quality': quality,
+        'text_preview': re.sub(r'\s+', ' ', raw_text).strip()[:240],
+        'cached': False,
     }
+
+    # Save to ocr_cache table
+    try:
+        cache_copy = dict(result_dict)
+        cache_copy.pop('file_bytes', None)
+        execute_db("""
+            INSERT OR REPLACE INTO ocr_cache (file_hash, extracted_text, metadata_json, processing_version)
+            VALUES (?, ?, ?, 'v2.0');
+        """, (file_hash, raw_text, json.dumps(cache_copy)))
+    except Exception:
+        pass
+
+    return result_dict
+
+
+def process_smart_intake_files(files_data, user, batch_identities=None):
+    """
+    Process one or more Smart Intake files.
+    Each file is OCR'd and matched independently so mixed batches stay accurate
+    and callers can process one file per HTTP request (avoids nginx 120s 504s).
+
+    batch_identities: prior ID/passport identities from the same browser batch so
+    any other document containing the same person name inherits that client + company
+    (same form / same person filing).
+    Returns (payload_dict, http_status_or_None).
+    """
+    if not files_data or not isinstance(files_data, list):
+        return {'status': 'error', 'message': 'No files provided for intake'}, "400 Bad Request"
+
+    identities = []
+    for item in (batch_identities or []):
+        if isinstance(item, dict) and (item.get('full_name') or item.get('client_id')):
+            identities.append(dict(item))
+
+    file_results = []
+    filed_documents = []
+    filing_errors = []
+    last_client = None
+    last_company = None
+    last_match_meta = {}
+    last_ch_status = 'no_ch_match'
+    last_ch_msg = ''
+    last_dob = None
+    any_ocr = False
+    methods = []
+
+    for file_item in files_data:
+        fname = (file_item.get('file_name') or 'document.pdf').strip()
+        b64 = file_item.get('file_content_base64', '')
+        res = extract_document_text_and_metadata(fname, b64)
+        if 'error' in res:
+            filing_errors.append(f"{fname}: {res.get('error')}")
+            file_results.append({
+                'file_name': fname,
+                'filing_status': {'status': 'failed', 'message': res.get('error')},
+                'document_processing': {'status': 'failed'},
+                'companies_house_matching': {'status': 'failed', 'message': res.get('error')},
+            })
+            continue
+
+        extracted_client_name = res.get('extracted_name')
+        extracted_dob = res.get('extracted_dob')
+        extracted_company_name = res.get('extracted_company_name')
+        extracted_company_num = res.get('extracted_company_number')
+        extracted_email = res.get('extracted_email')
+        extracted_phone = res.get('extracted_phone')
+        extracted_nat = res.get('extracted_nationality')
+        cat = res.get('category') or 'Company Documents'
+        is_bank_statement = cat == 'Bank statement' or 'statement' in (fname or '').lower()
+        is_passport_doc = (
+            (res.get('doc_type') in ('Passport', 'ID Document'))
+            or (cat in ('ID Document', 'Passport'))
+        )
+        any_ocr = any_ocr or (res.get('scan_method') == 'ocr')
+        methods.append(res.get('scan_method'))
+
+        linked_identity = None
+        linked_pts = 0
+        linked_reason = None
+        if extracted_client_name:
+            linked_identity, linked_pts, linked_reason = find_batch_identity_for_name(
+                extracted_client_name, identities
+            )
+            # Any non-ID supporting doc can also match a recent ID/passport in CRM
+            if not linked_identity and not is_passport_doc:
+                linked_identity, linked_pts, linked_reason = find_recent_passport_identity_for_name(
+                    extracted_client_name
+                )
+        if not linked_identity and identities:
+            text_blob = ' '.join([
+                fname,
+                res.get('text_preview') or '',
+                extracted_company_name or '',
+            ])
+            linked_identity, linked_pts, linked_reason = find_identity_mentioned_in_text(
+                text_blob, identities
+            )
+            if linked_identity and not extracted_client_name:
+                extracted_client_name = linked_identity.get('full_name')
+
+        # Prefer the ID/passport identity's stronger DOB/nationality when names match.
+        if linked_identity:
+            if not extracted_dob and linked_identity.get('dob'):
+                extracted_dob = linked_identity.get('dob')
+            if not extracted_nat and linked_identity.get('nationality'):
+                extracted_nat = linked_identity.get('nationality')
+
+        preferred_client_id = None
+        if linked_identity and linked_identity.get('client_id'):
+            preferred_client_id = linked_identity.get('client_id')
+
+        if preferred_client_id:
+            client_user = query_db("SELECT * FROM users WHERE id = ?;", (preferred_client_id,), one=True)
+            if not client_user:
+                client_user = ensure_smart_intake_client(
+                    extracted_name=extracted_client_name or linked_identity.get('full_name'),
+                    extracted_email=extracted_email,
+                    extracted_phone=extracted_phone,
+                )
+        else:
+            client_user = ensure_smart_intake_client(
+                extracted_name=extracted_client_name,
+                extracted_email=extracted_email,
+                extracted_phone=extracted_phone,
+            )
+        if not client_user or not client_user.get('id'):
+            filing_errors.append(f"{fname}: could not create client profile")
+            file_results.append({
+                'file_name': fname,
+                'filing_status': {'status': 'failed', 'message': 'Could not create client profile'},
+                'document_processing': {
+                    'status': 'success',
+                    'doc_detected': res.get('doc_type') or res.get('category'),
+                    'extracted_name': extracted_client_name,
+                    'extracted_dob': extracted_dob,
+                    'passport_number': res.get('extracted_passport_num'),
+                    'nationality': extracted_nat,
+                    'extraction_quality': res.get('extraction_quality') or {},
+                    'text_preview': res.get('text_preview') or '',
+                },
+                'companies_house_matching': {'status': 'failed', 'message': 'Client profile missing'},
+            })
+            continue
+
+        client_id = client_user['id']
+        name_detected = bool(extracted_client_name)
+        last_client = client_user
+        last_dob = extracted_dob or last_dob
+
+        company_obj = None
+        ch_status = 'no_ch_match'
+        ch_msg = 'No Companies House match found for this person. Document processing succeeded.'
+        ch_candidates = []
+        match_meta = {
+            'confidence': 0,
+            'confidence_label': 'LOW',
+            'score': 0,
+            'reasons': [],
+            'score_gap': 0,
+            'top_candidates': [],
+            'extracted_name': extracted_client_name,
+            'extracted_dob': extracted_dob,
+            'extracted_nationality': extracted_nat,
+        }
+
+        id_only_intake = is_passport_doc and not (extracted_company_num or extracted_company_name)
+
+        # Same person / same form: reuse company already matched to the ID/passport name.
+        # Keep explicit company number/name on the document as higher priority below.
+        if linked_identity and linked_identity.get('company_id') and not (
+            extracted_company_num or extracted_company_name
+        ):
+            company_obj = query_db(
+                "SELECT * FROM companies WHERE id = ?;",
+                (linked_identity['company_id'],),
+                one=True,
+            )
+            if company_obj:
+                ch_status = 'matched'
+                ch_msg = (
+                    f"Same person form — name matched ID/passport "
+                    f"({linked_identity.get('full_name') or extracted_client_name}) "
+                    f"→ {company_obj.get('name')}"
+                )
+                match_meta = {
+                    'confidence': max(80, int(linked_identity.get('confidence') or linked_pts or 80)),
+                    'confidence_label': 'HIGH',
+                    'score': max(80, int(linked_identity.get('confidence') or linked_pts or 80)),
+                    'reasons': [
+                        f"Document name matched ID/passport identity ({linked_reason or 'name match'})",
+                        f"Filed on same form/company: {company_obj.get('name')}",
+                    ],
+                    'score_gap': 80,
+                    'top_candidates': [{
+                        'name': company_obj.get('name'),
+                        'company_number': company_obj.get('company_number'),
+                        'score': max(80, int(linked_identity.get('confidence') or 80)),
+                        'confidence_label': 'HIGH',
+                        'reasons': ['ID/passport ↔ document name match'],
+                    }],
+                    'extracted_name': extracted_client_name,
+                    'extracted_dob': extracted_dob,
+                    'extracted_nationality': extracted_nat,
+                    'linked_from': linked_identity.get('source') or 'batch_id',
+                    'linked_document_id': linked_identity.get('source_document_id'),
+                    'same_person_form': True,
+                }
+
+        if not company_obj and (extracted_company_num or extracted_company_name):
+            company_obj = auto_import_companies_house_from_intake(
+                extracted_company_name,
+                extracted_company_num,
+                client_user_id=client_id,
+            )
+            if company_obj:
+                ch_status = 'matched'
+                ch_msg = f"Automatically matched {company_obj['name']} (#{company_obj.get('company_number', '')})"
+                reasons = ['Company name/number present on document']
+                if linked_identity:
+                    reasons.insert(0, f"Same person as ID/passport ({linked_identity.get('full_name')})")
+                match_meta = {
+                    'confidence': 100,
+                    'confidence_label': 'HIGH',
+                    'score': 100,
+                    'reasons': reasons,
+                    'score_gap': 100,
+                    'top_candidates': [{
+                        'name': company_obj.get('name'),
+                        'company_number': company_obj.get('company_number'),
+                        'score': 100,
+                        'confidence_label': 'HIGH',
+                        'reasons': reasons,
+                    }],
+                    'extracted_name': extracted_client_name,
+                    'extracted_dob': extracted_dob,
+                    'extracted_nationality': extracted_nat,
+                    'same_person_form': bool(linked_identity),
+                }
+            else:
+                ch_status = 'no_ch_match'
+                ch_msg = 'No Companies House match found for company name/number.'
+        elif not company_obj and extracted_client_name:
+            resolve_dob = extracted_dob or (linked_identity or {}).get('dob')
+            resolve_nat = extracted_nat or (linked_identity or {}).get('nationality')
+            company_obj, ch_status, ch_msg, ch_candidates, match_meta = resolve_intake_company_match(
+                client_id,
+                extracted_client_name,
+                extracted_dob=resolve_dob,
+                extracted_nationality=resolve_nat,
+                actor=user,
+            )
+            match_meta = match_meta or {}
+            match_meta['extracted_name'] = extracted_client_name
+            match_meta['extracted_dob'] = resolve_dob
+            match_meta['extracted_nationality'] = resolve_nat
+            if linked_identity:
+                reasons = list(match_meta.get('reasons') or [])
+                reasons.insert(0, f"Same person as ID/passport ({linked_reason or 'name match'})")
+                match_meta['reasons'] = reasons
+                match_meta['same_person_form'] = True
+        elif not company_obj and id_only_intake:
+            ch_status = 'not_applicable'
+            ch_msg = 'Passport/ID processed. Company left unassigned (no person name extracted).'
+
+        company_id = company_obj['id'] if company_obj else None
+        last_company = company_obj
+        last_match_meta = match_meta or {}
+        last_ch_status = ch_status
+        last_ch_msg = ch_msg
+
+        ext = res['ext']
+        file_bytes = res['file_bytes']
+        doc_type = res.get('doc_type', cat)
+        doc_id = None
+        store_err = None
+
+        target_path, store_err = store_client_document_file(client_id, None, ext, file_bytes)
+        if store_err or not target_path:
+            filing_errors.append(f"{fname}: {store_err or 'could not save file'}")
+        else:
+            file_size_str = format_document_size(len(file_bytes))
+            f_hash = res.get('file_hash') or hashlib.sha256(file_bytes).hexdigest()
+            stage_ts = json.dumps({'upload': time.time(), 'ocr': time.time(), 'ch': time.time()})
+            meta_json = json.dumps(match_meta)
+            overall_st = 'COMPLETED' if ch_status == 'matched' else (
+                'REVIEW_REQUIRED' if ch_status == 'review_required' else 'COMPLETED'
+            )
+            if ch_status == 'matched' and float((match_meta or {}).get('confidence') or 0) >= 75:
+                lifecycle = 'READY_FOR_APPROVAL'
+            elif ch_status in ('review_required', 'not_applicable'):
+                lifecycle = 'REVIEW_REQUIRED'
+            else:
+                lifecycle = 'READY_FOR_APPROVAL'
+            company_conf = float((match_meta or {}).get('confidence') or 0)
+            identity_conf = 90.0 if name_detected else 40.0
+            if linked_identity:
+                identity_conf = max(identity_conf, 85.0)
+            ocr_conf = float(((res.get('extraction_quality') or {}).get('score') or 70))
+            prior = find_document_by_file_hash(f_hash)
+            dup_conf = 0.0
+            if prior:
+                lifecycle = 'QUARANTINE'
+                dup_conf = 100.0
+                overall_st = 'QUARANTINE'
+            customer_conf = 95.0 if linked_identity else (80.0 if name_detected else 40.0)
+            doc_id = execute_db("""
+                INSERT INTO documents (
+                    user_id, company_id, name, category, file_path, file_type, file_size, status, uploaded_by, review_notes, client_visible, shared_at,
+                    file_hash, ocr_status, identity_status, crm_status, ch_status, overall_status, stage_timestamps_json, match_meta_json,
+                    lifecycle_status, is_posted, ocr_confidence, classification_confidence, identity_confidence,
+                    customer_match_confidence, company_match_confidence, duplicate_confidence,
+                    uploaded_at, processed_at, matched_at, uploaded_by_id, processed_by_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending Review', ?, 'Smart Document Intake', 0, NULL,
+                        ?, 'COMPLETED', 'COMPLETED', ?, ?, ?, ?, ?,
+                        ?, 0, ?, ?, ?, ?, ?, ?,
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?);
+            """, (
+                client_id, company_id, fname, cat, target_path,
+                DOCUMENT_TYPE_LABELS.get(ext, 'Document'), file_size_str, user['full_name'],
+                f_hash, 'MATCHED' if name_detected or linked_identity else 'UNASSIGNED', ch_status, overall_st, stage_ts, meta_json,
+                lifecycle,
+                ocr_conf, 85.0, identity_conf,
+                customer_conf, company_conf, dup_conf,
+                user['id'], user['id'],
+            ))
+            log_document_audit(
+                doc_id, 'AI', user['id'], user.get('full_name'), 'INTAKE_TRIAGED',
+                'CUSTOMER_UPLOADS', lifecycle, {
+                    'ch_status': ch_status,
+                    'company_match_confidence': company_conf,
+                    'duplicate_confidence': dup_conf,
+                    'linked_passport': bool(linked_identity),
+                    'linked_reason': linked_reason,
+                },
+            )
+            filed_documents.append({
+                'id': doc_id,
+                'name': fname,
+                'category': cat,
+                'file_size': file_size_str,
+                'scan_method': res.get('scan_method') or 'none',
+                'lifecycle_status': lifecycle,
+                'client_id': client_id,
+                'company_id': company_id,
+                'linked_passport': bool(linked_identity),
+            })
+
+            # Grow batch identity registry (passports first, also statements that resolve a company)
+            if extracted_client_name or (linked_identity and linked_identity.get('full_name')):
+                identity_record = {
+                    'full_name': extracted_client_name or linked_identity.get('full_name'),
+                    'dob': extracted_dob or (linked_identity or {}).get('dob'),
+                    'nationality': extracted_nat or (linked_identity or {}).get('nationality'),
+                    'client_id': client_id,
+                    'company_id': company_id,
+                    'company_name': company_obj.get('name') if company_obj else (linked_identity or {}).get('company_name'),
+                    'company_number': (
+                        (company_obj.get('company_number') or company_obj.get('companies_house_number'))
+                        if company_obj else (linked_identity or {}).get('company_number')
+                    ),
+                    'source_document_id': doc_id,
+                    'source': 'passport' if is_passport_doc else ('bank_statement' if is_bank_statement else 'document'),
+                    'confidence': match_meta.get('confidence') or linked_pts or 0,
+                }
+                # Replace weaker same-name identity; keep passport entries preferred.
+                replaced = False
+                for idx, existing in enumerate(identities):
+                    ok, pts, _ = intake_person_names_match(existing.get('full_name'), identity_record['full_name'])
+                    if ok:
+                        if is_passport_doc or not existing.get('company_id'):
+                            identities[idx] = {**existing, **{k: v for k, v in identity_record.items() if v}}
+                        elif identity_record.get('company_id') and not existing.get('company_id'):
+                            identities[idx] = {**existing, **{k: v for k, v in identity_record.items() if v}}
+                        replaced = True
+                        break
+                if not replaced:
+                    identities.append(identity_record)
+
+        file_results.append({
+            'file_name': fname,
+            'file_size': format_document_size(len(file_bytes)),
+            'doc_type': doc_type,
+            'scan_method': res.get('scan_method') or 'none',
+            'extraction_quality': res.get('extraction_quality') or {},
+            'text_preview': res.get('text_preview') or '',
+            'document_processing': {
+                'status': 'success',
+                'doc_detected': doc_type,
+                'extracted_name': extracted_client_name,
+                'extracted_dob': extracted_dob,
+                'passport_number': res.get('extracted_passport_num'),
+                'nationality': extracted_nat,
+                'extraction_quality': res.get('extraction_quality') or {},
+                'text_preview': res.get('text_preview') or '',
+                'linked_passport_name': (linked_identity or {}).get('full_name') if linked_identity else None,
+            },
+            'client_matching': {
+                'status': 'matched' if name_detected or linked_identity else 'unassigned',
+                'client_id': client_id,
+                'client_name': client_user.get('full_name') or 'Unassigned Document Intake',
+                'email': client_user.get('email'),
+                'linked_from_passport': bool(linked_identity),
+            },
+            'companies_house_matching': {
+                'status': ch_status,
+                'company_name': company_obj['name'] if company_obj else None,
+                'company_number': (
+                    company_obj.get('company_number') or company_obj.get('companies_house_number')
+                    if company_obj else None
+                ),
+                'message': ch_msg,
+                'candidates': ch_candidates,
+                'confidence': match_meta.get('confidence'),
+                'confidence_label': match_meta.get('confidence_label'),
+                'score': match_meta.get('score'),
+                'score_gap': match_meta.get('score_gap'),
+                'reasons': match_meta.get('reasons') or [],
+                'top_candidates': match_meta.get('top_candidates') or ch_candidates or [],
+                'linked_from_passport': bool(linked_identity),
+            },
+            'filing_status': {
+                'status': 'auto_filed' if doc_id else 'failed',
+                'doc_id': doc_id,
+                'message': (
+                    f"Auto-filed to Client #{client_id}" if doc_id
+                    else (store_err or 'Filing failed')
+                ),
+            },
+        })
+
+    if not filed_documents and not file_results:
+        return {'status': 'error', 'message': 'Could not parse uploaded files'}, "400 Bad Request"
+
+    if not filed_documents:
+        detail = '; '.join(filing_errors[:3]) if filing_errors else 'Unknown storage error'
+        return {
+            'status': 'error',
+            'message': f'Scanned the file(s) but could not save them to storage: {detail}',
+            'file_results': file_results,
+            'filed_documents': [],
+            'batch_identities': identities,
+        }, "500 Internal Server Error"
+
+    if filed_documents:
+        log_activity(
+            user,
+            'SMART_INTAKE',
+            'documents',
+            str(filed_documents[0]['id']),
+            f"Processed Smart Intake ({len(filed_documents)} files)",
+        )
+
+    client_user = last_client or {}
+    company_obj = last_company
+    match_meta = last_match_meta or {}
+    missing_fields = []
+    if 'brixen-pending.local' in (client_user.get('email') or ''):
+        missing_fields.append('Email Address')
+    if client_user and not client_user.get('phone'):
+        missing_fields.append('Phone Number')
+
+    msg = f"Smart Intake successfully processed {len(filed_documents)} document(s)."
+    if filing_errors:
+        msg += f" {len(filing_errors)} file(s) failed."
+    linked_count = sum(1 for fr in file_results if (fr.get('companies_house_matching') or {}).get('linked_from_passport'))
+    if linked_count:
+        msg += f" {linked_count} filed on the same person form via ID/passport name match."
+
+    return {
+        'status': 'success',
+        'message': msg,
+        'scan': {'ocr_used': any_ocr, 'methods': methods},
+        'client': {
+            'id': client_user.get('id'),
+            'full_name': client_user.get('full_name') or 'Unassigned Document Intake',
+            'dob': last_dob or 'Not detected',
+            'email': client_user.get('email'),
+        },
+        'company': {
+            'id': company_obj['id'] if company_obj else None,
+            'name': company_obj['name'] if company_obj else None,
+            'company_number': (
+                company_obj.get('companies_house_number') or company_obj.get('company_number')
+                if company_obj else None
+            ),
+            'ch_status': last_ch_status,
+            'ch_message': last_ch_msg,
+            'confidence': match_meta.get('confidence'),
+            'confidence_label': match_meta.get('confidence_label'),
+            'match_score': match_meta.get('score'),
+            'match_reasons': match_meta.get('reasons') or [],
+            'top_candidates': match_meta.get('top_candidates') or [],
+        },
+        'missing_fields': missing_fields,
+        'file_results': file_results,
+        'filed_documents': filed_documents,
+        'batch_identities': identities,
+    }, None
 
 
 def auto_import_companies_house_from_intake(company_name, company_number, client_user_id=None):
@@ -5431,8 +7671,8 @@ def auto_import_companies_house_from_intake(company_name, company_number, client
                     execute_db("UPDATE companies SET user_id = ? WHERE id = ?;", (client_user_id, existing_by_name['id']))
                 return query_db("SELECT * FROM companies WHERE id = ?;", (existing_by_name['id'],), one=True)
             comp_id = execute_db("""
-                INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, created_at, updated_at)
-                VALUES (?, ?, ?, 'Active', DATE('now'), 'Director', 'United Kingdom', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+                INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, created_at)
+                VALUES (?, ?, ?, 'Active', DATE('now'), 'Director', 'United Kingdom', CURRENT_TIMESTAMP);
             """, (uid, company_name.strip(), f"REG-{secrets.token_hex(4).upper()}"))
             return query_db("SELECT * FROM companies WHERE id = ?;", (comp_id,), one=True)
         return None
@@ -5446,8 +7686,8 @@ def auto_import_companies_house_from_intake(company_name, company_number, client
     profile, err = fetch_companies_house_profile(ch_num)
     if profile:
         comp_id = execute_db("""
-            INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 'Director', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+            INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, created_at)
+            VALUES (?, ?, ?, ?, ?, 'Director', ?, CURRENT_TIMESTAMP);
         """, (
             uid,
             profile.get('name') or company_name or 'Companies House Entity',
@@ -5460,8 +7700,8 @@ def auto_import_companies_house_from_intake(company_name, company_number, client
         return query_db("SELECT * FROM companies WHERE id = ?;", (comp_id,), one=True)
         
     comp_id = execute_db("""
-        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, created_at, updated_at)
-        VALUES (?, ?, ?, 'Active', DATE('now'), 'Director', 'United Kingdom', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, created_at)
+        VALUES (?, ?, ?, 'Active', DATE('now'), 'Director', 'United Kingdom', CURRENT_TIMESTAMP);
     """, (uid, company_name or f"Company #{ch_num}", ch_num))
     return query_db("SELECT * FROM companies WHERE id = ?;", (comp_id,), one=True)
 
@@ -12420,13 +14660,49 @@ def application(environ, start_response):
         if store_err:
             return json_response(start_response, {'status': 'error', 'message': store_err}, "400 Bad Request")
         file_size_str = format_document_size(len(file_bytes))
-            
+        file_hash = hashlib.sha256(file_bytes).hexdigest()
+        triage = triage_uploaded_document(
+            file_bytes, upload_filename or doc_name, user['id'],
+            client_id=user['id'], actor=user, run_company_match=True,
+        )
+        resolved_company_id = company_id or triage.get('company_id')
+        lifecycle = triage.get('lifecycle_status') or 'REVIEW_REQUIRED'
         doc_id = execute_db("""
-            INSERT INTO documents (user_id, company_id, order_id, name, category, file_path, file_type, file_size, status, uploaded_by, review_notes, client_visible)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1);
-        """, (user['id'], company_id, order_id, doc_name, category, target_path, DOCUMENT_TYPE_LABELS.get(ext, 'Document'), file_size_str, 'Pending Review', user['full_name'], 'Awaiting compliance officer audit.'))
-        
-        log_activity(user, 'DOCUMENT_UPLOAD', 'documents', str(doc_id), f"Uploaded document {doc_name}")
+            INSERT INTO documents (
+                user_id, company_id, order_id, name, category, file_path, file_type, file_size,
+                status, uploaded_by, review_notes, client_visible,
+                file_hash, lifecycle_status, is_posted,
+                ocr_confidence, classification_confidence, identity_confidence,
+                customer_match_confidence, company_match_confidence, duplicate_confidence,
+                uploaded_at, processed_at, uploaded_by_id, processed_by_id, match_meta_json, overall_status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending Review', 'Customer Upload', ?, 0,
+                    ?, ?, 0, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?, ?, ?);
+        """, (
+            user['id'], resolved_company_id, order_id, doc_name,
+            triage.get('category') or category, target_path,
+            DOCUMENT_TYPE_LABELS.get(ext, 'Document'), file_size_str,
+            triage.get('review_notes') or 'Awaiting staff approval.',
+            file_hash, lifecycle,
+            float(triage.get('ocr_confidence') or 0),
+            float(triage.get('classification_confidence') or 0),
+            float(triage.get('identity_confidence') or 0),
+            float(triage.get('customer_match_confidence') or 0),
+            float(triage.get('company_match_confidence') or 0),
+            float(triage.get('duplicate_confidence') or 0),
+            user['id'], user['id'],
+            json.dumps(triage.get('match_meta') or {}),
+            lifecycle,
+        ))
+        log_document_audit(
+            doc_id, 'AI', user['id'], user['full_name'], 'CUSTOMER_UPLOAD_TRIAGED',
+            'CUSTOMER_UPLOADS', lifecycle, {
+                'matching_evidence': triage.get('matching_evidence'),
+                'conflicting_evidence': triage.get('conflicting_evidence'),
+                'quarantine_reason': triage.get('quarantine_reason'),
+            },
+        )
+        log_activity(user, 'DOCUMENT_UPLOAD', 'documents', str(doc_id), f"Uploaded document {doc_name} → {lifecycle}")
         notify_client(
             user,
             'Document uploaded',
@@ -12438,8 +14714,13 @@ def application(environ, start_response):
             detail_title='Document',
             detail_value=doc_name,
         )
-        
-        return json_response(start_response, {'status': 'success', 'message': 'Document uploaded successfully and queued for review.', 'document_id': doc_id})
+
+        return json_response(start_response, {
+            'status': 'success',
+            'message': 'Document uploaded successfully and queued for review.',
+            'document_id': doc_id,
+            'lifecycle_status': lifecycle,
+        })
 
 
 
@@ -13466,15 +15747,42 @@ def application(environ, start_response):
                 if cv_val is False or cv_val == 0 or str(cv_val).lower() in ('0', 'false', 'off', 'no'):
                     client_visible_flag = 0
             review_notes = (data.get('review_notes') or '').strip() or ('Delivered to client portal' if client_visible_flag else 'Internal staff document')
+            # Staff intentional delivery posts immediately; customer-sourced categories stay unposted.
+            staff_post_now = category not in ('Checkout Upload',) and (
+                data.get('post_immediately') in (True, 1, '1', 'true', 'True')
+                or category in ('Posted Documents', 'Order Documents', 'Certificate of Incorporation',
+                                'Memorandum & Articles', 'Share Certificate')
+                or client_visible_flag == 1
+            )
+            lifecycle = 'POSTED_DOCUMENTS' if staff_post_now else 'READY_FOR_APPROVAL'
+            is_posted = 1 if staff_post_now else 0
+            file_hash = hashlib.sha256(file_bytes).hexdigest()
             doc_id = execute_db("""
-                INSERT INTO documents (user_id, company_id, order_id, name, category, file_path, file_type, file_size, status, uploaded_by, review_notes, client_visible, shared_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Approved', ?, ?, ?, ?);
+                INSERT INTO documents (
+                    user_id, company_id, order_id, name, category, file_path, file_type, file_size,
+                    status, uploaded_by, review_notes, client_visible, shared_at,
+                    file_hash, lifecycle_status, is_posted, uploaded_at, posted_at, uploaded_by_id, posted_by_id,
+                    ocr_confidence, classification_confidence, identity_confidence,
+                    customer_match_confidence, company_match_confidence, overall_status
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Approved', ?, ?, ?, ?,
+                        ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?,
+                        100, 100, 100, 100, 100, ?);
             """, (
                 target_client['id'], resolved_company_id, order_id, doc_name, category, target_path,
                 DOCUMENT_TYPE_LABELS.get(ext, 'Document'), file_size_str, user['full_name'], review_notes,
                 client_visible_flag,
-                (datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') if client_visible_flag == 1 else None)
+                (datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') if client_visible_flag == 1 else None),
+                file_hash, lifecycle, is_posted,
+                (datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') if is_posted else None),
+                user['id'], (user['id'] if is_posted else None),
+                lifecycle,
             ))
+            if is_posted:
+                log_document_audit(
+                    doc_id, 'HUMAN', user['id'], user['full_name'], 'STAFF_POSTED',
+                    None, 'POSTED_DOCUMENTS', {'category': category},
+                )
             log_activity(user, 'DOCUMENT_UPLOAD', 'documents', str(doc_id), f"Uploaded document {doc_name} for client #{target_client['id']} (client_visible={client_visible_flag})")
             
             notification_created = False
@@ -13546,106 +15854,377 @@ def application(environ, start_response):
         denied = require_permission(start_response, user, 'documents.upload')
         if denied:
             return denied
-        data = parse_body(environ)
-        files_data = data.get('files') or []
-        if not files_data or not isinstance(files_data, list):
-            return json_response(start_response, {'status': 'error', 'message': 'No files provided for intake'}, "400 Bad Request")
+        try:
+            data = parse_body(environ)
+            files_data = data.get('files') or []
+            batch_identities = data.get('batch_identities') or []
+            payload, err_status = process_smart_intake_files(
+                files_data, user, batch_identities=batch_identities,
+            )
+            if err_status:
+                return json_response(start_response, payload, err_status)
+            return json_response(start_response, payload)
+        except Exception as err:
+            return json_response(start_response, {
+                'status': 'error',
+                'message': f'Smart intake failed: {err}',
+            }, "500 Internal Server Error")
 
-        extracted_client_name = None
-        extracted_dob = None
-        extracted_company_name = None
-        extracted_company_num = None
-        
-        parsed_files = []
-        for file_item in files_data:
-            fname = (file_item.get('file_name') or 'document.pdf').strip()
-            b64 = file_item.get('file_content_base64', '')
-            res = extract_document_text_and_metadata(fname, b64)
-            if 'error' not in res:
-                parsed_files.append(res)
-                if not extracted_client_name and res.get('extracted_name'):
-                    extracted_client_name = res['extracted_name']
-                if not extracted_dob and res.get('extracted_dob'):
-                    extracted_dob = res['extracted_dob']
-                if not extracted_company_name and res.get('extracted_company_name'):
-                    extracted_company_name = res['extracted_company_name']
-                if not extracted_company_num and res.get('extracted_company_number'):
-                    extracted_company_num = res['extracted_company_number']
+    if path == '/api/admin/documents/intake/link-company' and method == 'POST':
+        denied = require_permission(start_response, user, 'documents.upload')
+        if denied:
+            return denied
+        try:
+            data = parse_body(environ)
+            client_id = data.get('client_id')
+            company_id = data.get('company_id')
+            company_number = normalize_company_number(data.get('company_number'))
+            document_ids = data.get('document_ids') or []
+            if not client_id:
+                return json_response(start_response, {
+                    'status': 'error',
+                    'message': 'client_id is required',
+                }, "400 Bad Request")
+            company_obj = None
+            if company_id:
+                company_obj = query_db("SELECT * FROM companies WHERE id = ?;", (int(company_id),), one=True)
+                if company_obj and client_id and not company_obj.get('user_id'):
+                    execute_db("UPDATE companies SET user_id = ? WHERE id = ?;", (int(client_id), company_obj['id']))
+                    company_obj = query_db("SELECT * FROM companies WHERE id = ?;", (company_obj['id'],), one=True)
+            if not company_obj:
+                if not company_number:
+                    return json_response(start_response, {
+                        'status': 'error',
+                        'message': 'company_number or company_id is required',
+                    }, "400 Bad Request")
+                company_obj = auto_import_companies_house_from_intake(
+                    data.get('company_name'),
+                    company_number,
+                    client_user_id=int(client_id),
+                )
+            if not company_obj:
+                return json_response(start_response, {
+                    'status': 'error',
+                    'message': f'Could not import Companies House company #{company_number}',
+                }, "404 Not Found")
+            linked = 0
+            for raw_id in document_ids:
+                try:
+                    doc_id = int(raw_id)
+                except (TypeError, ValueError):
+                    continue
+                row = query_db("SELECT id, user_id FROM documents WHERE id = ?;", (doc_id,), one=True)
+                if not row or int(row['user_id']) != int(client_id):
+                    continue
+                execute_db("UPDATE documents SET company_id = ? WHERE id = ?;", (company_obj['id'], doc_id))
+                linked += 1
+            display_num = (
+                company_obj.get('companies_house_number')
+                or company_obj.get('company_number')
+                or company_number
+                or ''
+            )
+            log_activity(
+                user,
+                'SMART_INTAKE_LINK',
+                'companies',
+                str(company_obj['id']),
+                f"Linked intake docs to company #{company_obj['id']} for client #{client_id}",
+            )
+            return json_response(start_response, {
+                'status': 'success',
+                'message': f"Linked to {company_obj.get('name')} (#{display_num})",
+                'company': {
+                    'id': company_obj['id'],
+                    'name': company_obj.get('name'),
+                    'company_number': display_num,
+                },
+                'documents_linked': linked,
+            })
+        except Exception as err:
+            return json_response(start_response, {
+                'status': 'error',
+                'message': f'Could not link company: {err}',
+            }, "500 Internal Server Error")
 
-        if not parsed_files:
-            return json_response(start_response, {'status': 'error', 'message': 'Could not parse uploaded files'}, "400 Bad Request")
+    # Document Lifecycle & AI Triage Approval Endpoints
+    if path == '/api/admin/documents/lifecycle' and method == 'GET':
+        denied = require_permission(start_response, user, 'documents.view')
+        if denied:
+            return denied
+        qs = urllib.parse.parse_qs(environ.get('QUERY_STRING', ''))
+        stage = (qs.get('stage') or [''])[0].strip().upper()
 
-        client_user = None
-        if extracted_client_name:
-            client_user = query_db("SELECT * FROM users WHERE role = 'CLIENT' AND lower(full_name) = lower(?);", (extracted_client_name,), one=True)
-            
-        if not client_user and extracted_client_name:
-            clean_username = re.sub(r'[^a-z0-9]', '.', extracted_client_name.lower().strip())
-            provisional_email = f"{clean_username}@brixen-pending.local"
-            user_id = execute_db("""
-                INSERT INTO users (full_name, email, password_hash, role, status, created_at)
-                VALUES (?, ?, ?, 'CLIENT', 'Active', CURRENT_TIMESTAMP);
-            """, (extracted_client_name, provisional_email, unusable_password_hash()))
-            client_user = query_db("SELECT * FROM users WHERE id = ?;", (user_id,), one=True)
+        valid_stages = ('CUSTOMER_UPLOADS', 'PROCESSING', 'REVIEW_REQUIRED', 'READY_FOR_APPROVAL', 'POSTED_DOCUMENTS', 'QUARANTINE')
+        if stage and stage in valid_stages:
+            if stage == 'POSTED_DOCUMENTS':
+                docs = query_db("SELECT d.*, u.full_name as client_name, u.email as client_email, c.name as company_name, c.company_number FROM documents d LEFT JOIN users u ON d.user_id = u.id LEFT JOIN companies c ON d.company_id = c.id WHERE d.is_posted = 1 ORDER BY d.id DESC LIMIT 200;")
+            else:
+                docs = query_db("SELECT d.*, u.full_name as client_name, u.email as client_email, c.name as company_name, c.company_number FROM documents d LEFT JOIN users u ON d.user_id = u.id LEFT JOIN companies c ON d.company_id = c.id WHERE d.lifecycle_status = ? AND COALESCE(d.is_posted, 0) = 0 ORDER BY d.id DESC LIMIT 200;", (stage,))
+        else:
+            docs = query_db("SELECT d.*, u.full_name as client_name, u.email as client_email, c.name as company_name, c.company_number FROM documents d LEFT JOIN users u ON d.user_id = u.id LEFT JOIN companies c ON d.company_id = c.id ORDER BY d.id DESC LIMIT 200;")
 
-        client_id = client_user['id'] if client_user else None
-
-        company_obj = None
-        if extracted_company_num or extracted_company_name:
-            company_obj = auto_import_companies_house_from_intake(extracted_company_name, extracted_company_num, client_user_id=client_id)
-
-        company_id = company_obj['id'] if company_obj else None
-
-        filed_documents = []
-        for pf in parsed_files:
-            ext = pf['ext']
-            file_bytes = pf['file_bytes']
-            fname = pf['filename']
-            cat = pf['category']
-            
-            target_path, store_err = store_client_document_file(client_id, None, ext, file_bytes)
-            if not store_err and target_path:
-                file_size_str = format_document_size(len(file_bytes))
-                doc_id = execute_db("""
-                    INSERT INTO documents (user_id, company_id, name, category, file_path, file_type, file_size, status, uploaded_by, review_notes, client_visible, shared_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 'Approved', ?, 'Smart Document Intake', 0, NULL);
-                """, (
-                    client_id, company_id, fname, cat, target_path,
-                    DOCUMENT_TYPE_LABELS.get(ext, 'Document'), file_size_str, user['full_name']
-                ))
-                filed_documents.append({
-                    'id': doc_id,
-                    'name': fname,
-                    'category': cat,
-                    'file_size': file_size_str
-                })
-
-        log_activity(user, 'SMART_INTAKE', 'documents', str(filed_documents[0]['id']) if filed_documents else '', f"Processed Smart Intake ({len(filed_documents)} files) for client #{client_id}")
-
-        missing_fields = []
-        if client_user:
-            if 'brixen-pending.local' in (client_user.get('email') or ''):
-                missing_fields.append('Email Address')
-            if not client_user.get('phone'):
-                missing_fields.append('Phone Number')
+        counts = {
+            'CUSTOMER_UPLOADS': query_db("SELECT COUNT(*) as c FROM documents WHERE lifecycle_status = 'CUSTOMER_UPLOADS' AND COALESCE(is_posted, 0) = 0;", one=True)['c'],
+            'PROCESSING': query_db("SELECT COUNT(*) as c FROM documents WHERE lifecycle_status = 'PROCESSING' AND COALESCE(is_posted, 0) = 0;", one=True)['c'],
+            'REVIEW_REQUIRED': query_db("SELECT COUNT(*) as c FROM documents WHERE lifecycle_status = 'REVIEW_REQUIRED' AND COALESCE(is_posted, 0) = 0;", one=True)['c'],
+            'READY_FOR_APPROVAL': query_db("SELECT COUNT(*) as c FROM documents WHERE lifecycle_status = 'READY_FOR_APPROVAL' AND COALESCE(is_posted, 0) = 0;", one=True)['c'],
+            'POSTED_DOCUMENTS': query_db("SELECT COUNT(*) as c FROM documents WHERE is_posted = 1 OR lifecycle_status = 'POSTED_DOCUMENTS';", one=True)['c'],
+            'QUARANTINE': query_db("SELECT COUNT(*) as c FROM documents WHERE lifecycle_status = 'QUARANTINE';", one=True)['c'],
+        }
 
         return json_response(start_response, {
             'status': 'success',
-            'message': f"Smart Intake successfully processed {len(filed_documents)} document(s).",
-            'client': {
-                'id': client_user['id'] if client_user else None,
-                'full_name': client_user['full_name'] if client_user else (extracted_client_name or 'Unassigned'),
-                'dob': extracted_dob or 'Not detected',
-                'email': client_user.get('email') if client_user else None,
-            },
-            'company': {
-                'id': company_obj['id'] if company_obj else None,
-                'name': company_obj['name'] if company_obj else (extracted_company_name or 'No CH Match'),
-                'company_number': company_obj.get('companies_house_number') or company_obj.get('company_number') if company_obj else extracted_company_num,
-            },
-            'missing_fields': missing_fields,
-            'filed_documents': filed_documents
+            'counts': counts,
+            'documents': [public_document(d) for d in (docs or [])]
         })
+
+    m_appr = re.match(r'^/api/admin/documents/(\d+)/approve$', path)
+    if m_appr and method == 'POST':
+        denied = require_permission(start_response, user, 'documents.upload')
+        if denied:
+            return denied
+        doc_id = int(m_appr.group(1))
+        doc = query_db("SELECT * FROM documents WHERE id = ?;", (doc_id,), one=True)
+        if not doc:
+            return json_response(start_response, {'status': 'error', 'message': 'Document not found'}, "404 Not Found")
+
+        conn = get_db()
+        try:
+            conn.execute("""
+                UPDATE documents SET
+                    lifecycle_status = 'POSTED_DOCUMENTS',
+                    is_posted = 1,
+                    status = 'Approved',
+                    approved_at = CURRENT_TIMESTAMP,
+                    approved_by_id = ?,
+                    posted_at = CURRENT_TIMESTAMP,
+                    posted_by_id = ?
+                WHERE id = ?;
+            """, (user['id'], user['id'], doc_id))
+            conn.execute("""
+                INSERT INTO document_audit_log (document_id, actor_type, actor_id, actor_name, action, previous_state, new_state, reason_evidence_json)
+                VALUES (?, 'HUMAN', ?, ?, 'POST_APPROVED', ?, 'POSTED_DOCUMENTS', ?);
+            """, (doc_id, user['id'], user['full_name'], doc.get('lifecycle_status'), json.dumps({'approved_by': user['full_name']})))
+            conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            conn.close()
+            return json_response(start_response, {'status': 'error', 'message': f'Atomic posting failed: {exc}'}, "500 Internal Server Error")
+        finally:
+            conn.close()
+
+        updated = query_db("SELECT d.*, u.full_name as client_name, c.name as company_name FROM documents d LEFT JOIN users u ON d.user_id = u.id LEFT JOIN companies c ON d.company_id = c.id WHERE d.id = ?;", (doc_id,), one=True)
+        return json_response(start_response, {
+            'status': 'success',
+            'message': f"Document '{doc['name']}' approved and posted atomically.",
+            'document': public_document(updated)
+        })
+
+    m_rej = re.match(r'^/api/admin/documents/(\d+)/reject$', path)
+    if m_rej and method == 'POST':
+        denied = require_permission(start_response, user, 'documents.upload')
+        if denied:
+            return denied
+        doc_id = int(m_rej.group(1))
+        doc = query_db("SELECT * FROM documents WHERE id = ?;", (doc_id,), one=True)
+        if not doc:
+            return json_response(start_response, {'status': 'error', 'message': 'Document not found'}, "404 Not Found")
+        body = parse_body(environ) or {}
+        reason = (body.get('reason') or 'Rejected by staff').strip()
+        execute_db(
+            "UPDATE documents SET lifecycle_status = 'QUARANTINE', is_posted = 0, status = 'Rejected', review_notes = ? WHERE id = ?;",
+            (reason, doc_id),
+        )
+        log_document_audit(
+            doc_id, 'HUMAN', user['id'], user['full_name'], 'REJECT_QUARANTINE',
+            doc.get('lifecycle_status'), 'QUARANTINE', {'reason': reason},
+        )
+        return json_response(start_response, {'status': 'success', 'message': 'Document moved to Quarantine.'})
+
+    m_reassign = re.match(r'^/api/admin/documents/(\d+)/reassign$', path)
+    if m_reassign and method == 'POST':
+        denied = require_permission(start_response, user, 'documents.upload')
+        if denied:
+            return denied
+        doc_id = int(m_reassign.group(1))
+        doc = query_db("SELECT * FROM documents WHERE id = ?;", (doc_id,), one=True)
+        if not doc:
+            return json_response(start_response, {'status': 'error', 'message': 'Document not found'}, "404 Not Found")
+        data = parse_body(environ) or {}
+        new_client_id = optional_record_id(data.get('client_id'))
+        new_company_id = optional_record_id(data.get('company_id'))
+        new_category = (data.get('category') or '').strip() or None
+        prev = doc.get('lifecycle_status')
+        if new_client_id:
+            client_ok = query_db("SELECT id FROM users WHERE id = ?;", (new_client_id,), one=True)
+            if not client_ok:
+                return json_response(start_response, {'status': 'error', 'message': 'Client not found'}, "404 Not Found")
+        if new_company_id:
+            company_ok = query_db("SELECT id, user_id FROM companies WHERE id = ?;", (new_company_id,), one=True)
+            if not company_ok:
+                return json_response(start_response, {'status': 'error', 'message': 'Company not found'}, "404 Not Found")
+            if new_client_id and int(company_ok['user_id']) != int(new_client_id):
+                return json_response(start_response, {'status': 'error', 'message': 'Company does not belong to client'}, "400 Bad Request")
+        execute_db(
+            """
+            UPDATE documents SET
+                user_id = COALESCE(?, user_id),
+                company_id = COALESCE(?, company_id),
+                category = COALESCE(?, category),
+                lifecycle_status = 'READY_FOR_APPROVAL',
+                is_posted = 0,
+                matched_at = CURRENT_TIMESTAMP,
+                matched_by_id = ?,
+                review_notes = COALESCE(?, review_notes)
+            WHERE id = ?;
+            """,
+            (
+                new_client_id, new_company_id, new_category, user['id'],
+                (data.get('review_notes') or None), doc_id,
+            ),
+        )
+        log_document_audit(
+            doc_id, 'HUMAN', user['id'], user['full_name'], 'REASSIGNED',
+            prev, 'READY_FOR_APPROVAL', {
+                'client_id': new_client_id,
+                'company_id': new_company_id,
+                'category': new_category,
+            },
+        )
+        # Optional reprocess OCR match
+        if data.get('reprocess'):
+            file_path = doc.get('file_path')
+            abs_path = file_path if os.path.isabs(file_path or '') else os.path.join(BASE_DIR, file_path or '')
+            if abs_path and os.path.isfile(abs_path):
+                with open(abs_path, 'rb') as fh:
+                    fb = fh.read()
+                triage = triage_uploaded_document(
+                    fb, doc.get('name') or 'document', doc.get('user_id'),
+                    client_id=new_client_id or doc.get('user_id'),
+                    actor=user, run_company_match=True,
+                )
+                if new_company_id:
+                    triage['company_id'] = new_company_id
+                apply_triage_to_document_row(doc_id, triage, actor=user, previous_state='READY_FOR_APPROVAL')
+        updated = query_db(
+            "SELECT d.*, u.full_name as client_name, c.name as company_name FROM documents d LEFT JOIN users u ON d.user_id = u.id LEFT JOIN companies c ON d.company_id = c.id WHERE d.id = ?;",
+            (doc_id,), one=True,
+        )
+        return json_response(start_response, {
+            'status': 'success',
+            'message': 'Document reassigned.',
+            'document': public_document(updated),
+        })
+
+    if path == '/api/admin/documents/bulk-approve' and method == 'POST':
+        denied = require_permission(start_response, user, 'documents.upload')
+        if denied:
+            return denied
+        data = parse_body(environ)
+        doc_ids = data.get('document_ids') or []
+        override = bool(data.get('override_review_required'))
+        if not doc_ids:
+            return json_response(start_response, {'status': 'error', 'message': 'No document_ids provided'}, "400 Bad Request")
+
+        job_id = f"job_{uuid.uuid4().hex[:12]}"
+
+        def run_bulk_approval_job():
+            approved = 0
+            failed = 0
+            skipped = 0
+            errors = []
+            for did in doc_ids:
+                d = query_db("SELECT * FROM documents WHERE id = ?;", (did,), one=True)
+                if not d:
+                    skipped += 1
+                    continue
+                # Default: ONLY READY_FOR_APPROVAL. Override required for anything else.
+                if d.get('lifecycle_status') == 'READY_FOR_APPROVAL' or (
+                    override and d.get('lifecycle_status') in (
+                        'REVIEW_REQUIRED', 'CUSTOMER_UPLOADS', 'PROCESSING', 'READY_FOR_APPROVAL'
+                    )
+                ):
+                    conn = get_db()
+                    try:
+                        conn.execute(
+                            """
+                            UPDATE documents SET lifecycle_status = 'POSTED_DOCUMENTS', is_posted = 1,
+                                status = 'Approved', approved_at = CURRENT_TIMESTAMP, posted_at = CURRENT_TIMESTAMP,
+                                approved_by_id = ?, posted_by_id = ?
+                            WHERE id = ?;
+                            """,
+                            (user['id'], user['id'], did),
+                        )
+                        conn.execute(
+                            "INSERT INTO document_audit_log (document_id, actor_type, actor_id, actor_name, action, previous_state, new_state) VALUES (?, 'HUMAN', ?, ?, 'BULK_APPROVED', ?, 'POSTED_DOCUMENTS');",
+                            (did, user['id'], user['full_name'], d.get('lifecycle_status')),
+                        )
+                        conn.commit()
+                        approved += 1
+                    except Exception as e:
+                        conn.rollback()
+                        failed += 1
+                        errors.append(f"Doc #{did}: {e}")
+                    finally:
+                        conn.close()
+                else:
+                    skipped += 1
+
+            execute_db("""
+                UPDATE bulk_approval_jobs SET status = 'COMPLETED', approved_count = ?, failed_count = ?, skipped_count = ?, errors_json = ?, completed_at = CURRENT_TIMESTAMP WHERE job_id = ?;
+            """, (approved, failed, skipped, json.dumps(errors), job_id))
+
+        execute_db("""
+            INSERT INTO bulk_approval_jobs (job_id, user_id, total_count, status) VALUES (?, ?, ?, 'PROCESSING');
+        """, (job_id, user['id'], len(doc_ids)))
+
+        BULK_JOB_POOL.submit(run_bulk_approval_job)
+
+        return json_response(start_response, {
+            'status': 'success',
+            'job_id': job_id,
+            'total': len(doc_ids),
+            'message': f"Bulk approval job '{job_id}' started for {len(doc_ids)} documents."
+        })
+
+    if path == '/api/admin/documents/bulk-quarantine' and method == 'POST':
+        denied = require_permission(start_response, user, 'documents.upload')
+        if denied:
+            return denied
+        data = parse_body(environ) or {}
+        doc_ids = data.get('document_ids') or []
+        reason = (data.get('reason') or 'Bulk quarantined by staff').strip()
+        moved = 0
+        for did in doc_ids:
+            d = query_db("SELECT id, lifecycle_status FROM documents WHERE id = ?;", (did,), one=True)
+            if not d or d.get('lifecycle_status') == 'POSTED_DOCUMENTS':
+                continue
+            execute_db(
+                "UPDATE documents SET lifecycle_status = 'QUARANTINE', is_posted = 0, status = 'Rejected', review_notes = ? WHERE id = ?;",
+                (reason, did),
+            )
+            log_document_audit(
+                did, 'HUMAN', user['id'], user['full_name'], 'BULK_QUARANTINE',
+                d.get('lifecycle_status'), 'QUARANTINE', {'reason': reason},
+            )
+            moved += 1
+        return json_response(start_response, {
+            'status': 'success',
+            'moved': moved,
+            'message': f'Moved {moved} document(s) to Quarantine.',
+        })
+
+    m_job = re.match(r'^/api/admin/documents/bulk-jobs/([a-zA-Z0-9_\-]+)$', path)
+    if m_job and method == 'GET':
+        denied = require_permission(start_response, user, 'documents.view')
+        if denied:
+            return denied
+        job_id = m_job.group(1)
+        job = query_db("SELECT * FROM bulk_approval_jobs WHERE job_id = ?;", (job_id,), one=True)
+        if not job:
+            return json_response(start_response, {'status': 'error', 'message': 'Job not found'}, "404 Not Found")
+        return json_response(start_response, {'status': 'success', 'job': job})
 
     if path.startswith('/api/admin/documents/') and path.endswith('/send') and method == 'POST':
         denied = require_permission(start_response, user, 'documents.send')

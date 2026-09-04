@@ -216,9 +216,9 @@ def run_tests():
     assert 'data-admin-revenue' in html_src
     assert 'revenue-chart-card" data-admin-revenue' in html_src
     assert '<th>Owner</th>' in html_src
-    assert 'app.js?v=173.0' in html_src
+    assert 'app.js?v=185.0' in html_src
     assert 'emailStaffOrderPaymentDetails' in js_src
-    assert 'styles.css?v=113.0' in html_src
+    assert 'styles.css?v=115.0' in html_src
     assert 'portfolio-rename-form[hidden]' in css_src
     assert 'id="portal-home-hello"' in html_src
     assert 'id="portal-home-skel"' in html_src
@@ -3766,23 +3766,29 @@ def run_tests():
         body={'email': 'eleanor.finch@brixenconsultant.co.uk', 'password': 'StaffPass123!'}
     )
     eleanor_all_token = extract_session_token(headers)
-    for path in ('/api/admin/orders', '/api/admin/customers', '/api/admin/documents', '/api/admin/invoices', '/api/admin/staff'):
+    for path in ('/api/admin/orders', '/api/admin/customers', '/api/admin/documents', '/api/admin/invoices'):
         st, hd, body = make_request(path, cookie=f"session_token={eleanor_all_token}")
         assert st == "200 OK", f"{path} expected 200 after full access repair, got {st} ({body})"
     status, headers, restore_eleanor = make_request(
         f"/api/admin/staff/{eleanor['id']}",
         method='PUT',
-        body={'departments': ['Documents']},
+        body={'departments': ['Documents', 'Orders']},
         cookie=f"session_token={adm_token}"
     )
     assert status == "200 OK"
     print("✓ Staff Access Repair -> missing RBAC rows are inserted; full ticks open staff modules.")
 
+    status, headers, eleanor_relogin2 = make_request(
+        '/api/auth/login',
+        method='POST',
+        body={'email': 'eleanor.finch@brixenconsultant.co.uk', 'password': 'StaffPass123!'}
+    )
+    eleanor_updated_token = extract_session_token(headers)
     status, headers, staff_edit = make_request(
         f"/api/admin/tasks/{task_id}",
         method='PUT',
         body={'status': 'In Progress', 'internal_notes': 'Started Companies House check.'},
-        cookie=f"session_token={eleanor_token}"
+        cookie=f"session_token={eleanor_updated_token}"
     )
     assert status == "200 OK"
     assert staff_edit['task']['status'] == 'In Progress'
@@ -4074,7 +4080,7 @@ def run_tests():
             'SUPER_ADMIN': '200 OK', 'ADMIN': '200 OK', 'MANAGER': '200 OK', 'STAFF': '200 OK', 'CLIENT': '403 Forbidden'
         }),
         ('/api/admin/services', 'orders.view', {
-            'SUPER_ADMIN': '200 OK', 'ADMIN': '200 OK', 'MANAGER': '200 OK', 'STAFF': '403 Forbidden', 'CLIENT': '403 Forbidden'
+            'SUPER_ADMIN': '200 OK', 'ADMIN': '200 OK', 'MANAGER': '200 OK', 'STAFF': '200 OK', 'CLIENT': '403 Forbidden'
         }),
         ('/api/admin/documents', 'documents.view', {
             'SUPER_ADMIN': '200 OK', 'ADMIN': '200 OK', 'MANAGER': '200 OK', 'STAFF': '200 OK', 'CLIENT': '403 Forbidden'
@@ -4676,6 +4682,131 @@ def run_tests():
     assert len(intake_res['filed_documents']) == 2
     assert intake_res['filed_documents'][0]['category'] == 'Bank statement'
     assert intake_res['filed_documents'][1]['category'] == 'ID Document'
+    assert intake_res['client']['dob'] == '12/05/1984'
+
+    garbage = app_mod.extract_document_text_and_metadata(
+        'scan.png',
+        stk_b64.b64encode(b'Name: K Ge NATIONALITY PAKISTAN').decode('utf-8'),
+    )
+    assert garbage.get('extracted_name') in (None, '')
+
+    mrz_text = (
+        "P<GBRHARRINGTON<<JAMES<<<<<<<<<<<<<<<<<<<<<<<<<<<\n"
+        "1234567890GBR8405128M3001013<<<<<<<<<<<<<<04"
+    )
+    mrz = app_mod.extract_document_text_and_metadata(
+        'passport.pdf',
+        stk_b64.b64encode(('%PDF-1.4\n' + mrz_text).encode('utf-8')).decode('utf-8'),
+    )
+    assert mrz.get('extracted_name') == 'James Harrington'
+    assert mrz.get('extracted_dob') == '12/05/1984'
+
+    noisy_pak = (
+        "PAKISTANI\n22 APR 2003\n36101-4253620-3\nKHANEWAL, PAK\n"
+        ">< PAKHUSSAIN<<AYAZ<<<<<<<<<<<<<<<<<<<<<<<<<<<\n"
+        "TF69162011PAK0304225M29120513610142536203<86\n"
+    )
+    noisy = app_mod.extract_document_text_and_metadata(
+        'PHOTO-2026-08-15-16-53-38.jpg',
+        stk_b64.b64encode(noisy_pak.encode('utf-8')).decode('utf-8'),
+    )
+    assert noisy.get('extracted_name') == 'Ayaz Hussain', noisy
+    assert noisy.get('extracted_dob') == '22/04/2003', noisy
+    assert noisy.get('doc_type') == 'Passport', noisy
+    assert noisy.get('extracted_nationality') == 'Pakistani', noisy
+    assert (noisy.get('extraction_quality') or {}).get('score', 0) >= 75
+
+    naseem_text = (
+        "NASEEM ;\nGiven Names\nPASSPORT ASIA\nPAKISTANI\n03 SEP 1978\n"
+        "P<PAKNASEEMK<ASIA<<<<<<<<<<<<<<<<<<<<<<<<<<<\n"
+        "DE98572118PAK7809039F30101493410124007210<38\n"
+    )
+    naseem = app_mod.extract_document_text_and_metadata(
+        'dthjklns.pdf',
+        stk_b64.b64encode(('%PDF-1.4\n' + naseem_text).encode('utf-8')).decode('utf-8'),
+    )
+    assert naseem.get('extracted_name') == 'Asia Naseem', naseem
+    assert naseem.get('extracted_dob') == '03/09/1978', naseem
+    assert naseem.get('extracted_passport_num') in ('DE9857211', 'DE98572118'), naseem
+
+    # Confidence matching engine (mocked CH — no live API)
+    assert app_mod.normalize_match_person_name('Ali, Qurban') == 'ali qurban'
+    assert app_mod.score_intake_name_match('Qurban Ali', 'QURBAN ALI')[0] == 50
+    assert app_mod.score_intake_name_match('Qurban Ali', 'Ali, Qurban')[0] == 50
+    assert app_mod.score_intake_dob_match('01/04/2002', {'month': 4, 'year': 2002})[0] == 25
+    assert app_mod.score_intake_dob_match('01/04/2002', {'day': 1, 'month': 4, 'year': 2002})[0] == 35
+    assert app_mod.score_intake_dob_match('01/04/2002', {'month': 5, 'year': 2002})[0] == -50
+
+    strong = app_mod.score_intake_company_candidate({
+        'name': 'ACME LTD',
+        'company_number': '12345678',
+        'officer_name': 'Qurban Ali',
+        'officer_dob': {'month': 4, 'year': 2002},
+        'source': 'companies_house',
+        'company_status': 'active',
+    }, None, 'Qurban Ali', '01/04/2002')
+    weak = app_mod.score_intake_company_candidate({
+        'name': 'OTHER LTD',
+        'company_number': '87654321',
+        'officer_name': 'Qurban',
+        'source': 'companies_house',
+        'company_status': 'dissolved',
+    }, None, 'Qurban Ali', '01/04/2002')
+    assert strong['score'] >= 80, strong
+    assert strong['score'] - weak['score'] >= 15, (strong['score'], weak['score'])
+
+    with patch.object(app_mod, 'search_companies_house_officers', return_value=([
+        {
+            'name': 'ALPHA LTD', 'company_number': '11111111', 'officer_name': 'Qurban Ali',
+            'officer_dob': {'month': 4, 'year': 2002}, 'source': 'companies_house', 'company_status': 'active',
+        },
+        {
+            'name': 'BETA LTD', 'company_number': '22222222', 'officer_name': 'Qurban Ali',
+            'officer_dob': {'month': 4, 'year': 2002}, 'source': 'companies_house', 'company_status': 'active',
+        },
+    ], None)):
+        with patch.object(app_mod, 'enrich_candidate_company_status', side_effect=lambda c, cache: c):
+            _co, st, _msg, ranked, meta = app_mod.resolve_intake_company_match(
+                None, 'Qurban Ali', extracted_dob='01/04/2002', actor=None,
+            )
+            assert st == 'review_required', (st, meta)
+            assert len(ranked) >= 2
+
+    with patch.object(app_mod, 'search_companies_house_officers', return_value=([
+        {
+            'name': 'WINNER LTD', 'company_number': '33333333', 'officer_name': 'Qurban Ali',
+            'officer_dob': {'day': 1, 'month': 4, 'year': 2002}, 'source': 'companies_house', 'company_status': 'active',
+        },
+        {
+            'name': 'WEAK LTD', 'company_number': '44444444', 'officer_name': 'Someone Else',
+            'source': 'companies_house', 'company_status': 'dissolved',
+        },
+    ], None)):
+        with patch.object(app_mod, 'enrich_candidate_company_status', side_effect=lambda c, cache: c):
+            with patch.object(app_mod, 'auto_import_companies_house_from_intake', return_value={
+                'id': 999, 'name': 'WINNER LTD', 'company_number': '33333333',
+            }):
+                co, st, _msg, ranked, meta = app_mod.resolve_intake_company_match(
+                    None, 'Qurban Ali', extracted_dob='01/04/2002', actor=None,
+                )
+                assert st == 'matched', (st, meta)
+                assert co and co.get('name') == 'WINNER LTD'
+                assert meta.get('confidence', 0) >= 80
+
+    gibberish = app_mod._valid_person_name('Sskkkksess Naseemk Asia')
+    assert gibberish is None
+
+    anon_pdf = b"%PDF-1.4 Bank Statement Tide Account Balance only"
+    st, hd, anon_intake = make_request('/api/admin/documents/intake/process', method='POST', cookie=f"session_token={task1_admin_tok}", body={
+        'files': [
+            {'file_name': 'PHOTO-2026-08-15-16-53-38.jpg', 'file_content_base64': stk_b64.b64encode(anon_pdf).decode('utf-8')},
+        ]
+    })
+    assert st == "200 OK", anon_intake
+    assert anon_intake['status'] == 'success'
+    assert len(anon_intake['filed_documents']) == 1
+    assert anon_intake['client']['id']
+    assert 'Unassigned' in (anon_intake['client']['full_name'] or '')
 
     # Security check: Client role denied access
     st, hd, err_client_intake = make_request('/api/admin/documents/intake/process', method='POST', cookie=f"session_token={client_a_tok}", body={

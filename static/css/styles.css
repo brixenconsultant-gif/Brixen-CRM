@@ -2515,6 +2515,126 @@ html.authenticated:not(.auth-pending) .main-wrapper { margin-left: 270px; width:
     font-weight: 700;
 }
 
+.dash-banner-success {
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: #ecfdf5;
+    color: #047857;
+    border: 1px solid #a7f3d0;
+    font-size: 0.85rem;
+    font-weight: 700;
+}
+
+.intake-file-chip {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #1e293b;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+}
+
+.intake-file-chip.is-uploaded {
+    border-color: #86efac;
+    background: #f0fdf4;
+}
+
+.intake-drop-zone {
+    border: 2px dashed #cbd5e1;
+    border-radius: 12px;
+    padding: 36px 20px;
+    text-align: center;
+    background: #f8fafc;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.intake-drop-zone.is-ready {
+    border-color: #86efac;
+    background: #f0fdf4;
+}
+
+.intake-drop-zone.is-dragover {
+    border-color: #0284c7;
+    background: #e0f2fe;
+}
+
+.lifecycle-tabs {
+    margin: 0 0 14px 0;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.lifecycle-count {
+    display: inline-block;
+    min-width: 1.4em;
+    margin-left: 4px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: #e2e8f0;
+    color: #334155;
+    font-size: 0.72rem;
+    font-weight: 700;
+}
+
+.portfolio-tab.active .lifecycle-count {
+    background: #003971;
+    color: #fff;
+}
+
+.lifecycle-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 12px 0;
+}
+
+.lifecycle-check-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.82rem;
+    color: #475569;
+}
+
+.confidence-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.confidence-pill {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: #f1f5f9;
+    color: #334155;
+    font-size: 0.7rem;
+    font-weight: 600;
+}
+
+.confidence-pill.is-high { background: #dcfce7; color: #166534; }
+.confidence-pill.is-mid { background: #fef3c7; color: #92400e; }
+.confidence-pill.is-low { background: #fee2e2; color: #991b1b; }
+
+.badge-status-uploaded {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: #dcfce7;
+    color: #166534;
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 3px 8px;
+    border-radius: 999px;
+}
+
 .order-card-header {
     display: flex;
     align-items: flex-start;
@@ -3230,6 +3350,7 @@ select.select-filter {
 .product-pill-kyc { background: #dcfce7; color: #166534; }
 .product-pill-bank { background: #dbeafe; color: #1d4ed8; }
 .product-pill-tide { background: #e6f7f5; color: #0b5c56; }
+.product-pill-taptap { background: #fff1e6; color: #9a3412; }
 .product-pill-wise { background: #f1fce4; color: #163300; }
 .product-pill-monzo { background: #ffe8e7; color: #9f1c1a; }
 .product-pill-zempler { background: #f3e8ff; color: #5b21b6; }

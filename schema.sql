@@ -286,10 +286,67 @@ CREATE TABLE IF NOT EXISTS documents (
     review_notes TEXT,
     client_visible INTEGER NOT NULL DEFAULT 1,
     shared_at TIMESTAMP,
+    file_hash TEXT,
+    ocr_status TEXT DEFAULT 'COMPLETED',
+    identity_status TEXT DEFAULT 'COMPLETED',
+    crm_status TEXT DEFAULT 'MATCHED',
+    ch_status TEXT DEFAULT 'NOT_APPLICABLE',
+    overall_status TEXT DEFAULT 'COMPLETED',
+    stage_timestamps_json TEXT,
+    match_meta_json TEXT,
+    lifecycle_status TEXT DEFAULT 'POSTED_DOCUMENTS',
+    is_posted INTEGER DEFAULT 1,
+    ocr_confidence REAL DEFAULT 100.0,
+    classification_confidence REAL DEFAULT 100.0,
+    identity_confidence REAL DEFAULT 100.0,
+    customer_match_confidence REAL DEFAULT 100.0,
+    company_match_confidence REAL DEFAULT 100.0,
+    duplicate_confidence REAL DEFAULT 0.0,
+    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    processed_at TIMESTAMP,
+    matched_at TIMESTAMP,
+    approved_at TIMESTAMP,
+    posted_at TIMESTAMP,
+    uploaded_by_id INTEGER,
+    processed_by_id INTEGER,
+    matched_by_id INTEGER,
+    approved_by_id INTEGER,
+    posted_by_id INTEGER,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE SET NULL,
     FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_documents_lifecycle ON documents(lifecycle_status, is_posted);
+CREATE INDEX IF NOT EXISTS idx_documents_file_hash ON documents(file_hash);
+
+CREATE TABLE IF NOT EXISTS document_audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id INTEGER NOT NULL,
+    actor_type TEXT NOT NULL DEFAULT 'AI',
+    actor_id INTEGER,
+    actor_name TEXT NOT NULL,
+    action TEXT NOT NULL,
+    previous_state TEXT,
+    new_state TEXT,
+    ai_model_version TEXT DEFAULT 'v2.0',
+    reason_evidence_json TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_doc_audit_doc_id ON document_audit_log(document_id);
+
+CREATE TABLE IF NOT EXISTS bulk_approval_jobs (
+    job_id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    total_count INTEGER NOT NULL DEFAULT 0,
+    approved_count INTEGER NOT NULL DEFAULT 0,
+    failed_count INTEGER NOT NULL DEFAULT 0,
+    skipped_count INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'PROCESSING',
+    errors_json TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP
 );
 
 -- 11. Proxies

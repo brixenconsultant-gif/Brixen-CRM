@@ -1770,13 +1770,17 @@ function portfolioRegisteredAddressText(company) {
 }
 
 function isCustomerUploadedDocument(doc) {
+    if (!doc) return false;
+    if (Number(doc.is_posted) === 1 || doc.lifecycle_status === 'POSTED_DOCUMENTS') return false;
     return Boolean(
-        doc
-        && (
-            doc.is_customer_upload
-            || doc.uploaded_by === 'Customer Upload'
-            || doc.category === 'Checkout Upload'
-        )
+        doc.is_customer_upload
+        || doc.uploaded_by === 'Customer Upload'
+        || doc.category === 'Checkout Upload'
+        || doc.lifecycle_status === 'CUSTOMER_UPLOADS'
+        || doc.lifecycle_status === 'REVIEW_REQUIRED'
+        || doc.lifecycle_status === 'READY_FOR_APPROVAL'
+        || doc.lifecycle_status === 'PROCESSING'
+        || doc.lifecycle_status === 'QUARANTINE'
     );
 }
 
@@ -5180,6 +5184,7 @@ function showModalError(id, message) {
 
 const PRODUCT_BANKS = [
     { re: /\btide\b/, tone: 'tide' },
+    { re: /\btap\s*tap\b|\btaptap\b/, tone: 'taptap' },
     { re: /\bwise\b/, tone: 'wise' },
     { re: /\bmonzo\b/, tone: 'monzo' },
     { re: /\bzempler\b/, tone: 'zempler' },
@@ -5236,6 +5241,13 @@ function escapeHtml(value) {
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;');
+}
+
+function formatDocumentSize(numBytes) {
+    const n = Number(numBytes) || 0;
+    if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+    if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${n} B`;
 }
 
 function optionalId(value) {
@@ -6579,6 +6591,61 @@ async function submitDeliverDocumentForm(event) {
     }
 }
 
+let activeAdminDocumentsLifecycle = 'READY_FOR_APPROVAL';
+let adminDocumentsSelection = new Set();
+let adminDocumentsCache = [];
+let documentTriageCache = null;
+
+function switchAdminDocumentsLifecycle(stage) {
+    activeAdminDocumentsLifecycle = stage || 'READY_FOR_APPROVAL';
+    document.querySelectorAll('#adm-documents-lifecycle-tabs .portfolio-tab').forEach((btn) => {
+        btn.classList.toggle('active', btn.getAttribute('data-lifecycle') === activeAdminDocumentsLifecycle);
+    });
+    clearAdminDocumentsSelection();
+    loadAdminDocuments();
+}
+
+function confidencePill(label, value) {
+    const n = Number(value);
+    const cls = n >= 75 ? 'is-high' : (n >= 50 ? 'is-mid' : 'is-low');
+    const shown = Number.isFinite(n) ? `${Math.round(n)}%` : '—';
+    return `<span class="confidence-pill ${cls}">${escapeHtml(label)} ${shown}</span>`;
+}
+
+function updateAdminDocumentsSelectionCount() {
+    const el = document.getElementById('adm-docs-selection-count');
+    if (el) el.textContent = adminDocumentsSelection.size ? `${adminDocumentsSelection.size} selected` : '';
+}
+
+function toggleAdminDocumentSelection(docId, checked) {
+    const id = Number(docId);
+    if (!id) return;
+    if (checked) adminDocumentsSelection.add(id);
+    else adminDocumentsSelection.delete(id);
+    updateAdminDocumentsSelectionCount();
+}
+
+function toggleAdminDocumentsPageSelection(checked) {
+    (adminDocumentsCache || []).forEach((d) => {
+        const id = Number(d.id);
+        if (!id) return;
+        if (checked) adminDocumentsSelection.add(id);
+        else adminDocumentsSelection.delete(id);
+    });
+    document.querySelectorAll('.adm-doc-select').forEach((cb) => {
+        cb.checked = checked;
+    });
+    updateAdminDocumentsSelectionCount();
+}
+
+function clearAdminDocumentsSelection() {
+    adminDocumentsSelection = new Set();
+    const pageCb = document.getElementById('adm-docs-select-page');
+    if (pageCb) pageCb.checked = false;
+    document.querySelectorAll('.adm-doc-select').forEach((cb) => { cb.checked = false; });
+    updateAdminDocumentsSelectionCount();
+}
+
 async function loadAdminDocuments() {
     const tbody = document.getElementById('adm-documents-table-body');
     const errBox = document.getElementById('adm-documents-error');
@@ -6587,42 +6654,58 @@ async function loadAdminDocuments() {
         errBox.textContent = '';
     }
     if (tbody) {
-        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#64748b; padding:28px;">Loading documents…</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; color:#64748b; padding:28px;">Loading documents…</td></tr>`;
     }
     try {
-        const res = await fetch('/api/admin/documents', { credentials: 'same-origin' });
+        const stage = activeAdminDocumentsLifecycle || 'READY_FOR_APPROVAL';
+        const res = await fetch(`/api/admin/documents/lifecycle?stage=${encodeURIComponent(stage)}`, { credentials: 'same-origin' });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.status !== 'success') {
             throw new Error('Unable to load documents.');
         }
+        const counts = data.counts || {};
+        document.querySelectorAll('.lifecycle-count').forEach((el) => {
+            const key = el.getAttribute('data-count');
+            el.textContent = String(counts[key] != null ? counts[key] : 0);
+        });
         const docs = Array.isArray(data.documents) ? data.documents : [];
+        adminDocumentsCache = docs;
         if (!tbody) return;
         if (!docs.length) {
-            tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding:36px 20px;">
-                <div style="font-weight:800; color:#0f172a; margin-bottom:8px;">No files uploaded yet</div>
-                <div style="color:#64748b; font-size:0.85rem; max-width:440px; margin:0 auto 16px;">Website order products such as Apostilled Documents Service are not files. Upload a PDF or image here to see it in this list.</div>
-                <button type="button" class="btn-primary" onclick="openDeliverDocumentModalFromReview()">Upload Document</button>
+            tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; padding:36px 20px;">
+                <div style="font-weight:800; color:#0f172a; margin-bottom:8px;">No documents in this stage</div>
+                <div style="color:#64748b; font-size:0.85rem; max-width:440px; margin:0 auto 16px;">Customer uploads appear here after triage. Posted Documents only include approved files.</div>
             </td></tr>`;
             return;
         }
-        tbody.innerHTML = docs.map(d => {
-            const pending = d.status === 'Pending Review' || d.status === 'Requires Update';
+        tbody.innerHTML = docs.map((d) => {
+            const id = Number(d.id);
+            const checked = adminDocumentsSelection.has(id) ? ' checked' : '';
+            const canAct = d.lifecycle_status !== 'POSTED_DOCUMENTS' && !d.is_posted;
             return `
                 <tr>
+                    <td>${canAct ? `<input type="checkbox" class="adm-doc-select" data-doc-id="${id}"${checked} onchange="toggleAdminDocumentSelection(${id}, this.checked)">` : ''}</td>
                     <td>${escapeHtml(d.client_name || '—')}<div style="font-size:0.72rem; color:#64748b;">${escapeHtml(d.client_email || '')}</div></td>
-                    <td>${escapeHtml(d.order_number || '—')}</td>
-                    <td style="font-weight:700;">${escapeHtml(d.name || 'Document')}</td>
-                    <td>${escapeHtml(d.category || '—')}</td>
-                    <td><span class="status-badge ${d.status === 'Approved' ? 'completed' : (d.status === 'Rejected' ? 'cancelled' : 'pending')}">${escapeHtml(d.status || '')}</span></td>
+                    <td style="font-weight:700;">${escapeHtml(d.name || 'Document')}<div style="font-size:0.72rem;color:#64748b;">${escapeHtml(d.category || '')}</div></td>
+                    <td>${escapeHtml(d.company_name || '—')}<div style="font-size:0.72rem;color:#64748b;">${escapeHtml(d.company_number || '')}</div></td>
+                    <td><div class="confidence-pills">
+                        ${confidencePill('OCR', d.ocr_confidence)}
+                        ${confidencePill('ID', d.identity_confidence)}
+                        ${confidencePill('Co', d.company_match_confidence)}
+                        ${Number(d.duplicate_confidence) >= 100 ? confidencePill('Dup', d.duplicate_confidence) : ''}
+                    </div></td>
+                    <td><span class="status-badge ${d.lifecycle_status === 'POSTED_DOCUMENTS' || d.is_posted ? 'completed' : (d.lifecycle_status === 'QUARANTINE' ? 'cancelled' : 'pending')}">${escapeHtml(d.lifecycle_status || '')}</span></td>
                     <td class="cell-actions">
                         <div class="order-row-actions table-action-btns">
                             ${documentActionButtons(d)}
-                            ${pending ? `<button type="button" class="btn-primary btn-table" onclick="approveDocument(${d.id})">Approve</button>` : ''}
+                            <button type="button" class="btn-secondary btn-table" onclick="openDocumentTriageModal(${id})">Review</button>
+                            ${canAct ? `<button type="button" class="btn-primary btn-table" onclick="approveLifecycleDocument(${id})">Approve</button>` : ''}
                         </div>
                     </td>
                 </tr>
             `;
         }).join('');
+        updateAdminDocumentsSelectionCount();
     } catch (err) {
         console.error(err);
         if (errBox) {
@@ -6630,21 +6713,203 @@ async function loadAdminDocuments() {
             errBox.textContent = 'Unable to load documents. Please try again.';
         }
         if (tbody) {
-            tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#dc2626; padding:28px;">Unable to load documents.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; color:#dc2626; padding:28px;">Unable to load documents.</td></tr>`;
         }
     }
 }
 
-async function approveDocument(docId) {
+function closeDocumentTriageModal() {
+    const modal = document.getElementById('modal-document-triage');
+    if (modal) modal.classList.remove('active');
+    documentTriageCache = null;
+}
+
+function openDocumentTriageModal(docId) {
+    const doc = (adminDocumentsCache || []).find((d) => Number(d.id) === Number(docId));
+    if (!doc) return;
+    documentTriageCache = doc;
+    const body = document.getElementById('doc-triage-body');
+    const actions = document.getElementById('doc-triage-actions');
+    const meta = doc.match_meta || {};
+    const matching = doc.matching_evidence || meta.reasons || [];
+    const conflicting = doc.conflicting_evidence || [];
+    const tops = doc.top_candidates || meta.top_candidates || [];
+    if (body) {
+        body.innerHTML = `
+            <div style="display:grid;gap:12px;">
+                <div><strong>${escapeHtml(doc.name || 'Document')}</strong>
+                    <div style="font-size:0.82rem;color:#64748b;">${escapeHtml(doc.category || '')} · ${escapeHtml(doc.file_type || '')} · ${escapeHtml(doc.file_size || '')}</div>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                    <div><div style="font-size:0.75rem;color:#64748b;">Customer</div><div>${escapeHtml(doc.client_name || '—')} (#${escapeHtml(String(doc.user_id || ''))})</div></div>
+                    <div><div style="font-size:0.75rem;color:#64748b;">Company</div><div>${escapeHtml(doc.company_name || '—')} ${doc.company_number ? '(' + escapeHtml(doc.company_number) + ')' : ''}</div></div>
+                </div>
+                <div class="confidence-pills">
+                    ${confidencePill('OCR', doc.ocr_confidence)}
+                    ${confidencePill('Class', doc.classification_confidence)}
+                    ${confidencePill('Identity', doc.identity_confidence)}
+                    ${confidencePill('Customer', doc.customer_match_confidence)}
+                    ${confidencePill('Company', doc.company_match_confidence)}
+                    ${confidencePill('Duplicate', doc.duplicate_confidence)}
+                </div>
+                <div style="font-size:0.82rem;">Score gap Δ: <strong>${escapeHtml(String(doc.score_gap != null ? doc.score_gap : (meta.score_gap != null ? meta.score_gap : '—')))}</strong></div>
+                <div>
+                    <div style="font-weight:700;margin-bottom:4px;">Matching evidence</div>
+                    <ul style="margin:0;padding-left:18px;color:#166534;">${(matching.length ? matching : ['—']).map((x) => `<li>${escapeHtml(String(x))}</li>`).join('')}</ul>
+                </div>
+                <div>
+                    <div style="font-weight:700;margin-bottom:4px;">Conflicting evidence</div>
+                    <ul style="margin:0;padding-left:18px;color:#991b1b;">${(conflicting.length ? conflicting : ['—']).map((x) => `<li>${escapeHtml(String(x))}</li>`).join('')}</ul>
+                </div>
+                ${tops.length ? `<div><div style="font-weight:700;margin-bottom:4px;">Top candidates</div>
+                    <ul style="margin:0;padding-left:18px;">${tops.slice(0, 5).map((t) => `<li>${escapeHtml(t.name || '')} (${escapeHtml(t.company_number || '')}) — ${escapeHtml(String(t.score != null ? t.score : ''))}%</li>`).join('')}</ul>
+                </div>` : ''}
+                <div style="font-size:0.82rem;color:#64748b;">${escapeHtml(doc.review_notes || '')}</div>
+            </div>
+        `;
+    }
+    const canAct = doc.lifecycle_status !== 'POSTED_DOCUMENTS' && !doc.is_posted;
+    if (actions) {
+        actions.innerHTML = `
+            ${canAct ? `<button type="button" class="btn-primary" onclick="approveLifecycleDocument(${doc.id})">Approve &amp; Post</button>` : ''}
+            ${canAct ? `<button type="button" class="btn-secondary" onclick="rejectLifecycleDocument(${doc.id})">Reject / Quarantine</button>` : ''}
+            ${canAct ? `<button type="button" class="btn-secondary" onclick="reassignLifecycleDocument(${doc.id})">Reassign</button>` : ''}
+            ${documentActionButtons(doc)}
+        `;
+    }
+    const modal = document.getElementById('modal-document-triage');
+    if (modal) modal.classList.add('active');
+}
+
+async function approveLifecycleDocument(docId) {
     try {
-        await fetch(`/api/admin/documents/${docId}`, {
-            method: 'PUT',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ status: 'Approved', review_notes: 'Verified compliance.' })
+        const res = await fetch(`/api/admin/documents/${docId}/approve`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
         });
-        alert('Document approved and client notified.');
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') throw new Error(data.message || 'Approve failed');
+        closeDocumentTriageModal();
+        clearAdminDocumentsSelection();
         loadAdminDocuments();
-    } catch (err) { console.error(err); }
+    } catch (err) {
+        alert(err.message || 'Approve failed');
+    }
+}
+
+async function rejectLifecycleDocument(docId) {
+    const reason = window.prompt('Rejection reason', 'Rejected by staff') || 'Rejected by staff';
+    try {
+        const res = await fetch(`/api/admin/documents/${docId}/reject`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reason }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') throw new Error(data.message || 'Reject failed');
+        closeDocumentTriageModal();
+        loadAdminDocuments();
+    } catch (err) {
+        alert(err.message || 'Reject failed');
+    }
+}
+
+async function reassignLifecycleDocument(docId) {
+    const clientId = window.prompt('Client user id (blank to keep)');
+    const companyId = window.prompt('Company id (blank to keep)');
+    const category = window.prompt('Document category (blank to keep)');
+    const payload = { reprocess: true };
+    if (clientId && String(clientId).trim()) payload.client_id = Number(clientId);
+    if (companyId && String(companyId).trim()) payload.company_id = Number(companyId);
+    if (category && String(category).trim()) payload.category = String(category).trim();
+    try {
+        const res = await fetch(`/api/admin/documents/${docId}/reassign`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') throw new Error(data.message || 'Reassign failed');
+        closeDocumentTriageModal();
+        loadAdminDocuments();
+    } catch (err) {
+        alert(err.message || 'Reassign failed');
+    }
+}
+
+async function pollBulkApprovalJob(jobId) {
+    const box = document.getElementById('adm-documents-job-status');
+    for (let i = 0; i < 40; i += 1) {
+        await new Promise((r) => setTimeout(r, 500));
+        const res = await fetch(`/api/admin/documents/bulk-jobs/${encodeURIComponent(jobId)}`, { credentials: 'same-origin' });
+        const data = await res.json().catch(() => ({}));
+        const job = data.job || {};
+        if (box) {
+            box.style.display = 'block';
+            box.textContent = `Bulk job ${jobId}: ${job.status || '…'} — approved ${job.approved_count || 0}, skipped ${job.skipped_count || 0}, failed ${job.failed_count || 0}`;
+        }
+        if (job.status === 'COMPLETED' || job.status === 'FAILED') {
+            loadAdminDocuments();
+            return;
+        }
+    }
+}
+
+async function bulkApproveAdminDocuments(overrideReview) {
+    const ids = Array.from(adminDocumentsSelection);
+    if (!ids.length) {
+        alert('Select one or more documents first.');
+        return;
+    }
+    try {
+        const res = await fetch('/api/admin/documents/bulk-approve', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                document_ids: ids,
+                override_review_required: Boolean(overrideReview),
+            }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') throw new Error(data.message || 'Bulk approve failed');
+        clearAdminDocumentsSelection();
+        if (data.job_id) await pollBulkApprovalJob(data.job_id);
+        else loadAdminDocuments();
+    } catch (err) {
+        alert(err.message || 'Bulk approve failed');
+    }
+}
+
+async function bulkQuarantineAdminDocuments() {
+    const ids = Array.from(adminDocumentsSelection);
+    if (!ids.length) {
+        alert('Select one or more documents first.');
+        return;
+    }
+    const reason = window.prompt('Quarantine reason', 'Bulk quarantined by staff') || 'Bulk quarantined by staff';
+    try {
+        const res = await fetch('/api/admin/documents/bulk-quarantine', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ document_ids: ids, reason }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') throw new Error(data.message || 'Bulk quarantine failed');
+        clearAdminDocumentsSelection();
+        loadAdminDocuments();
+    } catch (err) {
+        alert(err.message || 'Bulk quarantine failed');
+    }
+}
+
+async function approveDocument(docId) {
+    return approveLifecycleDocument(docId);
 }
 
 async function loadAdminLogs() {
@@ -8154,6 +8419,16 @@ function formatDateTime(dateStr) {
     return d.toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+function formatDate(dateStr) {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    if (Number.isNaN(d.getTime())) {
+        const raw = String(dateStr).trim();
+        return raw || '';
+    }
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
 function formatShortDate(dateStr) {
     if (!dateStr) return '';
     const d = new Date(dateStr);
@@ -8377,44 +8652,308 @@ document.addEventListener('click', (event) => {
 window.addEventListener('resize', positionGlobalSearchResults);
 window.addEventListener('scroll', positionGlobalSearchResults, true);
 
-function formatDate(dateStr) {
-    if (!dateStr) return '';
-    const d = new Date(dateStr);
-    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+let intakeQueueItems = [];
+let intakeBatchIdentities = [];
+
+function getIntakeCategoryLabel(fname) {
+    const fn = (fname || '').toLowerCase();
+    if (fn.includes('passport') || fn.includes('cnic') || fn.includes('id') || fn.includes('license')) return 'Passport / ID';
+    if (fn.includes('statement') || fn.includes('bank')) return 'Bank Statement';
+    if (fn.includes('utility') || fn.includes('bill') || fn.includes('address')) return 'Proof of Address';
+    if (fn.includes('certificate') || fn.includes('company') || fn.includes('inc')) return 'Company Document';
+    return 'Document';
 }
 
-// ==================================================
-// SMART DOCUMENT INTAKE & AUTO-FILING FRONTEND LOGIC
-// ==================================================
-let intakeSelectedFiles = [];
+function intakeDocPriority(item) {
+    const name = String((item && item.name) || '').toLowerCase();
+    const cat = String((item && item.category) || '').toLowerCase();
+    if (cat.includes('passport') || cat.includes('id') || name.includes('passport') || name.includes('cnic')) return 0;
+    if (cat.includes('company') || name.includes('newinc') || name.includes('certificate')) return 1;
+    if (cat.includes('bank') || name.includes('statement')) return 2;
+    return 3;
+}
+
+function sortIntakeQueueForProcessing(items) {
+    return items
+        .map((item, index) => ({ item, index }))
+        .sort((a, b) => {
+            const pa = intakeDocPriority(a.item);
+            const pb = intakeDocPriority(b.item);
+            if (pa !== pb) return pa - pb;
+            return a.index - b.index;
+        })
+        .map((row) => row.item);
+}
+
+function updateIntakeDropZoneState() {
+    const zone = document.getElementById('intake-drop-zone');
+    const empty = document.getElementById('intake-drop-zone-empty');
+    const ready = document.getElementById('intake-drop-zone-ready');
+    const readyTitle = document.getElementById('intake-drop-zone-ready-title');
+    const count = intakeQueueItems.length;
+    if (!zone) return;
+    zone.classList.toggle('is-ready', count > 0);
+    zone.classList.remove('is-dragover');
+    if (empty) empty.style.display = count > 0 ? 'none' : 'block';
+    if (ready) ready.style.display = count > 0 ? 'block' : 'none';
+    if (readyTitle) {
+        readyTitle.textContent = count === 1
+            ? '1 document queued — ready to process'
+            : `${count} documents queued — ready to process`;
+    }
+    const badge = document.getElementById('intake-queue-status-badge');
+    if (badge) {
+        const processing = intakeQueueItems.some((i) => i.upload_status === 'PROCESSING');
+        const failed = intakeQueueItems.filter((i) => i.upload_status === 'FAILED').length;
+        const done = intakeQueueItems.filter((i) => i.upload_status === 'PROCESSED').length;
+        if (processing) {
+            badge.className = 'badge-status-pending';
+            badge.textContent = 'Processing…';
+        } else if (failed && done) {
+            badge.className = 'badge-status-pending';
+            badge.style.cssText = 'background:#fffbeb;color:#b45309;';
+            badge.textContent = `${done} filed · ${failed} failed`;
+        } else if (failed) {
+            badge.className = 'badge-status-failed';
+            badge.textContent = 'Processing failed';
+        } else if (done && done === count) {
+            badge.className = 'badge-status-approved';
+            badge.textContent = '✓ All processed';
+        } else {
+            badge.className = 'badge-status-uploaded';
+            badge.style.cssText = '';
+            badge.textContent = '✓ Queued — click Process';
+        }
+    }
+}
+
+function showIntakeUploadSuccess(count) {
+    const succBanner = document.getElementById('adm-intake-success');
+    const errBanner = document.getElementById('adm-intake-error');
+    if (errBanner) errBanner.style.display = 'none';
+    if (!succBanner) return;
+    const n = Number(count) || 0;
+    if (n <= 0) {
+        succBanner.style.display = 'none';
+        succBanner.textContent = '';
+        return;
+    }
+    const label = n === 1
+        ? '1 document queued in the browser and ready to process.'
+        : `${n} documents queued in the browser and ready to process.`;
+    succBanner.style.display = 'block';
+    succBanner.innerHTML = `✓ ${label} Click Process — each file is scanned separately to avoid timeouts.`;
+}
+
+async function processOneIntakeFile(item, batchIdentities) {
+    const b64 = await readFileAsBase64(item.file);
+    if (!b64) {
+        throw new Error(`Could not read ${item.name || 'document'}.`);
+    }
+    const res = await fetch('/api/admin/documents/intake/process', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+            files: [{ file_name: item.name, file_content_base64: b64 }],
+            batch_identities: Array.isArray(batchIdentities) ? batchIdentities : [],
+        }),
+    });
+    const rawText = await res.text();
+    let data = {};
+    try {
+        data = rawText ? JSON.parse(rawText) : {};
+    } catch (_) {
+        const snippet = (rawText || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+        throw new Error(
+            snippet
+                ? `Smart intake server error (${res.status}): ${snippet}`
+                : `Smart intake server error (${res.status}).`
+        );
+    }
+    if (!res.ok || data.status !== 'success') {
+        throw new Error(data.message || `Smart intake failed (${res.status}).`);
+    }
+    return data;
+}
+
+async function submitSmartIntakeForm(event) {
+    if (event && typeof event.preventDefault === 'function') event.preventDefault();
+    if (intakeQueueItems.length === 0) {
+        const errBanner = document.getElementById('adm-intake-error');
+        if (errBanner) {
+            errBanner.style.display = 'block';
+            errBanner.textContent = 'Upload at least one document before processing.';
+        }
+        return;
+    }
+    const submitBtn = document.getElementById('btn-intake-submit');
+    const errBanner = document.getElementById('adm-intake-error');
+    const succBanner = document.getElementById('adm-intake-success');
+    if (errBanner) errBanner.style.display = 'none';
+    if (succBanner) succBanner.style.display = 'none';
+
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.dataset.processing = 'true';
+        submitBtn.innerHTML = `<i data-lucide="loader" class="spin"></i> Processing 1 of ${intakeQueueItems.length}…`;
+        if (window.lucide && typeof window.lucide.createIcons === 'function') {
+            window.lucide.createIcons();
+        }
+    }
+
+    const aggregate = {
+        status: 'success',
+        message: '',
+        file_results: [],
+        filed_documents: [],
+        client: null,
+        company: null,
+        missing_fields: [],
+        scan: { ocr_used: false, methods: [] },
+    };
+    let okCount = 0;
+    let failCount = 0;
+    intakeBatchIdentities = Array.isArray(intakeBatchIdentities) ? intakeBatchIdentities : [];
+
+    try {
+        const ordered = sortIntakeQueueForProcessing(intakeQueueItems.slice());
+        for (let i = 0; i < ordered.length; i++) {
+            const item = ordered[i];
+            if (!item.file) {
+                item.upload_status = 'FAILED';
+                item.process_status = 'Missing file data — re-upload this file.';
+                failCount += 1;
+                renderIntakeFilePreview();
+                continue;
+            }
+            if (item.upload_status === 'PROCESSED') {
+                okCount += 1;
+                continue;
+            }
+
+            item.upload_status = 'PROCESSING';
+            item.process_status = `OCR & name-link (${i + 1}/${ordered.length})…`;
+            item.error = null;
+            renderIntakeFilePreview();
+            if (submitBtn) {
+                submitBtn.innerHTML = `<i data-lucide="loader" class="spin"></i> Processing ${i + 1} of ${ordered.length}…`;
+                if (window.lucide && typeof window.lucide.createIcons === 'function') {
+                    window.lucide.createIcons();
+                }
+            }
+
+            try {
+                const data = await processOneIntakeFile(item, intakeBatchIdentities);
+                if (Array.isArray(data.batch_identities) && data.batch_identities.length) {
+                    intakeBatchIdentities = data.batch_identities;
+                }
+                const fr = (data.file_results && data.file_results[0]) || {};
+                const ch = fr.companies_house_matching || {};
+                const linked = Boolean(
+                    ch.linked_from_passport
+                    || (fr.document_processing || {}).linked_passport_name
+                    || ((ch.reasons || []).join(' ').toLowerCase().includes('same person'))
+                );
+                item.upload_status = 'PROCESSED';
+                item.process_status = linked
+                    ? `Same person form · ${ch.company_name || ch.message || 'filed'}`
+                    : (ch.company_name
+                        ? `Filed · ${ch.company_name}${ch.confidence != null ? ` (${ch.confidence}%)` : ''}`
+                        : (ch.message || data.message || 'Filed under client profile'));
+                item.result = data;
+                okCount += 1;
+                if (Array.isArray(data.file_results)) aggregate.file_results.push(...data.file_results);
+                if (Array.isArray(data.filed_documents)) aggregate.filed_documents.push(...data.filed_documents);
+                if (data.client) aggregate.client = data.client;
+                if (data.company) aggregate.company = data.company;
+                if (data.scan && data.scan.ocr_used) aggregate.scan.ocr_used = true;
+                if (data.scan && Array.isArray(data.scan.methods)) {
+                    aggregate.scan.methods.push(...data.scan.methods);
+                }
+            } catch (fileErr) {
+                failCount += 1;
+                item.upload_status = 'FAILED';
+                item.process_status = (fileErr && fileErr.message) || 'Processing failed';
+                item.error = item.process_status;
+            }
+            renderIntakeFilePreview();
+        }
+
+        aggregate.message = failCount
+            ? `Processed ${okCount} of ${intakeQueueItems.length} document(s). ${failCount} failed — retry those rows or Reset and re-upload.`
+            : `Smart Intake successfully processed ${okCount} document(s).`;
+
+        if (okCount > 0) {
+            if (succBanner) {
+                succBanner.style.display = 'block';
+                succBanner.innerHTML = `✓ ${escapeHtml(aggregate.message)}`;
+            }
+            renderIntakeResults(aggregate);
+        }
+        if (failCount > 0 && errBanner) {
+            errBanner.style.display = 'block';
+            errBanner.textContent = failCount === intakeQueueItems.length
+                ? `All ${failCount} document(s) failed. ${intakeQueueItems[0] && intakeQueueItems[0].process_status ? intakeQueueItems[0].process_status : ''}`.trim()
+                : `${failCount} document(s) failed. Successful files stay marked Processed — click Process again to retry failures only.`;
+        }
+    } catch (err) {
+        console.error('Smart Intake process failed', err);
+        if (errBanner) {
+            errBanner.style.display = 'block';
+            errBanner.textContent = (err && err.message) || 'Smart intake processing failed.';
+        }
+    } finally {
+        if (submitBtn) {
+            delete submitBtn.dataset.processing;
+            submitBtn.disabled = intakeQueueItems.length === 0;
+            const pending = intakeQueueItems.filter((i) => i.upload_status !== 'PROCESSED').length;
+            const count = intakeQueueItems.length;
+            if (pending > 0 && pending < count) {
+                submitBtn.innerHTML = `<i data-lucide="cpu"></i> Retry ${pending} Failed Document${pending > 1 ? 's' : ''}`;
+            } else {
+                submitBtn.innerHTML = `<i data-lucide="cpu"></i> Process ${count > 0 ? count + ' Document' + (count > 1 ? 's' : '') : '& Auto-File Documents'}`;
+            }
+        }
+        if (window.lucide && typeof window.lucide.createIcons === 'function') {
+            window.lucide.createIcons();
+        }
+    }
+}
 
 function onIntakeFilesSelected(event) {
     const files = event.target.files;
     if (!files || files.length === 0) return;
     for (let i = 0; i < files.length; i++) {
-        intakeSelectedFiles.push(files[i]);
+        const file = files[i];
+        intakeQueueItems.push({
+            id: 'file_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+            file: file,
+            name: file.name,
+            size: file.size,
+            category: getIntakeCategoryLabel(file.name),
+            upload_status: 'UPLOADED',
+            process_status: 'Ready for processing',
+            error: null
+        });
     }
+    event.target.value = '';
     renderIntakeFilePreview();
+    showIntakeUploadSuccess(intakeQueueItems.length);
 }
 
 function onIntakeDragOver(event) {
     event.preventDefault();
     event.stopPropagation();
     const zone = document.getElementById('intake-drop-zone');
-    if (zone) {
-        zone.style.background = '#e0f2fe';
-        zone.style.borderColor = '#0284c7';
-    }
+    if (zone) zone.classList.add('is-dragover');
 }
 
 function onIntakeDragLeave(event) {
     event.preventDefault();
     event.stopPropagation();
     const zone = document.getElementById('intake-drop-zone');
-    if (zone) {
-        zone.style.background = '#f8fafc';
-        zone.style.borderColor = '#cbd5e1';
-    }
+    if (zone) zone.classList.remove('is-dragover');
 }
 
 function onIntakeDrop(event) {
@@ -8424,47 +8963,102 @@ function onIntakeDrop(event) {
     const dt = event.dataTransfer;
     if (dt && dt.files && dt.files.length > 0) {
         for (let i = 0; i < dt.files.length; i++) {
-            intakeSelectedFiles.push(dt.files[i]);
+            const file = dt.files[i];
+            intakeQueueItems.push({
+                id: 'file_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+                file: file,
+                name: file.name,
+                size: file.size,
+                category: getIntakeCategoryLabel(file.name),
+                upload_status: 'UPLOADED',
+                process_status: 'Ready for processing',
+                error: null
+            });
         }
         renderIntakeFilePreview();
+        showIntakeUploadSuccess(intakeQueueItems.length);
     }
 }
 
 function renderIntakeFilePreview() {
-    const container = document.getElementById('intake-file-preview-list');
+    const container = document.getElementById('intake-file-preview-container');
+    const tbody = document.getElementById('intake-file-preview-list');
     const submitBtn = document.getElementById('btn-intake-submit');
-    if (!container) return;
-    if (intakeSelectedFiles.length === 0) {
-        container.innerHTML = '';
-        if (submitBtn) submitBtn.disabled = true;
+    const countEl = document.getElementById('intake-file-count');
+
+    updateIntakeDropZoneState();
+
+    if (!container || !tbody) return;
+
+    if (intakeQueueItems.length === 0) {
+        container.style.display = 'none';
+        tbody.innerHTML = '';
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = `<i data-lucide="cpu"></i> Process &amp; Auto-File Documents`;
+        }
         return;
     }
-    if (submitBtn) submitBtn.disabled = false;
-    container.innerHTML = `
-        <div style="width:100%; margin-bottom:8px; font-size:0.85rem; font-weight:700; color:#0f172a;">
-            Selected Files for Intake (${intakeSelectedFiles.length}):
-        </div>
-        ` + intakeSelectedFiles.map((file, idx) => `
-        <div style="background:#ffffff; border:1px solid #cbd5e1; border-radius:8px; padding:8px 14px; font-size:0.85rem; font-weight:600; color:#1e293b; display:flex; align-items:center; gap:10px; box-shadow:0 1px 2px rgba(0,0,0,0.05);">
-            <i data-lucide="file-text" style="width:16px; height:16px; color:#0284c7;"></i>
-            <span>${escapeHtml(file.name)}</span>
-            <span style="color:#64748b; font-size:0.75rem;">(${formatDocumentSize(file.size)})</span>
-            <span class="badge-status-pending" style="font-size:0.7rem; margin-left:auto;">Pending Upload</span>
-            <button type="button" onclick="removeIntakeFile(${idx})" style="background:none; border:none; color:#ef4444; cursor:pointer; font-weight:bold; font-size:1.1rem; padding:0 4px;" title="Remove file">&times;</button>
-        </div>
-    `).join('');
+
+    container.style.display = 'block';
+    if (countEl) countEl.textContent = String(intakeQueueItems.length);
+
+    const count = intakeQueueItems.length;
+    if (submitBtn && !submitBtn.dataset.processing) {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = `<i data-lucide="cpu"></i> Process ${count} Document${count > 1 ? 's' : ''}`;
+    }
+
+    try {
+        tbody.innerHTML = intakeQueueItems.map((item, idx) => {
+            let statusBadge = '';
+            if (item.upload_status === 'UPLOADING') {
+                statusBadge = `<span class="badge-status-pending" style="background:#fef3c7; color:#d97706;">Uploading...</span>`;
+            } else if (item.upload_status === 'PROCESSING') {
+                statusBadge = `<span class="badge-status-pending" style="background:#e0f2fe; color:#0284c7;">Processing OCR...</span>`;
+            } else if (item.upload_status === 'PROCESSED') {
+                statusBadge = `<span class="badge-status-approved">✓ Processed &amp; Filed</span>`;
+            } else if (item.upload_status === 'FAILED') {
+                statusBadge = `<span class="badge-status-failed">⚠ Failed</span>`;
+            } else {
+                statusBadge = `<span class="badge-status-uploaded">✓ Uploaded</span>`;
+            }
+
+            return `
+            <tr>
+                <td><strong>${escapeHtml(item.name)}</strong></td>
+                <td><span class="badge-status-completed">${escapeHtml(item.category || 'Document')}</span></td>
+                <td>${escapeHtml(formatDocumentSize(item.size))}</td>
+                <td>${statusBadge}</td>
+                <td><span style="font-size:0.85rem; color:#475569;">${escapeHtml(item.process_status || '')}</span></td>
+                <td>
+                    <button type="button" onclick="removeIntakeFile(${idx})" class="btn-action" style="color:#ef4444; border-color:#fca5a5;" title="Remove file">
+                        Remove
+                    </button>
+                </td>
+            </tr>`;
+        }).join('');
+    } catch (err) {
+        console.error('Smart Intake queue render failed', err);
+        tbody.innerHTML = `<tr><td colspan="6" style="color:#b91c1c; padding:12px;">Could not render the uploaded file list. ${escapeHtml(err && err.message ? err.message : 'Unknown error')}</td></tr>`;
+    }
+
     if (window.lucide && typeof window.lucide.createIcons === 'function') {
         window.lucide.createIcons();
     }
 }
 
 function removeIntakeFile(index) {
-    intakeSelectedFiles.splice(index, 1);
-    renderIntakeFilePreview();
+    if (index >= 0 && index < intakeQueueItems.length) {
+        intakeQueueItems.splice(index, 1);
+        renderIntakeFilePreview();
+        showIntakeUploadSuccess(intakeQueueItems.length);
+    }
 }
 
 function resetSmartIntakeForm() {
-    intakeSelectedFiles = [];
+    intakeQueueItems = [];
+    intakeBatchIdentities = [];
     const input = document.getElementById('intake-files-input');
     if (input) input.value = '';
     renderIntakeFilePreview();
@@ -8476,58 +9070,6 @@ function resetSmartIntakeForm() {
     if (succBanner) succBanner.style.display = 'none';
 }
 
-async function submitSmartIntakeForm(event) {
-    event.preventDefault();
-    if (intakeSelectedFiles.length === 0) return;
-    const submitBtn = document.getElementById('btn-intake-submit');
-    const errBanner = document.getElementById('adm-intake-error');
-    const succBanner = document.getElementById('adm-intake-success');
-    if (errBanner) errBanner.style.display = 'none';
-    if (succBanner) succBanner.style.display = 'none';
-    if (submitBtn) {
-        submitBtn.disabled = true;
-        submitBtn.innerHTML = `<i data-lucide="loader" class="spin"></i> Processing &amp; Auto-Filing...`;
-    }
-    try {
-        const payloadFiles = [];
-        for (const file of intakeSelectedFiles) {
-            const b64 = await readFileAsBase64(file);
-            payloadFiles.push({
-                file_name: file.name,
-                file_content_base64: b64
-            });
-        }
-        const res = await fetch('/api/admin/documents/intake/process', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'same-origin',
-            body: JSON.stringify({ files: payloadFiles })
-        });
-        const data = await res.json();
-        if (!res.ok || data.status !== 'success') {
-            throw new Error(data.message || 'Smart intake failed.');
-        }
-        if (succBanner) {
-            succBanner.style.display = 'block';
-            succBanner.innerHTML = `✓ ${escapeHtml(data.message || 'Processing complete.')}`;
-        }
-        renderIntakeResults(data);
-    } catch (err) {
-        if (errBanner) {
-            errBanner.style.display = 'block';
-            errBanner.textContent = err.message || 'Smart intake processing failed.';
-        }
-    } finally {
-        if (submitBtn) {
-            submitBtn.disabled = false;
-            submitBtn.innerHTML = `<i data-lucide="cpu"></i> Process &amp; Auto-File Documents`;
-        }
-        if (window.lucide && typeof window.lucide.createIcons === 'function') {
-            window.lucide.createIcons();
-        }
-    }
-}
-
 function renderIntakeResults(data) {
     const resultsPanel = document.getElementById('intake-results-panel');
     if (!resultsPanel) return;
@@ -8537,59 +9079,261 @@ function renderIntakeResults(data) {
     const company = data.company || {};
     const missing = data.missing_fields || [];
     const filedDocs = data.filed_documents || [];
+    const fileResults = data.file_results || [];
 
-    // Client card
-    document.getElementById('res-client-name').textContent = client.full_name || 'Unassigned / Anonymous';
+    const firstResult = fileResults[0] || {};
+    const docProc = firstResult.document_processing || {};
+    const chMatch = firstResult.companies_house_matching || {};
+
+    // Client Profile Card
+    const extractedName = docProc.extracted_name || client.full_name || 'Unassigned / Anonymous';
+    document.getElementById('res-client-name').textContent = extractedName;
     document.getElementById('res-client-dob').textContent = client.dob ? `DOB: ${client.dob}` : 'DOB: Not detected';
+
+    const clientMeta = document.getElementById('res-client-meta');
+    if (clientMeta) {
+        const metaParts = [];
+        if (docProc.doc_detected) metaParts.push(`Doc: ${docProc.doc_detected}`);
+        if (docProc.passport_number) metaParts.push(`Passport #: ${docProc.passport_number}`);
+        if (docProc.nationality) metaParts.push(`Nationality: ${docProc.nationality}`);
+        clientMeta.textContent = metaParts.join(' | ');
+    }
+
     const clientBadge = document.getElementById('res-client-status-badge');
     if (clientBadge) {
-        clientBadge.innerHTML = client.id ? `<span class="badge-status-approved">Linked Client #${client.id}</span>` : `<span class="badge-status-pending">No Client Created</span>`;
+        clientBadge.innerHTML = client.id ? `<span class="badge-status-approved">✓ Linked Client #${client.id}</span>` : `<span class="badge-status-pending">No Client Created</span>`;
     }
     const clientAction = document.getElementById('res-client-action-btn');
     if (clientAction && client.id) {
         clientAction.innerHTML = `<button type="button" class="btn-secondary" style="font-size:0.8rem;" onclick="openCrmClientModal(${client.id})"><i data-lucide="user"></i> View Customer File</button>`;
     }
 
-    // Company card
-    document.getElementById('res-company-name').textContent = company.name || 'No Company Matched';
-    document.getElementById('res-company-num').textContent = company.company_number ? `Company #: ${company.company_number}` : 'Company #: None';
-    const compBadge = document.getElementById('res-company-status-badge');
-    if (compBadge) {
-        compBadge.innerHTML = company.id ? `<span class="badge-status-approved">Imported / Linked #${company.id}</span>` : `<span class="badge-status-pending">No CH Match</span>`;
+    // Document scan accuracy card
+    const quality = docProc.extraction_quality || firstResult.extraction_quality || {};
+    const accuracyScore = document.getElementById('res-accuracy-score');
+    const accuracyFields = document.getElementById('res-accuracy-fields');
+    const accuracyPreview = document.getElementById('res-accuracy-preview');
+    const accuracyBadge = document.getElementById('res-accuracy-badge');
+    const scoreVal = Number.isFinite(Number(quality.score)) ? Number(quality.score) : null;
+    const scoreLabel = quality.label || (scoreVal == null ? 'Unknown' : (scoreVal >= 75 ? 'High' : (scoreVal >= 50 ? 'Medium' : 'Low')));
+    if (accuracyScore) {
+        accuracyScore.textContent = scoreVal == null ? 'Accuracy unavailable' : `${scoreLabel} · ${scoreVal}%`;
+    }
+    if (accuracyFields) {
+        const found = quality.fields_found;
+        const checked = quality.fields_checked;
+        accuracyFields.textContent = (found != null && checked != null)
+            ? `Fields detected: ${found}/${checked} (name, DOB, ID details, document type)`
+            : 'Fields detected: —';
+    }
+    if (accuracyPreview) {
+        const preview = (docProc.text_preview || firstResult.text_preview || '').trim();
+        accuracyPreview.textContent = preview
+            ? `OCR preview: ${preview.slice(0, 160)}${preview.length > 160 ? '…' : ''}`
+            : (quality.ocr_used ? 'OCR ran but little readable text was recovered.' : 'No OCR text available for this file.');
+    }
+    if (accuracyBadge) {
+        let badgeStyle = 'background:#ecfdf5; color:#047857; border:1px solid #a7f3d0;';
+        if (scoreVal != null && scoreVal < 50) badgeStyle = 'background:#fef2f2; color:#b91c1c; border:1px solid #fecaca;';
+        else if (scoreVal != null && scoreVal < 75) badgeStyle = 'background:#fffbeb; color:#b45309; border:1px solid #fde68a;';
+        accuracyBadge.innerHTML = `<span class="badge-status-pending" style="${badgeStyle}">${escapeHtml(scoreLabel)} extraction confidence</span>`;
     }
 
-    // Pending Alert card
+    // Companies House Auto-Match Card
+    const resCompCard = document.getElementById('res-company-card');
+    const resCompName = document.getElementById('res-company-name');
+    const resCompNum = document.getElementById('res-company-num');
+    const resCompBadge = document.getElementById('res-company-status-badge');
+    const resCompExpl = document.getElementById('res-company-explanation');
+
+    const chStatus = chMatch.status || company.ch_status || (company.id ? 'matched' : 'no_ch_match');
+    const isPassportDoc = fileResults.some(f => f.doc_type === 'Passport' || f.doc_type === 'ID Document' || (f.document_processing && (f.document_processing.doc_detected === 'Passport' || f.document_processing.doc_detected === 'ID Document')));
+    const candidates = chMatch.top_candidates || chMatch.candidates || company.top_candidates || [];
+    const candidatesEl = document.getElementById('res-company-candidates');
+    if (candidatesEl) candidatesEl.innerHTML = '';
+    const confidence = chMatch.confidence != null ? chMatch.confidence : company.confidence;
+    const confidenceLabel = chMatch.confidence_label || company.confidence_label || '';
+    const reasons = chMatch.reasons || company.match_reasons || [];
+
+    function renderMatchReasons(list) {
+        if (!list || !list.length) return '';
+        return `<ul style="margin:8px 0 0; padding-left:18px; color:#334155; font-size:0.8rem; line-height:1.4;">${list.map(r => `<li>${escapeHtml(r)}</li>`).join('')}</ul>`;
+    }
+
+    function renderTopCandidates(list) {
+        if (!candidatesEl || !list || !list.length) return;
+        candidatesEl.innerHTML = `<div style="margin-top:10px; font-size:0.8rem; color:#475569;">
+            <div style="font-weight:700; margin-bottom:6px;">Top candidates</div>
+            ${list.slice(0, 3).map(c => {
+                const score = c.score != null ? `${c.score}%` : '';
+                const label = escapeHtml(c.name || 'Candidate');
+                const num = escapeHtml(c.company_number || '—');
+                const dob = c.officer_dob || {};
+                let dobTxt = '';
+                if (dob.year) {
+                    dobTxt = dob.month
+                        ? ` · CH birth ${String(dob.month).padStart(2, '0')}/${dob.year}`
+                        : ` · CH birth year ${dob.year}`;
+                }
+                const why = (c.reasons || []).some(r => String(r).includes('Incompatible DOB'))
+                    ? ' <span style="color:#b45309;">(different person — DOB mismatch)</span>'
+                    : '';
+                return `<div style="padding:6px 0; border-top:1px solid #f1f5f9;"><strong>${label}</strong> — ${escapeHtml(String(score))} <span style="color:#64748b;">(#${num}${escapeHtml(dobTxt)})</span>${why}</div>`;
+            }).join('')}
+        </div>`;
+    }
+
+    if (chStatus === 'matched') {
+        if (resCompCard) resCompCard.style.borderTopColor = '#16a34a';
+        if (resCompName) resCompName.textContent = (company.name || chMatch.company_name || 'Matched Entity');
+        if (resCompNum) {
+            const confVal = confidence != null ? confidence : 85;
+            resCompNum.textContent = (company.company_number || chMatch.company_number)
+                ? `Company #: ${company.company_number || chMatch.company_number} · Confidence: ${confVal}%`
+                : `Confidence: ${confVal}%`;
+        }
+        if (resCompBadge) resCompBadge.innerHTML = `<span class="badge-status-approved">✓ HIGH-CONFIDENCE MATCH</span>`;
+        if (resCompExpl) {
+            resCompExpl.innerHTML = `<strong>Company:</strong> ${escapeHtml(company.name || chMatch.company_name || 'Matched Entity')}<br>` +
+                `<strong>Confidence:</strong> ${confidence != null ? confidence : 85}%<br>` +
+                `<strong>Evidence Checklist:</strong>${renderMatchReasons(reasons)}`;
+        }
+    } else if (chStatus === 'review_required' || chStatus === 'multiple_matches') {
+        if (resCompCard) resCompCard.style.borderTopColor = '#eab308';
+        if (resCompName) resCompName.textContent = '⚠ REVIEW REQUIRED';
+        if (resCompNum) resCompNum.textContent = confidence != null ? `Top candidate confidence: ${confidence}%` : 'Ambiguous candidate evidence';
+        if (resCompBadge) resCompBadge.innerHTML = `<span class="badge-status-pending" style="background:#fef3c7; color:#b45309;">⚠ REVIEW REQUIRED</span>`;
+        if (resCompExpl) resCompExpl.textContent = company.ch_message || chMatch.message || 'Insufficient evidence to safely distinguish candidates. Please select manually.';
+        renderTopCandidates(candidates);
+    } else if (chStatus === 'not_applicable' || (isPassportDoc && chStatus !== 'matched')) {
+        if (resCompCard) resCompCard.style.borderTopColor = '#0284c7';
+        const hasCandidates = candidates && candidates.length;
+        const dobBlocked = (reasons || []).some(r => String(r).includes('Incompatible DOB'))
+            || (candidates || []).some(c => (c.reasons || []).some(r => String(r).includes('Incompatible DOB')));
+        if (resCompName) {
+            resCompName.textContent = dobBlocked
+                ? 'No safe company match (DOB conflict)'
+                : (hasCandidates ? 'No high-confidence company match' : 'No Companies House Match');
+        }
+        if (resCompNum) {
+            resCompNum.textContent = confidence != null
+                ? `Best score ${confidence}% · filed under client`
+                : 'Identity document filed under client';
+        }
+        if (resCompBadge) {
+            resCompBadge.innerHTML = dobBlocked
+                ? `<span class="badge-status-pending" style="background:#fef3c7; color:#b45309; border:1px solid #fde68a;">✓ Client filed · CH officers are different people</span>`
+                : `<span class="badge-status-pending" style="background:#e0f2fe; color:#0369a1; border:1px solid #bae6fd;">✓ Document Processed (No CH Link)</span>`;
+        }
+        if (resCompExpl) {
+            resCompExpl.textContent = company.ch_message || chMatch.message
+                || (isPassportDoc
+                    ? 'Passports identify a person. Company stays unassigned until a high-confidence match exists.'
+                    : 'No matching company entity found on Companies House. Document processing succeeded.');
+        }
+        if (hasCandidates) renderTopCandidates(candidates);
+    } else {
+        if (resCompCard) resCompCard.style.borderTopColor = '#0284c7';
+        if (resCompName) resCompName.textContent = 'No Companies House Match';
+        if (resCompNum) resCompNum.textContent = confidence != null ? `Best score ${confidence}%` : 'Filed under client';
+        if (resCompBadge) resCompBadge.innerHTML = `<span class="badge-status-pending" style="background:#e0f2fe; color:#0369a1; border:1px solid #bae6fd;">✓ Document Processed (No CH Link)</span>`;
+        if (resCompExpl) resCompExpl.textContent = chMatch.message || company.ch_message || 'No matching company entity found on Companies House.';
+        if (candidates && candidates.length) renderTopCandidates(candidates);
+    }
+
+    // Pending Alert Card — informational only (automation already finished)
     const pendingText = document.getElementById('res-pending-alert-text');
     const pendingBtn = document.getElementById('res-pending-action-btn');
     if (missing && missing.length > 0) {
-        if (pendingText) pendingText.textContent = `Missing client contact information: ${missing.join(', ')}. You can add missing contact details later in the customer profile.`;
+        if (pendingText) pendingText.textContent = `Optional later: ${missing.join(', ')}. Filing already completed — you can add these in the customer profile when you have them.`;
         if (pendingBtn && client.id) {
-            pendingBtn.innerHTML = `<button type="button" class="btn-primary" style="font-size:0.8rem; background:#d97706;" onclick="openCrmClientModal(${client.id})"><i data-lucide="edit-3"></i> Add Missing Details</button>`;
+            pendingBtn.innerHTML = `<button type="button" class="btn-primary" style="font-size:0.8rem; background:#d97706;" onclick="openCrmClientModal(${client.id})"><i data-lucide="edit-3"></i> Add Details Later</button>`;
         }
     } else {
-        if (pendingText) pendingText.textContent = `✓ All client details (email & phone) are complete. No action required.`;
+        if (pendingText) pendingText.textContent = `✓ Client contact details are complete. No action required.`;
         if (pendingBtn) pendingBtn.innerHTML = '';
     }
 
     // Filed docs table
     const tbody = document.getElementById('intake-filed-docs-tbody');
     if (tbody) {
-        tbody.innerHTML = filedDocs.map(doc => `
-            <tr>
-                <td><strong>${escapeHtml(doc.name || 'Document')}</strong></td>
-                <td><span class="badge-status-completed">${escapeHtml(doc.category || 'General')}</span></td>
-                <td>${escapeHtml(client.full_name || 'Client')}</td>
-                <td>${escapeHtml(company.name || 'Unassigned')}</td>
-                <td><span class="badge-status-approved">Filed</span></td>
-                <td>
-                    <a href="/api/documents/${doc.id}/view" target="_blank" class="btn-action"><i data-lucide="eye"></i> View</a>
-                    <a href="/api/documents/${doc.id}/download" class="btn-action"><i data-lucide="download"></i> Download</a>
-                </td>
-            </tr>
-        `).join('');
+        tbody.innerHTML = filedDocs.map((doc, idx) => {
+            const fRes = fileResults[idx] || {};
+            const docType = fRes.doc_type || doc.category || 'General';
+            return `
+                <tr>
+                    <td><strong>${escapeHtml(doc.name || 'Document')}</strong></td>
+                    <td><span class="badge-status-completed">${escapeHtml(docType)}</span></td>
+                    <td>${escapeHtml(client.full_name || 'Client')}</td>
+                    <td>${escapeHtml(company.name || 'Unassigned')}</td>
+                    <td><span class="badge-status-approved">${escapeHtml((doc.scan_method || 'scan') === 'ocr' ? 'OCR scan' : 'Text scan')}</span></td>
+                    <td><span class="badge-status-approved">Filed</span></td>
+                    <td>
+                        <a href="/api/documents/${doc.id}/view" target="_blank" class="btn-action"><i data-lucide="eye"></i> View</a>
+                        <a href="/api/documents/${doc.id}/download" class="btn-action"><i data-lucide="download"></i> Download</a>
+                    </td>
+                </tr>
+            `;
+        }).join('');
     }
 
     if (window.lucide && typeof window.lucide.createIcons === 'function') {
         window.lucide.createIcons();
+    }
+}
+
+async function linkIntakeCompaniesHouseCandidate(btn) {
+    if (!btn || btn.dataset.linking === '1') return;
+    const companyNumber = (btn.getAttribute('data-intake-link-company') || '').trim();
+    const companyIdRaw = (btn.getAttribute('data-intake-link-company-id') || '').trim();
+    const companyName = (btn.getAttribute('data-intake-link-name') || '').trim();
+    const clientId = (btn.getAttribute('data-intake-link-client') || '').trim();
+    const docIds = (btn.getAttribute('data-intake-link-docs') || '')
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
+    if (!clientId || (!companyNumber && !companyIdRaw && !companyName)) {
+        alert('Missing company details for linking.');
+        return;
+    }
+    btn.dataset.linking = '1';
+    const original = btn.innerHTML;
+    btn.disabled = true;
+    btn.textContent = 'Linking…';
+    try {
+        const payload = {
+            client_id: Number(clientId),
+            company_name: companyName || null,
+            document_ids: docIds,
+        };
+        if (companyIdRaw) payload.company_id = Number(companyIdRaw);
+        if (companyNumber) payload.company_number = companyNumber;
+        const res = await fetch('/api/admin/documents/intake/link-company', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Could not link company');
+        }
+        const resCompName = document.getElementById('res-company-name');
+        const resCompNum = document.getElementById('res-company-num');
+        const resCompBadge = document.getElementById('res-company-status-badge');
+        const resCompExpl = document.getElementById('res-company-explanation');
+        const resCompCard = document.getElementById('res-company-card');
+        const candidatesEl = document.getElementById('res-company-candidates');
+        if (resCompCard) resCompCard.style.borderTopColor = '#16a34a';
+        if (resCompName) resCompName.textContent = (data.company && data.company.name) || companyName || 'Matched Entity';
+        if (resCompNum) resCompNum.textContent = `Company #: ${(data.company && data.company.company_number) || companyNumber || companyIdRaw || 'Linked'}`;
+        if (resCompBadge) resCompBadge.innerHTML = `<span class="badge-status-approved">✓ Companies House Match Linked</span>`;
+        if (resCompExpl) resCompExpl.textContent = data.message || 'Linked company to client and auto-filed documents.';
+        if (candidatesEl) candidatesEl.innerHTML = '';
+    } catch (err) {
+        alert((err && err.message) || 'Could not link company');
+        btn.disabled = false;
+        btn.innerHTML = original;
+        delete btn.dataset.linking;
     }
 }

@@ -102,12 +102,12 @@ def unusable_password_hash():
 
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("PRAGMA foreign_keys = ON;")
         conn.execute("PRAGMA journal_mode = WAL;")
-        conn.execute("PRAGMA busy_timeout = 5000;")
+        conn.execute("PRAGMA busy_timeout = 15000;")
     except sqlite3.OperationalError:
         pass
     return conn
@@ -470,6 +470,169 @@ def ensure_rbac():
                 "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?);",
                 (role_id, perm_id),
             )
+
+    # Document Decoupled Columns & High-Performance Indexes Migration
+    conn = get_db()
+    try:
+        doc_cols = {info[1] for info in conn.execute("PRAGMA table_info(documents)").fetchall()}
+        new_cols = [
+            ('file_hash', 'TEXT'),
+            ('ocr_status', "TEXT DEFAULT 'COMPLETED'"),
+            ('identity_status', "TEXT DEFAULT 'COMPLETED'"),
+            ('crm_status', "TEXT DEFAULT 'MATCHED'"),
+            ('ch_status', "TEXT DEFAULT 'NOT_APPLICABLE'"),
+            ('overall_status', "TEXT DEFAULT 'COMPLETED'"),
+            ('stage_timestamps_json', 'TEXT'),
+            ('match_meta_json', 'TEXT'),
+            ('lifecycle_status', "TEXT DEFAULT 'POSTED_DOCUMENTS'"),
+            ('is_posted', 'INTEGER DEFAULT 1'),
+            ('ocr_confidence', 'REAL DEFAULT 100.0'),
+            ('classification_confidence', 'REAL DEFAULT 100.0'),
+            ('identity_confidence', 'REAL DEFAULT 100.0'),
+            ('customer_match_confidence', 'REAL DEFAULT 100.0'),
+            ('company_match_confidence', 'REAL DEFAULT 100.0'),
+            ('duplicate_confidence', 'REAL DEFAULT 0.0'),
+            ('uploaded_at', 'TIMESTAMP'),
+            ('processed_at', 'TIMESTAMP'),
+            ('matched_at', 'TIMESTAMP'),
+            ('approved_at', 'TIMESTAMP'),
+            ('posted_at', 'TIMESTAMP'),
+            ('uploaded_by_id', 'INTEGER'),
+            ('processed_by_id', 'INTEGER'),
+            ('matched_by_id', 'INTEGER'),
+            ('approved_by_id', 'INTEGER'),
+            ('posted_by_id', 'INTEGER'),
+        ]
+        for col_name, col_type in new_cols:
+            if col_name not in doc_cols:
+                conn.execute(f"ALTER TABLE documents ADD COLUMN {col_name} {col_type};")
+        # Backfill uploaded_at for rows that predate the column
+        try:
+            conn.execute("UPDATE documents SET uploaded_at = COALESCE(uploaded_at, created_at) WHERE uploaded_at IS NULL;")
+        except Exception:
+            pass
+
+        # Indexes for fast querying
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_user_id ON documents(user_id);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_company_id ON documents(company_id);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_file_hash ON documents(file_hash);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_created_at ON documents(created_at);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_lifecycle ON documents(lifecycle_status, is_posted);")
+
+        # Backfill customer / intake docs that should not appear as posted
+        try:
+            conn.execute("""
+                UPDATE documents
+                SET lifecycle_status = 'CUSTOMER_UPLOADS', is_posted = 0
+                WHERE (uploaded_by = 'Customer Upload' OR category = 'Checkout Upload')
+                  AND COALESCE(is_posted, 1) = 1
+                  AND status IN ('Pending Review', 'Requires Update');
+            """)
+            conn.execute("""
+                UPDATE documents
+                SET lifecycle_status = CASE
+                        WHEN COALESCE(ch_status, '') IN ('review_required', 'REVIEW_REQUIRED') THEN 'REVIEW_REQUIRED'
+                        WHEN COALESCE(ch_status, '') IN ('matched', 'MATCHED') THEN 'READY_FOR_APPROVAL'
+                        ELSE 'REVIEW_REQUIRED'
+                    END,
+                    is_posted = 0,
+                    status = CASE WHEN status = 'Approved' THEN 'Pending Review' ELSE status END
+                WHERE review_notes = 'Smart Document Intake'
+                  AND COALESCE(is_posted, 1) = 1
+                  AND COALESCE(lifecycle_status, 'POSTED_DOCUMENTS') = 'POSTED_DOCUMENTS'
+                  AND COALESCE(client_visible, 0) = 0;
+            """)
+        except Exception:
+            pass
+
+        # OCR Content Hash Cache
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS ocr_cache (
+                file_hash TEXT PRIMARY KEY,
+                extracted_text TEXT NOT NULL,
+                metadata_json TEXT NOT NULL,
+                processing_version TEXT DEFAULT 'v2.0',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        # Asynchronous Batch Intake Queue
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS intake_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                file_name TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                file_hash TEXT,
+                status TEXT NOT NULL DEFAULT 'QUEUED',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                result_json TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP
+            );
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_intake_queue_batch ON intake_queue(batch_id, status);")
+
+        # Observability Metrics
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS intake_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id TEXT,
+                document_id INTEGER,
+                file_hash TEXT,
+                extraction_method TEXT,
+                ocr_duration_ms INTEGER,
+                ch_duration_ms INTEGER,
+                total_duration_ms INTEGER,
+                ch_cache_hit INTEGER DEFAULT 0,
+                match_score INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        # Document Audit Log Table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS document_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id INTEGER NOT NULL,
+                actor_type TEXT NOT NULL DEFAULT 'AI',
+                actor_id INTEGER,
+                actor_name TEXT NOT NULL,
+                action TEXT NOT NULL,
+                previous_state TEXT,
+                new_state TEXT,
+                ai_model_version TEXT DEFAULT 'v2.0',
+                reason_evidence_json TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+            );
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_doc_audit_doc_id ON document_audit_log(document_id);")
+
+        # Bulk Approval Jobs Table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS bulk_approval_jobs (
+                job_id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                total_count INTEGER NOT NULL DEFAULT 0,
+                approved_count INTEGER NOT NULL DEFAULT 0,
+                failed_count INTEGER NOT NULL DEFAULT 0,
+                skipped_count INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'PROCESSING',
+                errors_json TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMP
+            );
+        """)
+        conn.commit()
+    except Exception as exc:
+        print(f"[Schema Migration Note] {exc}")
+    finally:
+        conn.close()
 
 def query_db(query, args=(), one=False):
     conn = get_db()

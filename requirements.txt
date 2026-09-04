@@ -1,2 +1,6 @@
 argon2-cffi==25.1.0
 fpdf2==2.8.3
+pypdf==5.4.0
+pillow==11.3.0
+pypdfium2==4.30.0
+pytesseract==0.3.13
