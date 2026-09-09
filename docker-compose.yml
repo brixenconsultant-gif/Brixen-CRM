@@ -1,0 +1,37 @@
+services:
+  # ── Brixen CRM Web Application ───────────────────────────
+  brixen-crm:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: brixen-crm
+    restart: unless-stopped
+    ports:
+      - "5050:5050"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=5050
+      - DATABASE_URL=/app/data/hypetex.db
+      # ── SMTP (optional — override in .env) ───────────────
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+    volumes:
+      # Persist SQLite database across container restarts
+      - crm-data:/app/data
+      # Persist client uploaded documents
+      - crm-storage:/app/storage/clients
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5050/"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  crm-data:
+    driver: local
+  crm-storage:
+    driver: local

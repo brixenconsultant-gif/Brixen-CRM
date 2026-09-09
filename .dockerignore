@@ -1,0 +1,65 @@
+# ── Runtime ignores ────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyc
+.pytest_cache/
+.coverage
+
+# ── Git & IDE ──────────────────────────────────────────────
+.git/
+.gitignore
+.vscode/
+.idea/
+.cursor/
+.DS_Store
+
+# ── Virtualenv ─────────────────────────────────────────────
+.venv/
+venv/
+
+# ── Database (lives on a Docker volume, not baked in) ──────
+*.db
+*.sqlite
+*.sqlite3
+hypetex.db
+
+# ── Environment / secrets ─────────────────────────────────
+.env
+.env.*
+
+# ── Build artifacts & temp scripts ─────────────────────────
+*.zip
+*.patch
+css_diff.txt
+css_history.patch
+deploy_to_portal.sh
+tmp-inv/
+crm.log
+
+# ── One-off fix scripts ───────────────────────────────────
+fix_*.py
+recover_dash.py
+restore_dash.py
+bust_cache*.py
+enforce_hover.py
+remove_shadows.py
+size_buttons.py
+sm_btns.py
+stripe_theme.py
+tweak_buttons.py
+update_final.py
+update_styles.py
+rewrite_*.py
+fix_render_admin_chart.py
+
+# ── Backups ────────────────────────────────────────────────
+static/css/styles_restored.css
+
+# ── Docker itself ──────────────────────────────────────────
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# ── Docs ───────────────────────────────────────────────────
+*.md
+LICENSE
