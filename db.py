@@ -219,6 +219,13 @@ def ensure_schema():
         conn.execute("ALTER TABLE users ADD COLUMN department TEXT")
     if 'date_of_birth' not in user_cols:
         conn.execute("ALTER TABLE users ADD COLUMN date_of_birth TEXT")
+    if 'notification_email' not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN notification_email TEXT")
+    if 'is_b2b' not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN is_b2b INTEGER NOT NULL DEFAULT 1")
+    if 'account_type' not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN account_type TEXT DEFAULT 'B2B Client (Brixen Website Panel)'")
+        conn.execute("UPDATE users SET account_type = 'B2B Client (Brixen Website Panel)', is_b2b = 1 WHERE role = 'CLIENT'")
     if 'checkout_phone' not in order_cols:
         conn.execute("ALTER TABLE orders ADD COLUMN checkout_phone TEXT")
     if 'checkout_dob' not in order_cols:
@@ -304,6 +311,10 @@ def ensure_schema():
         conn.execute("ALTER TABLE companies ADD COLUMN sic_codes TEXT")
     if 'registered_email' not in company_cols:
         conn.execute("ALTER TABLE companies ADD COLUMN registered_email TEXT")
+    if 'registered_email_locked' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN registered_email_locked INTEGER NOT NULL DEFAULT 0")
+    if 'whatsapp_number' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN whatsapp_number TEXT")
     if 'accounts_next_due' not in company_cols:
         conn.execute("ALTER TABLE companies ADD COLUMN accounts_next_due DATE")
     if 'accounts_overdue' not in company_cols:
@@ -318,6 +329,73 @@ def ensure_schema():
         conn.execute("ALTER TABLE companies ADD COLUMN ch_alert_fingerprint TEXT")
     if 'ch_alert_sent_at' not in company_cols:
         conn.execute("ALTER TABLE companies ADD COLUMN ch_alert_sent_at TIMESTAMP")
+    if 'business_email_verified' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN business_email_verified INTEGER NOT NULL DEFAULT 0")
+    if 'business_email_verified_by' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN business_email_verified_by INTEGER")
+    if 'business_email_verified_at' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN business_email_verified_at TIMESTAMP")
+    if 'business_email_source' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN business_email_source TEXT")
+    if 'business_email_updated_at' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN business_email_updated_at TIMESTAMP")
+    if 'compliance_last_notification_at' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN compliance_last_notification_at TIMESTAMP")
+    if 'compliance_last_notification_id' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN compliance_last_notification_id TEXT")
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS company_email_verification_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id INTEGER NOT NULL,
+            email TEXT,
+            action TEXT NOT NULL,
+            source TEXT,
+            note TEXT,
+            actor_user_id INTEGER,
+            actor_name TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_company_email_hist_company
+            ON company_email_verification_history(company_id, created_at DESC);
+        CREATE TABLE IF NOT EXISTS compliance_notification_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id INTEGER NOT NULL,
+            notification_id TEXT NOT NULL,
+            notification_type TEXT NOT NULL,
+            issue_fingerprint TEXT,
+            issue_summary TEXT,
+            recipient TEXT,
+            status TEXT NOT NULL,
+            blocked_reason TEXT,
+            message_id TEXT,
+            trigger_source TEXT,
+            attempt INTEGER NOT NULL DEFAULT 1,
+            sent_by_user_id INTEGER,
+            error_category TEXT,
+            payload_json TEXT,
+            track_token TEXT,
+            first_clicked_at TIMESTAMP,
+            click_count INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_compliance_log_company
+            ON compliance_notification_log(company_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_compliance_log_fp
+            ON compliance_notification_log(company_id, issue_fingerprint, status, created_at DESC);
+    """)
+    # Engagement tracking for compliance emails (click CTAs — no open pixels).
+    compliance_log_cols = {row[1] for row in conn.execute("PRAGMA table_info(compliance_notification_log)").fetchall()}
+    if 'track_token' not in compliance_log_cols:
+        conn.execute("ALTER TABLE compliance_notification_log ADD COLUMN track_token TEXT")
+    if 'first_clicked_at' not in compliance_log_cols:
+        conn.execute("ALTER TABLE compliance_notification_log ADD COLUMN first_clicked_at TIMESTAMP")
+    if 'click_count' not in compliance_log_cols:
+        conn.execute("ALTER TABLE compliance_notification_log ADD COLUMN click_count INTEGER NOT NULL DEFAULT 0")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_compliance_log_token ON compliance_notification_log(track_token)"
+    )
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS company_accounts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -570,11 +648,18 @@ def ensure_rbac():
                 attempts INTEGER NOT NULL DEFAULT 0,
                 last_error TEXT,
                 result_json TEXT,
+                folder_path TEXT,
+                source_mode TEXT DEFAULT 'CUSTOMER_UPLOADS',
+                entity_graph_json TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 started_at TIMESTAMP,
                 completed_at TIMESTAMP
             );
         """)
+        iq_cols = {info[1] for info in conn.execute("PRAGMA table_info(intake_queue)").fetchall()}
+        for col_name, col_type in (('folder_path', 'TEXT'), ('source_mode', "TEXT DEFAULT 'CUSTOMER_UPLOADS'"), ('entity_graph_json', 'TEXT')):
+            if col_name not in iq_cols:
+                conn.execute(f"ALTER TABLE intake_queue ADD COLUMN {col_name} {col_type};")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_intake_queue_batch ON intake_queue(batch_id, status);")
 
         # Observability Metrics

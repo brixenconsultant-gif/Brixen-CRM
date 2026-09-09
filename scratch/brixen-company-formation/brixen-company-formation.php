@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Brixen Company Formation Form
  * Description: Separate company-formation file-details form for Digital, Professional and All Inclusive packages. Does not create KYC / Identity Verification orders.
- * Version: 1.1.4
+ * Version: 1.1.5
  * Author: Brixen Consultants
  */
 
@@ -51,6 +51,8 @@ class Brixen_Company_Formation_Form {
     const DRAFT_KEY = 'cfs_form_draft';
     const USER_META_KEY = '_cfs_form_draft';
     const KYC_PRODUCT_IDS = array(15145, 790);
+    const DIGITAL_PACKAGE_ID = 13990;
+    const TIDE_PRODUCT_ID = 14707;
     const ALLOWED_PRODUCTS = array(
         13990 => 'Digital Package',
         14057 => 'Professional Package',
@@ -58,6 +60,7 @@ class Brixen_Company_Formation_Form {
     );
 
     private static $instance = null;
+    private static $adding_digital_gift = false;
 
     public static function get_instance() {
         if (null === self::$instance) {
@@ -109,6 +112,14 @@ class Brixen_Company_Formation_Form {
         add_filter('woocommerce_cart_total', array($this, 'filter_cart_price_html'), 20, 1);
         add_filter('the_content', array($this, 'filter_pricing_html'), 25);
         add_filter('elementor/frontend/the_content', array($this, 'filter_pricing_html'), 25);
+        add_action('woocommerce_add_to_cart', array($this, 'maybe_gift_taptap_with_digital'), 20, 6);
+        add_action('woocommerce_cart_item_removed', array($this, 'maybe_remove_digital_bank_gifts'), 20, 2);
+        add_action('woocommerce_before_calculate_totals', array($this, 'zero_digital_taptap_gift'), 20, 1);
+        add_action('woocommerce_before_checkout_form', array($this, 'render_digital_bank_offers'), 8);
+        add_action('woocommerce_before_cart', array($this, 'render_digital_bank_offers'), 8);
+        add_action('wp_ajax_cfs_toggle_bank_offer', array($this, 'ajax_toggle_bank_offer'));
+        add_action('wp_ajax_nopriv_cfs_toggle_bank_offer', array($this, 'ajax_toggle_bank_offer'));
+        add_filter('woocommerce_get_item_data', array($this, 'cart_item_bank_offer_label'), 15, 2);
     }
 
     public function filter_product_price($price, $product) {
@@ -1172,10 +1183,10 @@ class Brixen_Company_Formation_Form {
             wp_enqueue_style('select2');
             wp_enqueue_script('selectWoo');
         }
-        wp_register_style('cfs-frontend', false, array(), '1.1.4');
+        wp_register_style('cfs-frontend', false, array(), '1.1.5');
         wp_enqueue_style('cfs-frontend');
-        wp_add_inline_style('cfs-frontend', $this->css() . $this->account_menu_css());
-        wp_register_script('cfs-frontend', false, array('jquery'), '1.1.4', true);
+        wp_add_inline_style('cfs-frontend', $this->css() . $this->account_menu_css() . $this->bank_offer_css());
+        wp_register_script('cfs-frontend', false, array('jquery'), '1.1.5', true);
         wp_enqueue_script('cfs-frontend');
         $account_url = function_exists('wc_get_page_permalink') ? wc_get_page_permalink('myaccount') : home_url('/client-panel/');
         $portal_url = function_exists('brixen_crm_portal_sso_url') ? brixen_crm_portal_sso_url() : '';
@@ -1194,8 +1205,10 @@ class Brixen_Company_Formation_Form {
             'loggedIn' => is_user_logged_in() ? 1 : 0,
             'countries' => $this->country_names(),
             'billing' => $this->checkout_map_from_form(),
+            'bankOfferNonce' => wp_create_nonce('cfs_bank_offer'),
         ));
         wp_add_inline_script('cfs-frontend', $this->js());
+        wp_add_inline_script('cfs-frontend', $this->bank_offer_js());
         wp_add_inline_script('cfs-frontend', $this->account_menu_js());
         wp_add_inline_script('cfs-frontend', $this->checkout_prefill_js());
     }
@@ -1275,6 +1288,7 @@ class Brixen_Company_Formation_Form {
                 wp_send_json_error(array('message' => 'Could not add the company formation package to the cart'));
             }
         }
+        $this->ensure_digital_taptap_gift();
 
         $this->store_draft($form_data);
         WC()->session->set(self::SESSION_KEY, $form_data);
@@ -1494,6 +1508,235 @@ class Brixen_Company_Formation_Form {
         echo $plain_text
             ? "\nCompany formation: {$company}\nSIC: " . $order->get_meta('_cfs_sic_code') . "\n"
             : '<p><strong>Company formation:</strong> ' . esc_html($company) . '<br><strong>SIC:</strong> ' . esc_html($order->get_meta('_cfs_sic_code')) . '</p>';
+    }
+
+    private function taptap_product_id() {
+        $stored = absint(get_option('brixen_taptap_product_id', 0));
+        if ($stored && function_exists('wc_get_product') && wc_get_product($stored)) {
+            return $stored;
+        }
+        if (function_exists('get_page_by_path')) {
+            $post = get_page_by_path('taptap-business-bank', OBJECT, 'product');
+            if ($post) {
+                return (int) $post->ID;
+            }
+        }
+        return 0;
+    }
+
+    private function cart_has_product($product_id) {
+        $product_id = absint($product_id);
+        if (!$product_id || !WC()->cart) {
+            return false;
+        }
+        foreach (WC()->cart->get_cart() as $item) {
+            if ((int) $item['product_id'] === $product_id) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private function cart_has_digital_package() {
+        return $this->cart_has_product(self::DIGITAL_PACKAGE_ID);
+    }
+
+    public function maybe_gift_taptap_with_digital($cart_item_key, $product_id, $quantity, $variation_id, $variation, $cart_item_data) {
+        if ((int) $product_id !== self::DIGITAL_PACKAGE_ID) {
+            return;
+        }
+        $this->ensure_digital_taptap_gift();
+    }
+
+    private function ensure_digital_taptap_gift() {
+        if (self::$adding_digital_gift || !function_exists('WC') || !WC()->cart) {
+            return;
+        }
+        if (!$this->cart_has_digital_package()) {
+            return;
+        }
+        $tap_id = $this->taptap_product_id();
+        if (!$tap_id || $this->cart_has_product($tap_id)) {
+            return;
+        }
+        self::$adding_digital_gift = true;
+        WC()->cart->add_to_cart($tap_id, 1, 0, array(), array(
+            'brixen_digital_gift' => 1,
+            'brixen_bank_offer' => 'taptap',
+            'unique_key' => 'taptap-digital-gift',
+        ));
+        self::$adding_digital_gift = false;
+    }
+
+    public function maybe_remove_digital_bank_gifts($cart_item_key, $cart) {
+        if (!$cart || $this->cart_has_digital_package()) {
+            return;
+        }
+        $tap_id = $this->taptap_product_id();
+        if (!$tap_id) {
+            return;
+        }
+        foreach ($cart->get_cart() as $key => $item) {
+            if ((int) $item['product_id'] === $tap_id && !empty($item['brixen_digital_gift'])) {
+                $cart->remove_cart_item($key);
+            }
+        }
+    }
+
+    public function zero_digital_taptap_gift($cart) {
+        if (!$cart || is_admin() && !defined('DOING_AJAX')) {
+            return;
+        }
+        $tap_id = $this->taptap_product_id();
+        $digital = $this->cart_has_product(self::DIGITAL_PACKAGE_ID);
+        if (!$tap_id || !$digital) {
+            return;
+        }
+        foreach ($cart->get_cart() as $item) {
+            if ((int) $item['product_id'] !== $tap_id) {
+                continue;
+            }
+            if (!empty($item['brixen_digital_gift']) || !empty($item['brixen_bank_offer'])) {
+                $item['data']->set_price(0);
+            }
+        }
+    }
+
+    public function cart_item_bank_offer_label($item_data, $cart_item) {
+        if (!empty($cart_item['brixen_digital_gift'])) {
+            $item_data[] = array(
+                'key' => 'Digital Package offer',
+                'value' => 'Free with Digital Package',
+            );
+        }
+        return $item_data;
+    }
+
+    public function render_digital_bank_offers() {
+        if (!function_exists('WC') || !WC()->cart || !$this->cart_has_digital_package()) {
+            return;
+        }
+        $tap_id = $this->taptap_product_id();
+        $tide_id = self::TIDE_PRODUCT_ID;
+        $tide = function_exists('wc_get_product') ? wc_get_product($tide_id) : null;
+        $tap = $tap_id ? wc_get_product($tap_id) : null;
+        if (!$tide && !$tap) {
+            return;
+        }
+        $tide_price = $tide ? brixen_format_retail_price($tide->get_price()) : '50';
+        echo '<div class="cfs-bank-offers" id="cfs-bank-offers">';
+        echo '<h3>Add a business bank with Digital Package</h3>';
+        echo '<p class="cfs-bank-offers-copy">TapTap Business is included free. You can also add Tide for £' . esc_html($tide_price) . '.</p>';
+        echo '<div class="cfs-bank-offer-grid">';
+        if ($tap) {
+            $on = $this->cart_has_product($tap_id);
+            echo '<label class="cfs-bank-offer' . ($on ? ' is-on' : '') . '">';
+            echo '<input type="checkbox" class="cfs-bank-offer-toggle" data-offer="taptap" ' . checked($on, true, false) . '>';
+            echo '<span class="cfs-bank-offer-name">TapTap Business</span>';
+            echo '<span class="cfs-bank-offer-price">Free</span>';
+            echo '<span class="cfs-bank-offer-note">Included with Digital Package</span>';
+            echo '</label>';
+        }
+        if ($tide) {
+            $on = $this->cart_has_product($tide_id);
+            echo '<label class="cfs-bank-offer' . ($on ? ' is-on' : '') . '">';
+            echo '<input type="checkbox" class="cfs-bank-offer-toggle" data-offer="tide" ' . checked($on, true, false) . '>';
+            echo '<span class="cfs-bank-offer-name">Tide Business Bank</span>';
+            echo '<span class="cfs-bank-offer-price">£' . esc_html($tide_price) . '</span>';
+            echo '<span class="cfs-bank-offer-note">Optional add-on</span>';
+            echo '</label>';
+        }
+        echo '</div></div>';
+    }
+
+    public function ajax_toggle_bank_offer() {
+        if (!isset($_POST['nonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['nonce'])), 'cfs_bank_offer')) {
+            wp_send_json_error(array('message' => 'Security check failed'));
+        }
+        if (!function_exists('WC') || !WC()->cart) {
+            wc_load_cart();
+        }
+        if (!$this->cart_has_digital_package()) {
+            wp_send_json_error(array('message' => 'Add Digital Package first'));
+        }
+        $offer = sanitize_key(wp_unslash($_POST['offer'] ?? ''));
+        $enabled = !empty($_POST['enabled']) && (string) $_POST['enabled'] !== '0';
+        $product_id = 0;
+        $extras = array();
+        if ($offer === 'taptap') {
+            $product_id = $this->taptap_product_id();
+            $extras = array(
+                'brixen_digital_gift' => 1,
+                'brixen_bank_offer' => 'taptap',
+                'unique_key' => 'taptap-digital-gift',
+            );
+        } elseif ($offer === 'tide') {
+            $product_id = self::TIDE_PRODUCT_ID;
+            $extras = array(
+                'brixen_bank_offer' => 'tide',
+                'unique_key' => 'tide-digital-offer',
+            );
+        }
+        if (!$product_id) {
+            wp_send_json_error(array('message' => 'Unknown bank offer'));
+        }
+        foreach (WC()->cart->get_cart() as $key => $item) {
+            if ((int) $item['product_id'] === $product_id) {
+                if (!$enabled) {
+                    WC()->cart->remove_cart_item($key);
+                }
+                wp_send_json_success(array('ok' => true, 'in_cart' => $enabled));
+            }
+        }
+        if ($enabled) {
+            $added = WC()->cart->add_to_cart($product_id, 1, 0, array(), $extras);
+            if (!$added) {
+                wp_send_json_error(array('message' => 'Could not add that bank offer'));
+            }
+        }
+        wp_send_json_success(array('ok' => true, 'in_cart' => $enabled));
+    }
+
+    private function bank_offer_css() {
+        return <<<'CSS'
+.cfs-bank-offers{max-width:820px;margin:0 auto 28px;padding:22px 22px 18px;background:#fff;border:1px solid #e8e8ed;border-radius:16px;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,system-ui,sans-serif}
+.cfs-bank-offers h3{margin:0 0 6px;font-size:20px;letter-spacing:-.02em;color:#1d1d1f}
+.cfs-bank-offers-copy{margin:0 0 16px;color:#6e6e73;font-size:14px;line-height:1.45}
+.cfs-bank-offer-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.cfs-bank-offer{display:flex;flex-direction:column;gap:4px;padding:16px;border:1px solid #d2d2d7;border-radius:14px;background:#fbfbfd;cursor:pointer}
+.cfs-bank-offer.is-on{border-color:#003971;background:#f3f7fb}
+.cfs-bank-offer-name{font-weight:600;color:#1d1d1f;font-size:16px}
+.cfs-bank-offer-price{font-weight:700;color:#003971;font-size:15px}
+.cfs-bank-offer-note{font-size:12px;color:#6e6e73}
+@media(max-width:700px){.cfs-bank-offer-grid{grid-template-columns:1fr}}
+CSS;
+    }
+
+    private function bank_offer_js() {
+        return <<<'JS'
+jQuery(function($){
+    $(document).on('change', '.cfs-bank-offer-toggle', function(){
+        var $input = $(this);
+        var $card = $input.closest('.cfs-bank-offer');
+        $card.toggleClass('is-on', $input.prop('checked'));
+        $.post((window.cfsAjax || {}).ajaxUrl, {
+            action: 'cfs_toggle_bank_offer',
+            nonce: (window.cfsAjax || {}).bankOfferNonce,
+            offer: $input.data('offer'),
+            enabled: $input.prop('checked') ? 1 : 0
+        }).done(function(){
+            if (typeof wc_checkout_params !== 'undefined') {
+                $(document.body).trigger('update_checkout');
+            } else {
+                window.location.reload();
+            }
+        }).fail(function(){
+            $input.prop('checked', !$input.prop('checked'));
+            $card.toggleClass('is-on', $input.prop('checked'));
+        });
+    });
+});
+JS;
     }
 
     public function print_checkout_button_css() {

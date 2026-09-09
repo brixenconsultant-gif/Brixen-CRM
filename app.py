@@ -9,9 +9,16 @@ import urllib.request
 import urllib.error
 import base64
 import mimetypes
-from wsgiref.simple_server import make_server
+from wsgiref.simple_server import make_server, WSGIServer
+from socketserver import ThreadingMixIn
 from concurrent.futures import ThreadPoolExecutor
 from db import query_db, execute_db, hash_password, verify_password, needs_rehash, unusable_password_hash, get_db, ensure_schema
+
+class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
+    """Handle static + API requests in parallel (local feel on the live portal)."""
+    daemon_threads = True
+    block_on_close = False
+
 
 BULK_JOB_POOL = ThreadPoolExecutor(max_workers=4)
 
@@ -45,17 +52,24 @@ import hmac
 import hashlib
 import secrets
 import unicodedata
+import email
+import email.policy
+import threading
 
 # Storage directory for private client files (P2)
 STORAGE_DIR = os.path.join(BASE_DIR, 'storage')
 os.makedirs(STORAGE_DIR, exist_ok=True)
 
 # P1: Persistent Database-Backed Session Management
+# Absolute cookie lifetime (refresh keeps you signed in). No auto-logout.
+SESSION_COOKIE_MAX_AGE = 30 * 24 * 60 * 60
+
+
 def create_db_session(user_id):
     token = str(uuid.uuid4())
     execute_db("""
-        INSERT INTO user_sessions (session_token, user_id, expires_at)
-        VALUES (?, ?, datetime('now', '+30 days'));
+        INSERT INTO user_sessions (session_token, user_id, expires_at, last_activity_at)
+        VALUES (?, ?, datetime('now', '+30 days'), datetime('now'));
     """, (token, user_id))
     return token
 
@@ -65,38 +79,55 @@ def revoke_db_session(token):
         UPDATE user_sessions SET revoked_at = datetime('now') WHERE session_token = ?;
     """, (token,))
 
-def get_current_user(environ):
+
+def touch_db_session(token):
+    if not token:
+        return
+    try:
+        execute_db(
+            """UPDATE user_sessions
+               SET last_activity_at = datetime('now'),
+                   expires_at = datetime('now', '+30 days')
+             WHERE session_token = ? AND revoked_at IS NULL;""",
+            (token,),
+        )
+    except Exception:
+        pass
+
+
+def session_token_from_environ(environ):
     cookie_str = environ.get('HTTP_COOKIE', '')
-    token = None
     if 'session_token=' in cookie_str:
         for c in cookie_str.split(';'):
             c = c.strip()
             if c.startswith('session_token='):
-                token = c.split('=', 1)[1]
-                break
-    if not token:
-        auth_hdr = environ.get('HTTP_AUTHORIZATION', '')
-        if auth_hdr.startswith('Bearer '):
-            token = auth_hdr.split(' ', 1)[1]
-            
-    if token:
-        session_rec = query_db("""
-            SELECT s.session_token, u.* 
-            FROM user_sessions s
-            JOIN users u ON s.user_id = u.id
-            WHERE s.session_token = ? 
-              AND s.revoked_at IS NULL 
-              AND s.expires_at > datetime('now');
-        """, (token,), one=True)
-        
-        if session_rec:
-            # Update last activity timestamp (best-effort; never fail auth on lock)
-            try:
-                execute_db("UPDATE user_sessions SET last_activity_at = datetime('now') WHERE session_token = ?;", (token,))
-            except Exception:
-                pass
-            return dict(session_rec)
+                return c.split('=', 1)[1]
+    auth_hdr = environ.get('HTTP_AUTHORIZATION', '')
+    if auth_hdr.startswith('Bearer '):
+        return auth_hdr.split(' ', 1)[1]
     return None
+
+
+def get_current_user(environ):
+    token = session_token_from_environ(environ)
+    if not token:
+        return None
+
+    session_rec = query_db("""
+        SELECT s.session_token, u.*
+        FROM user_sessions s
+        JOIN users u ON s.user_id = u.id
+        WHERE s.session_token = ?
+          AND s.revoked_at IS NULL
+          AND s.expires_at > datetime('now');
+    """, (token,), one=True)
+
+    if not session_rec:
+        return None
+
+    # Keep session alive across refresh and normal API use.
+    touch_db_session(token)
+    return dict(session_rec)
 
 def client_portal_login_ready(client):
     if not client:
@@ -133,8 +164,9 @@ def smtp_configured():
     return bool(cfg['host'] and cfg['user'] and cfg['password'])
 
 
+# Keep in sync with email_engine.EMAIL_FONT_STACK (safe system fonts only).
 EMAIL_FONT_STACK = (
-    '-apple-system, BlinkMacSystemFont, Helvetica Neue, Helvetica, Arial, sans-serif'
+    '-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif'
 )
 CONGRATULATIONS_IMAGE_NAME = 'congratulations.png'
 CONGRATULATIONS_IMAGE_CID = 'brixen-congratulations'
@@ -486,15 +518,16 @@ def _cookie_flag_suffix(environ=None):
 def session_cookie_header(token=None, clear=False, environ=None):
     flags = _cookie_flag_suffix(environ)
     if clear:
-        return f'session_token=; {flags}; Expires=Thu, 01 Jan 1970 00:00:00 GMT'
-    return f'session_token={token}; {flags}'
+        return f'session_token=; {flags}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT'
+    # Persist across browser restarts/refreshes.
+    return f'session_token={token}; {flags}; Max-Age={SESSION_COOKIE_MAX_AGE}'
 
 
 def origin_cookie_header(token=None, clear=False, environ=None):
     flags = _cookie_flag_suffix(environ)
     if clear:
-        return f'origin_session=; {flags}; Expires=Thu, 01 Jan 1970 00:00:00 GMT'
-    return f'origin_session={token}; {flags}'
+        return f'origin_session=; {flags}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT'
+    return f'origin_session={token}; {flags}; Max-Age={SESSION_COOKIE_MAX_AGE}'
 
 def cookie_value(environ, name):
     cookie_str = environ.get('HTTP_COOKIE', '')
@@ -508,7 +541,7 @@ def cookie_value(environ, name):
 def session_user_from_token(token):
     if not token:
         return None
-    return query_db("""
+    session_rec = query_db("""
         SELECT s.session_token, u.*
         FROM user_sessions s
         JOIN users u ON s.user_id = u.id
@@ -516,6 +549,7 @@ def session_user_from_token(token):
           AND s.revoked_at IS NULL
           AND s.expires_at > datetime('now');
     """, (token,), one=True)
+    return dict(session_rec) if session_rec else None
 
 def public_me_user(user, impersonated=False):
     if not user:
@@ -576,21 +610,50 @@ def serve_static(environ, start_response, filepath, allowed_root=None):
     if not os.path.exists(filepath) or os.path.isdir(filepath):
         start_response("404 Not Found", [('Content-Type', 'text/plain')])
         return [b"404 File Not Found"]
-    
+
     ctype, _ = mimetypes.guess_type(filepath)
     if not ctype:
         ctype = 'application/octet-stream'
-        
+    # Browsers often send empty type for .js from some paths; keep MIME explicit.
+    lower = filepath.lower()
+    if lower.endswith('.js'):
+        ctype = 'text/javascript; charset=utf-8'
+    elif lower.endswith('.css'):
+        ctype = 'text/css; charset=utf-8'
+    elif lower.endswith('.html'):
+        ctype = 'text/html; charset=utf-8'
+
     with open(filepath, 'rb') as f:
         content = f.read()
-        
+
     headers = [
         ('Content-Type', ctype),
-        ('Content-Length', str(len(content))),
+        ('Cache-Control', 'no-cache, no-store, must-revalidate'),
+        ('Pragma', 'no-cache'),
+        ('Expires', '0')
     ]
-    if filepath.endswith('.html') or filepath.endswith('.js') or filepath.endswith('.css'):
+    accept_enc = (environ.get('HTTP_ACCEPT_ENCODING') or '').lower()
+    compressible = lower.endswith(('.js', '.css', '.html', '.svg', '.json', '.txt', '.map'))
+    if compressible and 'gzip' in accept_enc and len(content) > 512:
+        content = gzip.compress(content, compresslevel=5)
+        headers.append(('Content-Encoding', 'gzip'))
+        headers.append(('Vary', 'Accept-Encoding'))
+
+    headers.append(('Content-Length', str(len(content))))
+
+    qs = environ.get('QUERY_STRING') or ''
+    versioned = 'v=' in qs
+    if lower.endswith('.html'):
         headers.append(('Cache-Control', 'no-store, no-cache, must-revalidate'))
         headers.append(('Pragma', 'no-cache'))
+    elif versioned and lower.endswith(('.js', '.css', '.png', '.jpg', '.jpeg', '.webp', '.svg', '.woff2')):
+        # Cache-busted assets (?v=…) can be cached hard — new deploys bump the version.
+        headers.append(('Cache-Control', 'public, max-age=31536000, immutable'))
+    elif lower.endswith(('.js', '.css', '.png', '.jpg', '.jpeg', '.webp', '.svg', '.woff2')):
+        headers.append(('Cache-Control', 'public, max-age=300'))
+    else:
+        headers.append(('Cache-Control', 'private, max-age=60'))
+
     start_response("200 OK", headers)
     return [content]
 
@@ -606,6 +669,55 @@ def parse_body(environ):
         except json.JSONDecodeError:
             return dict(urllib.parse.parse_qsl(raw_body))
     return {}
+
+
+def parse_multipart_form(environ):
+    """
+    Parse multipart/form-data into (fields_dict, files_dict).
+    files_dict values are {'filename': str, 'content_type': str, 'bytes': bytes}.
+    """
+    content_type = environ.get('CONTENT_TYPE') or ''
+    if 'multipart/form-data' not in content_type.lower():
+        return {}, {}
+    try:
+        content_length = int(environ.get('CONTENT_LENGTH', 0) or 0)
+    except (TypeError, ValueError):
+        content_length = 0
+    if content_length <= 0:
+        return {}, {}
+    body = environ['wsgi.input'].read(content_length)
+    header = f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode('utf-8', errors='ignore')
+    try:
+        msg = email.message_from_bytes(header + body, policy=email.policy.default)
+    except Exception:
+        return {}, {}
+    fields = {}
+    files = {}
+    if not msg.is_multipart():
+        return {}, {}
+    for part in msg.iter_parts():
+        name = part.get_param('name', header='content-disposition')
+        if not name:
+            continue
+        filename = part.get_filename()
+        payload = part.get_payload(decode=True)
+        if payload is None:
+            payload = b''
+        if isinstance(payload, str):
+            payload = payload.encode('utf-8', errors='ignore')
+        if filename:
+            files[name] = {
+                'filename': filename,
+                'content_type': part.get_content_type() or 'application/octet-stream',
+                'bytes': payload,
+            }
+        else:
+            try:
+                fields[name] = payload.decode('utf-8', errors='replace')
+            except Exception:
+                fields[name] = ''
+    return fields, files
+
 
 def log_activity(user, action, entity_type=None, entity_id=None, details=None):
     uid = user['id'] if user else None
@@ -789,8 +901,8 @@ ROLE_RANK = {
 STAFF_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 STAFF_MIN_PASSWORD_LEN = 10
 STAFF_PUBLIC_FIELDS = (
-    'id', 'wordpress_user_id', 'email', 'full_name', 'phone', 'country',
-    'role', 'department', 'status', 'avatar_url', 'created_at'
+    'id', 'wordpress_user_id', 'email', 'notification_email', 'full_name', 'phone', 'country',
+    'role', 'department', 'status', 'avatar_url', 'created_at', 'is_b2b', 'account_type'
 )
 TASK_DETAIL_SQL = """
     SELECT t.*,
@@ -904,6 +1016,45 @@ def to_optional_int(value, field_name):
 def fetch_task(task_id):
     return query_db(TASK_DETAIL_SQL + " WHERE t.id = ?;", (task_id,), one=True)
 
+
+def calculate_staff_incentive_grade(completed_count, total_assigned, on_time_count, overdue_count):
+    completed_count = int(completed_count or 0)
+    total_assigned = int(total_assigned or 0)
+    on_time_count = int(on_time_count or 0)
+    overdue_count = int(overdue_count or 0)
+    
+    completion_rate = (completed_count / total_assigned * 100.0) if total_assigned > 0 else (100.0 if completed_count > 0 else 0.0)
+    sla_rate = (on_time_count / completed_count * 100.0) if completed_count > 0 else 100.0
+    
+    if completion_rate >= 90.0 and sla_rate >= 85.0 and completed_count >= 1:
+        grade = 'A+'
+        status_label = 'Top Performer (Grade A+)'
+        bonus_badge = '100% Incentive Bonus Eligible'
+    elif completion_rate >= 80.0 and sla_rate >= 75.0:
+        grade = 'A'
+        status_label = 'High Performer (Grade A)'
+        bonus_badge = '85% Incentive Bonus Eligible'
+    elif completion_rate >= 65.0:
+        grade = 'B'
+        status_label = 'Good Standing (Grade B)'
+        bonus_badge = 'Standard Incentive Bonus'
+    elif completion_rate >= 40.0:
+        grade = 'C'
+        status_label = 'Needs Improvement (Grade C)'
+        bonus_badge = 'Partial Incentive Tier'
+    else:
+        grade = 'D'
+        status_label = 'Underperforming (Grade D)'
+        bonus_badge = 'Incentive Locked'
+        
+    return {
+        'grade': grade,
+        'status_label': status_label,
+        'bonus_badge': bonus_badge,
+        'completion_rate': round(completion_rate, 1),
+        'sla_rate': round(sla_rate, 1)
+    }
+
 def public_staff_user(row):
     if not row:
         return None
@@ -912,6 +1063,11 @@ def public_staff_user(row):
     depts = departments_from_user(src)
     public['departments'] = depts
     public['department'] = depts[0] if depts else None
+    if public.get('role') == 'CLIENT':
+        if public.get('is_b2b') is None:
+            public['is_b2b'] = 1
+        if not public.get('account_type'):
+            public['account_type'] = 'B2B Client (Brixen Website Panel)'
     return public
 
 
@@ -1062,6 +1218,349 @@ def notify_staff_task(recipient_id, actor_id, title, message, ntype):
         f"Hello {recipient['full_name']},\n\n{message}\n\nLog in to the Brixen Portal to review: {portal_page_url()}"
     )
 
+
+def normalize_notify_email(value):
+    email = str(value or '').strip().lower()
+    if not email or not STAFF_EMAIL_RE.match(email):
+        return ''
+    return email
+
+
+def parse_team_notification_emails(raw=None):
+    if raw is None:
+        row = query_db("SELECT value FROM settings WHERE key = 'team_notification_emails';", one=True)
+        raw = (row or {}).get('value') if row else ''
+    text = str(raw or '').replace(';', ',').replace('\n', ',')
+    out = []
+    seen = set()
+    for part in text.split(','):
+        email = normalize_notify_email(part)
+        if not email or email in seen:
+            continue
+        seen.add(email)
+        out.append(email)
+    return out
+
+
+def team_notification_recipients():
+    return parse_team_notification_emails()
+
+
+def email_team_about_clients(subject, body_text, body_html=None):
+    """Send the same alert to every configured team notification mailbox."""
+    recipients = team_notification_recipients()
+    if not recipients:
+        return {'sent': 0, 'recipients': []}
+    sent_count = 0
+    for email in recipients:
+        ok, _status = EmailService.send_notification_email(email, subject, body_text, body_html)
+        if ok:
+            sent_count += 1
+    return {'sent': sent_count, 'recipients': recipients}
+
+
+def client_notification_recipient(client, email_to=None):
+    """
+    Resolve outbound mail for a client.
+    When email_to is set (company/order work), that address wins so each company
+    can receive its own mail even if the portal login email is different.
+    """
+    client_rec = resolve_client_user(client)
+    explicit = normalize_notify_email(email_to) if email_to is not None else ''
+    if explicit:
+        return explicit
+    if email_to is not None and str(email_to).strip() == '':
+        return ''
+    preferred = normalize_notify_email((client_rec or {}).get('notification_email'))
+    if preferred:
+        return preferred
+    return str((client_rec or {}).get('email') or '').strip()
+
+
+def load_company_for_notify(company=None, order=None):
+    if isinstance(company, dict) and company.get('id'):
+        if company.get('registered_email') is not None or company.get('name'):
+            return company
+        company_id = company.get('id')
+    elif company:
+        company_id = company
+    else:
+        company_id = (order or {}).get('company_id')
+    if not company_id:
+        return None
+    row = query_db(
+        "SELECT id, user_id, name, registered_email, director FROM companies WHERE id = ?;",
+        (company_id,),
+        one=True,
+    )
+    return dict(row) if row else None
+
+
+def resolve_work_notification_email(*, client=None, company=None, order=None, email_to=None):
+    """
+    Company/order work emails go to the company-relevant address first:
+      1. Explicit email_to
+      2. companies.registered_email
+      3. company form / owner email
+      4. order owner_form_email
+      5. client notification_email / login email
+    Portal login stays on the customer; mail follows the company.
+    """
+    explicit = normalize_notify_email(email_to) if email_to is not None else ''
+    if explicit:
+        return explicit
+
+    company_rec = load_company_for_notify(company, order)
+    if company_rec:
+        registered = normalize_notify_email(company_rec.get('registered_email'))
+        if not registered:
+            registered = normalize_notify_email(resolve_company_registered_email(company_rec))
+        if registered:
+            return registered
+        form_email = normalize_notify_email(company_form_email(company_rec.get('id')))
+        if form_email:
+            return form_email
+
+    if order:
+        try:
+            connector = real_order_connector(order)
+            form_email = normalize_notify_email((connector or {}).get('owner_form_email'))
+            if form_email:
+                return form_email
+        except Exception:
+            form_email = normalize_notify_email((order or {}).get('owner_form_email'))
+            if form_email:
+                return form_email
+
+    return client_notification_recipient(client or order or company_rec)
+
+
+def order_prefix_value():
+    row = query_db("SELECT value FROM settings WHERE key = 'order_prefix';", one=True)
+    prefix = str((row or {}).get('value') or '#GB').strip()
+    return prefix or '#GB'
+
+
+def next_manual_order_number():
+    prefix = order_prefix_value()
+    highest = 0
+    for row in query_db("SELECT order_number FROM orders;") or []:
+        number = str(row.get('order_number') or '').strip()
+        match = re.search(r'(\d+)$', number)
+        if match:
+            highest = max(highest, int(match.group(1)))
+    return f"{prefix}{highest + 1}"
+
+
+def create_manual_crm_order(data, actor=None):
+    """Create an order in the CRM without a website signup. Emails use company/owner addresses."""
+    extras = data if isinstance(data, dict) else {}
+    client_id, client, client_err = ensure_client_for_manual_company(extras, actor)
+    if client_err:
+        return None, client_err
+
+    line_items = extras.get('line_items')
+    if line_items and isinstance(line_items, list) and len(line_items) > 0:
+        total_price = 0
+        valid_items = []
+        for item in line_items:
+            pn = str(item.get('product_name') or '').strip()
+            if not pn:
+                continue
+            try:
+                p = float(item.get('price') or 0)
+            except (ValueError, TypeError):
+                p = 0
+            if p < 0:
+                return None, 'Price cannot be negative'
+            valid_items.append({'product_name': pn, 'price': p})
+            total_price += p
+        if not valid_items:
+            return None, 'Enter at least one product name'
+        
+        extras = dict(extras)
+        extras['price'] = round(total_price, 2)
+        if len(valid_items) == 1:
+            service_name = valid_items[0]['product_name']
+        else:
+            service_name = "Multiple Products"
+        service_id = None
+    else:
+        service_name = (extras.get('service_name') or extras.get('product') or '').strip()
+        service_id = optional_record_id(extras.get('service_id'))
+        if service_id:
+            service = query_db("SELECT id, name, price FROM services WHERE id = ?;", (service_id,), one=True)
+            if not service:
+                return None, 'Service not found'
+            if not service_name:
+                service_name = str(service.get('name') or '').strip()
+            if extras.get('price') in (None, '') and service.get('price') is not None:
+                extras = dict(extras)
+                extras['price'] = service.get('price')
+        if not service_name:
+            return None, 'Enter the service / product name'
+
+    company_id = optional_record_id(extras.get('company_id'))
+    company = None
+    if company_id:
+        company = query_db("SELECT * FROM companies WHERE id = ?;", (company_id,), one=True)
+        if not company or int(company.get('user_id') or 0) != int(client_id):
+            return None, 'Company does not belong to this client'
+    else:
+        company_name = (extras.get('company_name') or extras.get('name') or '').strip()
+        if company_name:
+            company_id, company_err = create_manual_company({
+                **extras,
+                'client_mode': 'existing',
+                'client_id': client_id,
+                'name': company_name,
+                'registered_email': extras.get('company_email') or extras.get('registered_email') or extras.get('owner_form_email'),
+            }, actor)
+            if company_err:
+                return None, company_err
+            company = query_db("SELECT * FROM companies WHERE id = ?;", (company_id,), one=True)
+
+    try:
+        price = float(extras.get('price') if extras.get('price') not in (None, '') else 0)
+    except (TypeError, ValueError):
+        return None, 'Enter a valid price'
+    if price < 0:
+        return None, 'Price cannot be negative'
+    vat_rate = 0.0
+    try:
+        if extras.get('vat') not in (None, ''):
+            vat = float(extras.get('vat'))
+        else:
+            vat = round(price * vat_rate, 2)
+    except (TypeError, ValueError):
+        return None, 'Enter a valid VAT amount'
+    total = round(price + vat, 2)
+    if extras.get('total') not in (None, ''):
+        try:
+            total = float(extras.get('total'))
+        except (TypeError, ValueError):
+            return None, 'Enter a valid total'
+
+    owner_name = (extras.get('owner_name') or extras.get('director') or (client or {}).get('full_name') or '').strip()
+    owner_email = normalize_notify_email(
+        extras.get('company_email')
+        or extras.get('owner_form_email')
+        or extras.get('registered_email')
+        or (company or {}).get('registered_email')
+        or (client or {}).get('email')
+    )
+    if not owner_email:
+        return None, 'Enter the company notification email for this order'
+
+    status = (extras.get('status') or 'Processing').strip() or 'Processing'
+    allowed_status = {
+        'Pending', 'Pending Verification', 'Processing', 'In Progress', 'Completed', 'Cancelled'
+    }
+    if status not in allowed_status:
+        status = 'Processing'
+    payment_mode = (extras.get('payment_mode') or 'Manual CRM').strip() or 'Manual CRM'
+    notes = (extras.get('notes') or '').strip() or 'Created manually in CRM (no website signup).'
+    order_number = (extras.get('order_number') or '').strip() or next_manual_order_number()
+    if query_db("SELECT id FROM orders WHERE order_number = ?;", (order_number,), one=True):
+        order_number = next_manual_order_number()
+
+    order_id = execute_db(
+        """
+        INSERT INTO orders (
+            order_number, user_id, company_id, service_id, service_name,
+            price, vat, total, status, progress_percent, notes, payment_mode,
+            owner_name, owner_form_email, assigned_staff_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """,
+        (
+            order_number,
+            client_id,
+            company_id,
+            service_id,
+            service_name,
+            price,
+            vat,
+            total,
+            status,
+            20 if status not in ('Completed', 'Cancelled') else (100 if status == 'Completed' else 0),
+            notes,
+            payment_mode,
+            owner_name or None,
+            owner_email,
+            (actor or {}).get('id'),
+        ),
+    )
+
+    if company_id and owner_email:
+        persist_company_registered_email(
+            {'id': company_id, 'user_id': client_id, 'name': (company or {}).get('name'), 'registered_email': owner_email},
+            owner_email,
+        )
+        execute_db(
+            """
+            INSERT INTO company_owners (
+                order_id, company_id, full_name, form_email, source
+            ) VALUES (?, ?, ?, ?, 'manual_crm');
+            """,
+            (order_id, company_id, owner_name or (client or {}).get('full_name') or 'Owner', owner_email),
+        )
+    else:
+        execute_db(
+            """
+            INSERT INTO company_owners (
+                order_id, company_id, full_name, form_email, source
+            ) VALUES (?, ?, ?, ?, 'manual_crm');
+            """,
+            (order_id, company_id, owner_name or (client or {}).get('full_name') or 'Owner', owner_email),
+        )
+    
+    line_items = extras.get('line_items')
+    if line_items and isinstance(line_items, list) and len(line_items) > 0:
+        for idx, item in enumerate(line_items):
+            pn = str(item.get('product_name') or '').strip()
+            if not pn: continue
+            try: p = float(item.get('price') or 0)
+            except (ValueError, TypeError): p = 0
+            execute_db(
+                """
+                INSERT INTO order_line_items (
+                    order_id, product_name, category_name, quantity, unit_price, line_total, sort_order
+                ) VALUES (?, ?, ?, 1, ?, ?, ?);
+                """,
+                (order_id, pn, 'Manual CRM Order', p, p, idx)
+            )
+    else:
+        execute_db(
+            """
+            INSERT INTO order_line_items (
+                order_id, product_name, category_name, quantity, unit_price, line_total, sort_order
+            ) VALUES (?, ?, ?, 1, ?, ?, 0);
+            """,
+            (order_id, service_name, 'Manual CRM Order', price, price)
+        )
+
+    ensure_order_timeline(order_id)
+    ensure_invoice_for_order(order_id)
+    if actor:
+        log_activity(actor, 'ORDER_CREATED_MANUAL', 'orders', str(order_id), f"Manual CRM order {order_number} for {owner_email}")
+    notify_staff_new_order(order_number, (client or {}).get('full_name') or owner_name or owner_email)
+
+    created = query_db(
+        """
+        SELECT o.*, u.email, u.full_name, c.name as company_name
+        FROM orders o
+        JOIN users u ON o.user_id = u.id
+        LEFT JOIN companies c ON o.company_id = c.id
+        WHERE o.id = ?;
+        """,
+        (order_id,),
+        one=True,
+    )
+    if status == 'Completed' and created:
+        notify_product_completed(created)
+    return dict(created) if created else {'id': order_id, 'order_number': order_number}, None
+
+
 def portal_base_url():
     return (os.environ.get('CRM_BASE_URL') or 'https://portal.brixenconsultants.com').rstrip('/')
 
@@ -1141,7 +1640,18 @@ def email_favicon_html():
 
 def email_document_head_html(title, extra_css=''):
     css = str(extra_css or '').strip()
-    style = f'  <style type="text/css">{css}</style>\n' if css else ''
+    base_css = (
+        'html,body{margin:0!important;padding:0!important;width:100%!important;}'
+        'img{max-width:100%!important;height:auto!important;}'
+        'table{border-collapse:collapse;}'
+        '.email-shell{width:100%!important;max-width:600px!important;}'
+        '.email-pad{padding-left:24px!important;padding-right:24px!important;}'
+        '@media only screen and (max-width:620px){'
+        '.email-shell{width:100%!important;}'
+        '.email-pad{padding-left:20px!important;padding-right:20px!important;}'
+        '}'
+    )
+    style = f'  <style type="text/css">{base_css}{css}</style>\n'
     return (
         '<head>\n'
         '  <meta charset="utf-8">\n'
@@ -1167,9 +1677,10 @@ def html_escape(value):
 
 
 def email_legal_lines(brand=None):
+    import email_engine as _email_engine
+
     brand = brand or brand_settings()
-    legal_name = brand.get('legal_name') or 'Brixen Consultants Ltd'
-    legal_name = legal_name.replace('Ltd', 'LTD').replace('ltd', 'LTD')
+    legal_name = _email_engine.normalize_legal_name(brand.get('legal_name') or 'Brixen Consultants Ltd')
     office = brand.get('registered_office') or '57 Wellesley Road, Ilford, United Kingdom, IG1 4JZ'
     number = brand.get('company_number') or '17314564'
     website = brand.get('website') or 'https://brixenconsultants.com'
@@ -1209,9 +1720,9 @@ def apple_email_button_html(url, label, background='#003971'):
     return (
         f'<table role="presentation" cellspacing="0" cellpadding="0" border="0" align="center" style="margin:0 auto;border-collapse:separate;">'
         f'<tr><td align="center" bgcolor="{bg}" style="background-color:{bg};border-radius:980px;">'
-        f'<a href="{href}" target="_blank" style="display:inline-block;padding:7px 14px;border-radius:980px;'
-        f'background-color:{bg};color:#ffffff;text-decoration:none;font-size:13px;line-height:1.2;'
-        f'font-weight:600;letter-spacing:-0.022em;font-family:{EMAIL_FONT_STACK};">'
+        f'<a href="{href}" target="_blank" style="display:inline-block;padding:11px 22px;border-radius:980px;'
+        f'background-color:{bg};color:#ffffff;text-decoration:none;font-size:14px;line-height:1.25;'
+        f'font-weight:600;letter-spacing:-0.01em;font-family:{EMAIL_FONT_STACK};">'
         f'<font color="#ffffff">{text}</font></a></td></tr></table>'
     )
 
@@ -1263,35 +1774,32 @@ def email_tone_meta(tone):
     return EMAIL_TONE_META.get(str(tone or 'info').lower()) or EMAIL_TONE_META['info']
 
 
-def email_hero_header_html(headline, *, tone='info', badge='', navy='#003971', gold='#c5a572', title_size='26px', wordmark_url=None):
+def email_hero_header_html(headline, *, tone='info', badge='', navy='#003971', gold='#c5a572', title_size='18px', wordmark_url=None, compact=True):
     meta = email_tone_meta(tone)
     navy = html_escape(navy or '#003971')
     gold = html_escape(gold or '#c5a572')
     title = html_escape(str(headline or meta['label']).strip() or meta['label'])
     chip = html_escape(str(badge or meta['label']).strip() or meta['label'])
-    support = html_escape(meta['hero_copy'])
-    size = html_escape(str(title_size or '26px'))
+    size = html_escape(str(title_size or '18px'))
     mark = html_escape(str(wordmark_url or wordmark_image_src()).strip())
+    pad = '18px 24px 16px' if compact else '28px 32px 24px'
     return f"""
           <tr>
-            <td align="center" bgcolor="{navy}" style="padding:28px 32px 32px;background-color:{navy};background-image:radial-gradient(circle at 50% 120%, rgba(197,165,114,0.28), transparent 62%);">
-              <p style="margin:0;font-family:{EMAIL_FONT_STACK};font-size:13px;line-height:1.3;letter-spacing:0.08em;text-transform:uppercase;font-weight:700;color:{gold};">
+            <td align="center" bgcolor="{navy}" style="padding:{pad};background-color:{navy};">
+              <p style="margin:0;font-family:{EMAIL_FONT_STACK};font-size:12px;line-height:1.3;letter-spacing:0.06em;text-transform:uppercase;font-weight:700;color:{gold};">
                 <font color="{gold}">Brixen Consultants</font>
               </p>
-              <p style="margin:14px 0 0;font-family:{EMAIL_FONT_STACK};font-size:12px;line-height:1.3;letter-spacing:0.04em;text-transform:uppercase;color:#ffffff;">
+              <p style="margin:10px 0 0;font-family:{EMAIL_FONT_STACK};font-size:11px;line-height:1.3;letter-spacing:0.04em;text-transform:uppercase;color:#ffffff;">
                 <font color="#ffffff">{chip}</font>
               </p>
-              <p style="margin:10px 0 0;font-family:{EMAIL_FONT_STACK};font-size:{size};line-height:1.25;letter-spacing:-0.03em;font-weight:700;color:#ffffff;">
+              <p style="margin:8px 0 0;font-family:{EMAIL_FONT_STACK};font-size:{size};line-height:1.3;letter-spacing:-0.02em;font-weight:600;color:#ffffff;">
                 <font color="#ffffff">{title}</font>
-              </p>
-              <p style="margin:10px 0 0;font-family:{EMAIL_FONT_STACK};font-size:14px;line-height:1.45;letter-spacing:-0.016em;color:#d7e0ea;">
-                <font color="#d7e0ea">{support}</font>
               </p>
             </td>
           </tr>
           <tr>
-            <td align="center" bgcolor="#ffffff" style="padding:24px 24px 8px;background:#ffffff;">
-              <img src="{mark}" alt="Brixen Consultants" width="120" style="display:block;margin:0 auto;border:0;outline:none;text-decoration:none;width:120px;height:auto;">
+            <td align="center" bgcolor="#ffffff" style="padding:16px 24px 4px;background:#ffffff;">
+              <img src="{mark}" alt="Brixen Consultants" width="110" style="display:block;margin:0 auto;border:0;outline:none;text-decoration:none;width:110px;height:auto;">
             </td>
           </tr>"""
 
@@ -1305,10 +1813,12 @@ def key_points_html(points, navy, *, tone='info'):
         text = str(point or '').strip()
         if not text:
             continue
-        top = '14px' if index else '0'
+        top = '10px' if index else '0'
+        weight = '600' if (index == 0 or (text.startswith(('⚠️', '✅', '📌')) and len(text) < 80)) else '400'
+        color = '#1d1d1f' if weight == '600' else '#6e6e73'
         rows.append(
-            f'<p style="margin:{top} 0 0;font-family:{EMAIL_FONT_STACK};font-size:17px;line-height:1.45;'
-            f'letter-spacing:-0.022em;font-weight:600;color:{accent};">{html_escape(text)}</p>'
+            f'<p style="margin:{top} 0 0;font-family:{EMAIL_FONT_STACK};font-size:15px;line-height:1.5;'
+            f'letter-spacing:-0.016em;font-weight:{weight};color:{color};text-align:left;">{html_escape(text)}</p>'
         )
     return ''.join(rows)
 
@@ -1739,16 +2249,17 @@ def invoice_receipt_html(receipt, greeting_html, message_html, wordmark_url, cta
             </td>
           </tr>
           <tr>
-            <td class="invoice-pad" align="center" style="padding:12px 24px 22px;background:#ffffff;">
+            <td class="invoice-pad" align="center" style="padding:12px 24px 12px;background:#ffffff;">
               {cta_html}
             </td>
           </tr>
           <tr>
-            <td align="center" bgcolor="{navy}" style="padding:28px 24px 24px;background-color:{navy};color:#ffffff;">
+            <td class="invoice-pad" align="left" style="padding:8px 24px 20px;background:#ffffff;">
               {footer_html}
             </td>
           </tr>
-          <tr><td bgcolor="{gold}" style="height:3px;line-height:3px;font-size:0;background-color:{gold};">&nbsp;</td></tr>
+          <tr><td bgcolor="{navy}" style="height:4px;line-height:4px;font-size:0;background-color:{navy};">&nbsp;</td></tr>
+          <tr><td bgcolor="{gold}" style="height:2px;line-height:2px;font-size:0;background-color:{gold};">&nbsp;</td></tr>
         </table>
       </td>
     </tr>
@@ -1775,67 +2286,66 @@ def registration_offers_html(navy, wa_href):
 
 
 def build_email_footer_text(brand, support_email=None, phone_display=None, footer_note=None):
-    legal = email_legal_lines(brand)
-    email = support_email or brand.get('support_email') or 'contact@brixenconsultants.com'
-    phone = phone_display or ''
-    lines = [
-        '',
-        'Kind regards,',
-        'The Brixen Consultants team',
-        legal['legal_name'],
-        legal['website'],
-        f"Email: {email}",
-    ]
-    if phone:
-        lines.append(f"Call: {phone}")
+    import email_engine as _email_engine
+
+    brand = dict(brand or {})
+    if support_email:
+        brand['support_email'] = support_email
+    if phone_display:
+        brand['support_phone'] = phone_display
+    text = _email_engine.email_signature_text(brand)
     note = (footer_note or '').strip()
     if note:
-        lines.extend(['', note])
-    return '\n'.join(lines)
+        text = f"{text}\n\n{note}"
+    return f"\n{text}\n"
 
 
 def build_email_footer_html(brand, support_email=None, support_phone=None, tel_href=None, wa_href=None, footer_note=None, accent=None, tone='default'):
-    legal = email_legal_lines(brand)
-    navy = accent or '#003971'
-    gold = '#c5a572'
+    """
+    Legacy helper kept for invoice/celebration navy panels.
+    Signature + disclaimer now live in the white body for activity emails.
+    This returns compact contact lines only (no KIND REGARDS block).
+    """
+    import email_engine as _email_engine
+
+    brand = dict(brand or {})
+    if support_email:
+        brand['support_email'] = support_email
+    if support_phone:
+        brand['support_phone'] = support_phone
+    c = _email_engine.brand_contact_fields(brand)
     light = str(tone or '').strip().lower() == 'light'
+    ink = '#ffffff' if light else (accent or '#003971')
+    gold = '#c5a572'
     muted = gold if light else '#6e6e73'
-    ink = '#ffffff' if light else navy
-    note_color = gold if light else '#86868b'
-    legal_name = html_escape(legal['legal_name'])
-    website = html_escape(legal['website'])
-    website_label = html_escape(legal['website'].replace('https://', '').replace('http://', ''))
-    email = html_escape(support_email or brand.get('support_email') or 'contact@brixenconsultants.com')
-    phone = html_escape(support_phone or '')
-    tel = html_escape(tel_href or '')
-    note = html_escape((footer_note or '').strip())
-    note_block = ''
-    if note:
-        note_block = (
-            f'<p style="margin:20px 0 0;text-align:center;font-size:12px;line-height:1.5;letter-spacing:0.01em;'
-            f'color:{note_color};font-family:{EMAIL_FONT_STACK};"><font color="{note_color}">{note}</font></p>'
+    parts = []
+    if c['email']:
+        parts.append(
+            f'<p style="margin:0;text-align:center;font-size:13px;line-height:1.45;font-family:{EMAIL_FONT_STACK};">'
+            f'<a href="mailto:{html_escape(c["email"])}" style="color:{ink};text-decoration:none;">'
+            f'<font color="{ink}">{html_escape(c["email"])}</font></a></p>'
         )
-    phone_block = ''
-    if phone:
-        phone_block = (
-            f'<p style="margin:6px 0 0;text-align:center;font-size:14px;line-height:1.45;font-family:{EMAIL_FONT_STACK};">'
-            f'<a href="tel:{tel}" style="color:{ink};text-decoration:none;"><font color="{ink}">{phone}</font></a></p>'
+    if c['phone']:
+        tel = tel_href or f"+{c['phone_digits']}"
+        parts.append(
+            f'<p style="margin:6px 0 0;text-align:center;font-size:13px;line-height:1.45;font-family:{EMAIL_FONT_STACK};">'
+            f'<a href="tel:{html_escape(tel)}" style="color:{ink};text-decoration:none;">'
+            f'<font color="{ink}">{html_escape(c["phone"])}</font></a></p>'
         )
-    return f"""
-              <p style="margin:0 0 10px;text-align:center;font-size:11px;line-height:1.3;letter-spacing:0.22em;text-transform:uppercase;color:{muted};font-family:{EMAIL_FONT_STACK};"><font color="{muted}">Kind regards</font></p>
-              <p style="margin:0 0 6px;text-align:center;font-size:18px;line-height:1.25;letter-spacing:-0.03em;font-weight:700;color:{ink};font-family:{EMAIL_FONT_STACK};"><font color="{ink}">The Brixen Consultants team</font></p>
-              <p style="margin:0 0 18px;text-align:center;font-size:13px;line-height:1.4;letter-spacing:-0.01em;color:{muted};font-family:{EMAIL_FONT_STACK};"><font color="{muted}">{legal_name}</font></p>
-              <table role="presentation" width="48" cellspacing="0" cellpadding="0" border="0" align="center" style="margin:0 auto 18px;">
-                <tr><td bgcolor="{gold}" style="height:1px;line-height:1px;font-size:0;background-color:{gold};">&nbsp;</td></tr>
-              </table>
-              <p style="margin:0;text-align:center;font-size:14px;line-height:1.45;font-family:{EMAIL_FONT_STACK};">
-                <a href="mailto:{email}" style="color:{ink};text-decoration:none;"><font color="{ink}">{email}</font></a>
-              </p>
-              {phone_block}
-              <p style="margin:6px 0 0;text-align:center;font-size:14px;line-height:1.45;font-family:{EMAIL_FONT_STACK};">
-                <a href="{website}" style="color:{gold};text-decoration:none;"><font color="{gold}">{website_label}</font></a>
-              </p>
-              {note_block}"""
+    if c['website_label']:
+        parts.append(
+            f'<p style="margin:6px 0 0;text-align:center;font-size:13px;line-height:1.45;font-family:{EMAIL_FONT_STACK};">'
+            f'<a href="{html_escape(c["website"])}" style="color:{gold};text-decoration:none;">'
+            f'<font color="{gold}">{html_escape(c["website_label"])}</font></a></p>'
+        )
+    note = (footer_note or '').strip()
+    # Never put long compliance disclaimers inside the navy panel.
+    if note and 'Companies House' not in note:
+        parts.append(
+            f'<p style="margin:14px 0 0;text-align:center;font-size:11px;line-height:1.45;'
+            f'color:{muted};font-family:{EMAIL_FONT_STACK};"><font color="{muted}">{html_escape(note)}</font></p>'
+        )
+    return '\n'.join(parts)
 
 
 def build_client_notification_email(
@@ -1850,20 +2360,40 @@ def build_client_notification_email(
     cta_url=None,
     extra_cta_label=None,
     extra_cta_url=None,
+    extra_cta_background=None,
     detail_title=None,
     detail_value=None,
     extra_message=None,
     email_sections=None,
     invoice_receipt=None,
-    footer_note='This is a transactional email from Brixen Consultants Ltd about your account. It is not a marketing message.',
+    footer_note=None,
     layout='activity',
     greeting_name=None,
+    email_category=None,
+    company_name=None,
+    company_number=None,
+    suppress_default_cta=False,
+    structured_html=None,
+    use_graphic_footer=False,
+    header_style=None,
 ):
+    import email_engine as _email_engine
+
     brand = brand_settings()
-    company = html_escape(brand['company_name'])
+    category = _email_engine.normalize_email_category(
+        email_category or (
+            'INVOICE' if str(layout or '').strip().lower() == 'invoice'
+            else 'ACCOUNT' if str(layout or '').strip().lower() == 'celebration'
+            else 'ORDER'
+        )
+    )
+    # Explicit footer_note wins; None uses category default; '' suppresses.
+    if footer_note is None:
+        resolved_note = _email_engine.category_disclaimer(category)
+    else:
+        resolved_note = str(footer_note).strip()
     greeting = str(greeting_name or (client or {}).get('full_name') or 'there').strip() or 'there'
     client_name = html_escape(greeting)
-    headline_html = html_escape(headline or 'Account update')
     message_text = (message or '').strip()
     message_html = html_escape(message_text).replace('\n', '<br>')
     extra = (extra_message or '').strip()
@@ -1874,35 +2404,40 @@ def build_client_notification_email(
     if str(layout or '').strip().lower() == 'celebration' and not extra:
         extra = registration_next_steps_text()
     panel_url = cta_url or client_website_url()
-    logo_url = html_escape(brand_logo_absolute_url(brand['logo_url']))
     wordmark_url = html_escape(wordmark_image_src())
     primary = html_escape(brand['primary_color'])
-    secondary = html_escape(brand['secondary_color'])
     support_email = html_escape(brand['support_email'])
     phone_digits = re.sub(r'\D', '', brand.get('support_phone') or '447360515317') or '447360515317'
-    phone_display = f"+{phone_digits}" if not phone_digits.startswith('+') else phone_digits
-    if phone_digits.startswith('44') and len(phone_digits) >= 12:
-        phone_display = f"+44 {phone_digits[2:6]} {phone_digits[6:]}"
+    phone_display = _email_engine.format_uk_phone_display(phone_digits)
     support_phone = html_escape(phone_display)
     tel_href = html_escape(f"+{phone_digits}" if not phone_digits.startswith('+') else phone_digits)
     wa_href = html_escape(f"https://wa.me/{phone_digits}")
     email_subject = subject or f"{headline} — {brand['company_name']}"
 
-    body_text = f"Hi {greeting},\n\n{message_text}\n"
-    if detail_title and detail_value:
+    body_text = f"{'Dear' if str(header_style or '').strip().lower() == 'premium' else 'Hi'} {greeting},\n\n{message_text}\n"
+    if detail_title and detail_value and not company_number:
         body_text += f"\n{detail_title}: {detail_value}\n"
     if extra:
         body_text += f"\n{extra}\n"
+    if company_name or company_number:
+        body_text += "\n"
+        if company_name:
+            body_text += f"Company: {company_name}\n"
+        if company_number:
+            body_text += f"Company number: {company_number}\n"
     if str(layout or '').strip().lower() == 'celebration':
         body_text += "\nDownload your certificate of incorporation.\n"
         body_text += f"\nWhatsApp for a free consultation:\n{registration_whatsapp_url('https://wa.me/' + phone_digits)}\n"
-    body_text += f"\n{cta_label}:\n{panel_url}\n"
+    if cta_label and panel_url and not suppress_default_cta:
+        body_text += f"\n{cta_label}:\n{panel_url}\n"
     if (not invoice_layout) and extra_cta_label and extra_cta_url:
         body_text += f"\n{extra_cta_label}:\n{extra_cta_url}\n"
-    body_text += build_email_footer_text(brand, brand['support_email'], phone_display, footer_note)
+    body_text += build_email_footer_text(brand, brand['support_email'], phone_display, resolved_note)
 
+    signature_html = _email_engine.email_signature_html(brand, align='left')
+    disclaimer_html = _email_engine.email_disclaimer_html(resolved_note)
     footer_html = build_email_footer_html(
-        brand, support_email, support_phone, tel_href, wa_href, footer_note, primary,
+        brand, support_email, support_phone, tel_href, wa_href, None, primary,
         tone='light',
     )
 
@@ -1968,12 +2503,18 @@ def build_client_notification_email(
             </td>
           </tr>
           <tr>
-            <td align="left" style="padding:8px 40px 36px;background:#ffffff;">
+            <td align="left" style="padding:8px 40px 16px;background:#ffffff;">
               {registration_offers_html(navy, wa_href)}
             </td>
           </tr>
           <tr>
-            <td align="center" bgcolor="#003971" style="padding:36px 40px 32px;background-color:#003971;color:#ffffff;">
+            <td align="left" style="padding:8px 40px 28px;background:#ffffff;">
+              {signature_html}
+              {disclaimer_html}
+            </td>
+          </tr>
+          <tr>
+            <td align="center" bgcolor="#003971" style="padding:18px 40px 16px;background-color:#003971;color:#ffffff;">
               {footer_html}
             </td>
           </tr>
@@ -1989,7 +2530,6 @@ def build_client_notification_email(
     navy = '#003971'
     gold = '#c5a572'
     if invoice_layout and invoice_receipt:
-        # Invoice emails: one CTA only — download this invoice PDF (no Pay now / Contact Support).
         cta_html = apple_email_button_html(panel_url, cta_label, navy) if cta_label and panel_url else ''
         body_html = invoice_receipt_html(
             invoice_receipt,
@@ -1997,15 +2537,11 @@ def build_client_notification_email(
             message_html,
             wordmark_url,
             cta_html,
-            footer_html,
+            signature_html + disclaimer_html,
         )
         return email_subject, body_text, body_html
 
     points = [line.strip() for line in extra.splitlines() if line.strip()] if not sections else []
-    if not invoice_layout and detail_title and detail_value:
-        detail_line = f"{detail_title}: {detail_value}"
-        if detail_value not in extra and detail_line not in points:
-            points.append(f"📌 {detail_line}")
     tone = email_tone_from_context(
         layout=layout,
         badge=badge,
@@ -2016,55 +2552,60 @@ def build_client_notification_email(
     )
     hero_title = str(headline or badge or 'Account update').strip()
     chip = str(badge or email_tone_meta(tone)['label']).strip()
-    facts_block = email_facts_html(sections, navy, gold) if sections else key_points_html(points, navy, tone=tone)
-    support_note = (
-        'If you did not expect this email, reply to contact@brixenconsultants.com and we will help straight away.'
-        if tone == 'alert'
-        else 'Need help? Reply to this email or contact the Brixen Consultants team.'
+    if structured_html:
+        facts_block = structured_html
+    else:
+        facts_block = email_facts_html(sections, navy, gold) if sections else key_points_html(points, navy, tone=tone)
+    company_block = _email_engine.email_company_details_html(company_name, company_number)
+    if not company_block and detail_title and detail_value and 'company number' in str(detail_title).lower():
+        company_block = _email_engine.email_company_details_html(None, detail_value)
+
+    buttons = []
+    if cta_label and panel_url and not suppress_default_cta:
+        buttons.append((panel_url, cta_label, navy))
+    if extra_cta_label and extra_cta_url:
+        buttons.append((extra_cta_url, extra_cta_label, extra_cta_background or navy))
+    cta_stack = _email_engine.email_cta_stack_html(buttons, apple_email_button_html)
+
+    greeting_prefix = 'Dear' if str(header_style or '').strip().lower() == 'premium' else 'Hi'
+    body_align = 'justify' if str(header_style or '').strip().lower() == 'premium' else 'left'
+    body_size = '17px' if str(header_style or '').strip().lower() == 'premium' else '15px'
+    greet_size = '18px' if str(header_style or '').strip().lower() == 'premium' else '16px'
+    body_inner = f"""
+              <p style="margin:0;font-family:{EMAIL_FONT_STACK};font-size:{greet_size};line-height:1.4;color:#111827;text-align:left;">{greeting_prefix} {client_name},</p>
+              <p style="margin:8px 0 0;font-family:{EMAIL_FONT_STACK};font-size:{body_size};line-height:1.5;color:#4b5563;text-align:{body_align};">{message_html}</p>
+              <div style="margin:10px 0 0;text-align:left;">{facts_block}</div>
+              {f'<div style="margin:12px 0 0;text-align:left;">{company_block}</div>' if company_block else ''}
+              {f'<div style="margin:14px 0 0;text-align:center;">{cta_stack}</div>' if cta_stack else ''}
+    """
+    graphic_footer = ''
+    body_disclaimer = disclaimer_html
+    if use_graphic_footer:
+        graphic_footer = _email_engine.email_graphic_footer_html(
+            brand,
+            wordmark_url=wordmark_image_src(),
+            disclaimer='',  # keep disclaimer after signature, not in a heavy footer
+        )
+    if str(header_style or '').strip().lower() == 'premium':
+        hero_html = _email_engine.email_premium_header_html(
+            wordmark_url=wordmark_image_src(),
+            eyebrow='Compliance advisory' if category in ('COMPLIANCE', 'COMPANIES_HOUSE', 'KYC') else (chip or 'Account update'),
+        )
+    else:
+        hero_html = email_hero_header_html(
+            hero_title, tone=tone, badge=chip, navy=navy, gold=gold,
+            title_size='18px', wordmark_url=wordmark_url, compact=True,
+        )
+    # Prefer email_engine shell which uses responsive max-width.
+    body_html = _email_engine.build_transactional_shell_html(
+        subject=email_subject,
+        head_html=email_document_head_html(email_subject),
+        hero_html=hero_html,
+        body_inner_html=body_inner,
+        signature_html=signature_html,
+        disclaimer_html=body_disclaimer,
+        footer_html=graphic_footer,
     )
-    body_html = f"""<!DOCTYPE html>
-<html lang="en">
-{email_document_head_html(email_subject)}
-<body style="margin:0;padding:0;background:#f3efe8;font-family:{EMAIL_FONT_STACK};color:#1d1d1f;-webkit-font-smoothing:antialiased;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#f3efe8" style="background:#f3efe8;padding:28px 12px;">
-    <tr>
-      <td align="center">
-        <table role="presentation" width="560" cellspacing="0" cellpadding="0" border="0" bgcolor="#ffffff" style="width:560px;max-width:560px;background:#ffffff;border-radius:18px;overflow:hidden;">
-          {email_hero_header_html(hero_title, tone=tone, badge=chip, navy=navy, gold=gold, wordmark_url=wordmark_url)}
-          <tr>
-            <td align="left" style="padding:8px 36px 8px;background:#ffffff;">
-              <p style="margin:0;font-family:{EMAIL_FONT_STACK};font-size:17px;line-height:1.45;letter-spacing:-0.022em;font-weight:400;color:#1d1d1f;">Hi {client_name},</p>
-              <p style="margin:14px 0 0;font-family:{EMAIL_FONT_STACK};font-size:16px;line-height:1.55;letter-spacing:-0.022em;color:#6e6e73;">{message_html}</p>
-            </td>
-          </tr>
-          <tr>
-            <td align="left" style="padding:10px 28px 8px;background:#ffffff;">
-              {facts_block}
-            </td>
-          </tr>
-          <tr>
-            <td align="center" style="padding:18px 36px 10px;background:#ffffff;">
-              {apple_email_button_html(panel_url, cta_label, navy)}
-              {('<div style="height:12px;line-height:12px;font-size:0;">&nbsp;</div>' + apple_email_button_html(extra_cta_url, extra_cta_label, navy)) if extra_cta_url and extra_cta_label else ''}
-            </td>
-          </tr>
-          <tr>
-            <td align="left" style="padding:8px 36px 28px;background:#ffffff;">
-              <p style="margin:0;font-family:{EMAIL_FONT_STACK};font-size:13px;line-height:1.5;color:#86868b;">{html_escape(support_note)}</p>
-            </td>
-          </tr>
-          <tr>
-            <td align="center" bgcolor="#003971" style="padding:36px 40px 32px;background-color:#003971;color:#ffffff;">
-              {footer_html}
-            </td>
-          </tr>
-          <tr><td style="height:3px;line-height:3px;font-size:0;background:{gold};">&nbsp;</td></tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>"""
     return email_subject, body_text, body_html
 
 
@@ -2088,33 +2629,44 @@ def build_client_document_email(client, doc_name, client_message=None, company_n
         cta_label='View in Messages & Files',
         cta_url=client_website_url(),
         extra_message='\n\n'.join(extra_lines),
-        footer_note='This is a transactional email from Brixen Consultants Ltd because a document was added to your portal account.',
+        email_category='DOCUMENT',
+        company_name=company_name,
         layout='activity',
     )
 
 
 def resolve_client_user(client_or_id):
     if isinstance(client_or_id, dict):
+        user_id = client_or_id.get('user_id') or client_or_id.get('id')
+        if user_id:
+            row = query_db(
+                "SELECT id, email, notification_email, full_name, role FROM users WHERE id = ? AND role = 'CLIENT';",
+                (user_id,),
+                one=True,
+            )
+            if row:
+                return dict(row)
         if client_or_id.get('role') == 'CLIENT' and client_or_id.get('email'):
-            return client_or_id
-        user_id = client_or_id.get('user_id')
-        if not user_id and client_or_id.get('email'):
-            user_id = client_or_id.get('id')
+            out = dict(client_or_id)
+            out.setdefault('notification_email', client_or_id.get('notification_email') or '')
+            return out
         if client_or_id.get('email') and user_id:
             return {
                 'id': user_id,
                 'email': client_or_id['email'],
+                'notification_email': client_or_id.get('notification_email') or '',
                 'full_name': client_or_id.get('full_name') or '',
                 'role': 'CLIENT',
             }
         client_or_id = user_id or client_or_id.get('id')
     if not client_or_id:
         return None
-    return query_db(
-        "SELECT id, email, full_name, role FROM users WHERE id = ? AND role = 'CLIENT';",
+    row = query_db(
+        "SELECT id, email, notification_email, full_name, role FROM users WHERE id = ? AND role = 'CLIENT';",
         (client_or_id,),
         one=True,
     )
+    return dict(row) if row else None
 
 
 def notify_client(
@@ -2143,6 +2695,8 @@ def notify_client(
     alert_label=None,
     layout=None,
     greeting_name=None,
+    company=None,
+    order=None,
 ):
     client_rec = resolve_client_user(client)
     if not client_rec:
@@ -2185,16 +2739,21 @@ def notify_client(
     else:
         email_subject = email_subject or f"{title} — {brand_settings()['company_name']}"
 
-    if email_to is None:
-        recipient = client_rec.get('email')
-    else:
-        recipient = str(email_to).strip()
-        if not recipient:
-            return {
-                'notification_created': True,
-                'email_sent': False,
-                'email_status': 'No company owner email',
-            }
+    recipient = resolve_work_notification_email(
+        client=client_rec,
+        company=company,
+        order=order if isinstance(order, dict) else (client if isinstance(client, dict) and client.get('order_number') else None),
+        email_to=email_to,
+    )
+    # When the caller is an order row, use it for company email resolution.
+    if not recipient and isinstance(client, dict) and (client.get('company_id') or client.get('owner_form_email')):
+        recipient = resolve_work_notification_email(client=client_rec, order=client, email_to=email_to)
+    if not recipient:
+        return {
+            'notification_created': True,
+            'email_sent': False,
+            'email_status': 'No company owner email',
+        }
     sent, status = EmailService.send_notification_email(
         recipient,
         email_subject,
@@ -2205,6 +2764,7 @@ def notify_client(
         'notification_created': True,
         'email_sent': bool(sent),
         'email_status': status,
+        'email_to': recipient,
     }
 
 
@@ -2250,9 +2810,16 @@ def notify_activity_done(
     layout='activity',
     email_sections=None,
     invoice_receipt=None,
+    company=None,
+    order=None,
 ):
     lines = [str(point).strip() for point in (points or []) if str(point).strip()]
     extra = '\n'.join(lines)
+    order_row = order if isinstance(order, dict) else (client if isinstance(client, dict) and client.get('order_number') else None)
+    company_row = company if company is not None else None
+    resolved_to = email_to
+    if resolved_to is None:
+        resolved_to = resolve_work_notification_email(client=client, company=company_row, order=order_row)
     return notify_client(
         client,
         title,
@@ -2270,10 +2837,12 @@ def notify_activity_done(
         extra_cta_url=extra_cta_url,
         detail_title=detail_title,
         detail_value=detail_value,
-        email_to=email_to,
+        email_to=resolved_to,
         greeting_name=greeting_name,
         layout=layout or 'activity',
         footer_note='This email is about an update on your Brixen Consultants service.',
+        company=company_row,
+        order=order_row,
     )
 
 
@@ -2345,6 +2914,8 @@ def notify_product_completed(order):
         cta_label='View in your client panel',
         detail_title='Order',
         detail_value=order.get('order_number'),
+        order=order,
+        company=load_company_for_notify(order=order),
     )
 
 
@@ -2526,6 +3097,7 @@ def notify_compliance_activity(company, events):
         cta_label='View your company',
         detail_title='Company',
         detail_value=name,
+        company=company,
     )
 
 
@@ -2556,6 +3128,7 @@ def notify_accounts_filed(company, filing=None):
         cta_label='View your company',
         detail_title='Company',
         detail_value=name,
+        company=company,
     )
 
 
@@ -2677,6 +3250,139 @@ def record_dismissed_company_card(company):
         """,
         (user_id, name_key, number, wc_id),
     )
+
+
+def delete_company_card(company_id, actor=None):
+    """Remove a company portfolio card. Linked orders are reassigned or hidden."""
+    company = query_db("SELECT * FROM companies WHERE id = ?;", (company_id,), one=True)
+    if not company:
+        return None, 'Company not found'
+    record_dismissed_company_card(company)
+    replacement = match_company_for_client(company.get('user_id'), company.get('name'), exclude_id=company_id)
+    replacement_row = query_db(
+        "SELECT id, company_number FROM companies WHERE id = ?;",
+        (replacement,),
+        one=True,
+    ) if replacement else None
+    if replacement_row and not is_pending_company_number(replacement_row.get('company_number')):
+        linked_orders = query_db("SELECT id FROM orders WHERE company_id = ?;", (company_id,)) or []
+        for order in linked_orders:
+            attach_order_to_company(order['id'], replacement_row['id'])
+    else:
+        execute_db(
+            "UPDATE orders SET company_id = NULL, portfolio_hidden = 1 WHERE company_id = ?;",
+            (company_id,),
+        )
+        execute_db("UPDATE company_owners SET company_id = NULL WHERE company_id = ?;", (company_id,))
+    execute_db("DELETE FROM companies WHERE id = ?;", (company_id,))
+    if actor:
+        log_activity(
+            actor,
+            'COMPANY_DELETED',
+            'companies',
+            str(company_id),
+            f"Deleted company {company.get('name')} ({company.get('company_number') or 'no number'})",
+        )
+    return company, None
+
+
+def bulk_delete_company_cards(company_ids, actor=None):
+    deleted = []
+    errors = []
+    seen = set()
+    for raw in company_ids or []:
+        try:
+            cid = int(raw)
+        except (TypeError, ValueError):
+            errors.append({'id': raw, 'message': 'Invalid company id'})
+            continue
+        if cid in seen:
+            continue
+        seen.add(cid)
+        company, err = delete_company_card(cid, actor=actor)
+        if err:
+            errors.append({'id': cid, 'message': err})
+        else:
+            deleted.append({'id': cid, 'name': (company or {}).get('name')})
+    return {'deleted': deleted, 'errors': errors, 'deleted_count': len(deleted)}
+
+
+def bulk_update_company_cards(company_ids, data, actor=None):
+    data = data or {}
+    updated = []
+    errors = []
+    seen = set()
+    allowed_status = {
+        'active': 'Active',
+        'dissolved': 'Dissolved',
+        'liquidation': 'Liquidation',
+        'closed': 'Closed',
+        'strike off proposed': 'Strike Off Proposed',
+    }
+    status_raw = data.get('status')
+    status_val = None
+    if status_raw is not None and str(status_raw).strip() != '':
+        status_val = allowed_status.get(str(status_raw).strip().lower())
+        if not status_val:
+            return None, 'Select a valid company status'
+
+    client_id = None
+    if 'client_id' in data and data.get('client_id') not in (None, ''):
+        try:
+            client_id = int(data.get('client_id'))
+        except (TypeError, ValueError):
+            return None, 'Select a valid client'
+        client = query_db(
+            "SELECT id FROM users WHERE id = ? AND role = 'CLIENT';",
+            (client_id,),
+            one=True,
+        )
+        if not client:
+            return None, 'Client not found'
+
+    package = None
+    if 'package' in data:
+        package = str(data.get('package') or '').strip() or None
+
+    for raw in company_ids or []:
+        try:
+            cid = int(raw)
+        except (TypeError, ValueError):
+            errors.append({'id': raw, 'message': 'Invalid company id'})
+            continue
+        if cid in seen:
+            continue
+        seen.add(cid)
+        company = query_db("SELECT id, name FROM companies WHERE id = ?;", (cid,), one=True)
+        if not company:
+            errors.append({'id': cid, 'message': 'Company not found'})
+            continue
+        sets = []
+        params = []
+        if status_val is not None:
+            sets.append('status = ?')
+            params.append(status_val)
+        if client_id is not None:
+            sets.append('user_id = ?')
+            params.append(client_id)
+        if 'package' in data:
+            sets.append('package = ?')
+            params.append(package)
+        if not sets:
+            errors.append({'id': cid, 'message': 'No changes requested'})
+            continue
+        params.append(cid)
+        execute_db(f"UPDATE companies SET {', '.join(sets)} WHERE id = ?;", params)
+        updated.append({'id': cid, 'name': company.get('name')})
+    if actor and updated:
+        log_activity(
+            actor,
+            'COMPANY_BULK_UPDATED',
+            'companies',
+            ','.join(str(u['id']) for u in updated[:40]),
+            f"Bulk updated {len(updated)} compan{'y' if len(updated) == 1 else 'ies'}",
+        )
+    return {'updated': updated, 'errors': errors, 'updated_count': len(updated)}, None
 
 
 def registered_address_from_company_row(row):
@@ -2883,9 +3589,41 @@ def normalize_registered_email(value):
     text = str(value or '').strip().lower()
     if not text:
         return '', None
+    if text.endswith('@brixen-pending.local') or text.endswith('.local'):
+        return None, 'Enter a real company or personal email (Gmail, Outlook, Hotmail, etc.)'
     if not is_usable_form_email(text) or not STAFF_EMAIL_RE.match(text):
         return None, 'Enter a valid registered email'
+    # Reject obvious placeholders even if they look like emails.
+    try:
+        import compliance_alerts as _ca
+        if not _ca.is_valid_client_notify_email(text):
+            return None, 'Enter a real company or personal email (Gmail, Outlook, Hotmail, etc.)'
+    except Exception:
+        pass
     return text, None
+
+
+def is_placeholder_company_email(value):
+    text = str(value or '').strip().lower()
+    return (not text) or text.endswith('@brixen-pending.local')
+
+
+def company_notify_email_locked(company):
+    try:
+        return int((company or {}).get('registered_email_locked') or 0) == 1
+    except (TypeError, ValueError):
+        return False
+
+
+def company_list_order_sql():
+    # Newest formed first (incorporation date), then newest CRM card, then id.
+    return (
+        "CASE "
+        "WHEN inc_date IS NOT NULL AND length(trim(inc_date)) >= 10 THEN date(inc_date) "
+        "WHEN created_at IS NOT NULL THEN date(created_at) "
+        "ELSE date('1970-01-01') END DESC, "
+        "id DESC"
+    )
 
 
 def client_account_email(user_id):
@@ -2995,10 +3733,24 @@ def public_client_company(row, deadlines=None, for_staff=False, resolve_owner=Fa
         'sic_codes': str(src.get('sic_codes') or '').strip(),
         'sic_activities': sic_activities_from_codes(src.get('sic_codes')),
         'registered_email': str(src.get('registered_email') or '').strip(),
+        'whatsapp_number': str(src.get('whatsapp_number') or '').strip(),
         'deadlines': list(deadlines or []),
     }
-    if not payload['registered_email']:
-        payload['registered_email'] = resolve_company_registered_email(src)
+    if is_placeholder_company_email(payload['registered_email']):
+        payload['registered_email'] = ''
+        payload['registered_email_locked'] = False
+        payload['business_email_verified'] = False
+    else:
+        payload['registered_email_locked'] = company_notify_email_locked(src)
+        payload['business_email_verified'] = int(src.get('business_email_verified') or 0) == 1
+    payload['business_email_verified_at'] = src.get('business_email_verified_at')
+    payload['business_email_source'] = str(src.get('business_email_source') or '').strip()
+    payload['business_email_updated_at'] = src.get('business_email_updated_at')
+    if not payload['registered_email'] and not payload['registered_email_locked']:
+        suggestion = resolve_company_registered_email(src) or ''
+        if suggestion and not is_placeholder_company_email(suggestion):
+            payload['registered_email'] = suggestion
+            # Suggestions stay editable until staff saves once.
     directors = []
     if (
         resolve_owner
@@ -3064,14 +3816,18 @@ COMPANY_STAFF_SELECT = (
     "id, name, company_number, status, inc_date, director, reg_office, package, account_status, "
     "created_at, user_id, utr_number, authentication_code, activation_code, "
     "identity_verified, identity_verified_at, psc_verified, psc_verified_at, "
-    "sic_codes, registered_email, accounts_next_due, accounts_overdue, "
+    "sic_codes, registered_email, registered_email_locked, business_email_verified, "
+    "business_email_verified_by, business_email_verified_at, business_email_source, business_email_updated_at, "
+    "whatsapp_number, accounts_next_due, accounts_overdue, "
     "confirmation_next_due, confirmation_overdue, ch_attention_json, "
-    "ch_alert_fingerprint, ch_alert_sent_at"
+    "ch_alert_fingerprint, ch_alert_sent_at, compliance_last_notification_at, compliance_last_notification_id"
 )
 COMPANY_LIST_SELECT = (
     "id, name, company_number, status, inc_date, director, reg_office, package, account_status, "
     "created_at, user_id, utr_number, identity_verified, psc_verified, "
-    "sic_codes, registered_email, accounts_next_due, accounts_overdue, "
+    "sic_codes, registered_email, registered_email_locked, business_email_verified, "
+    "business_email_verified_by, business_email_verified_at, business_email_source, business_email_updated_at, "
+    "whatsapp_number, accounts_next_due, accounts_overdue, "
     "confirmation_next_due, confirmation_overdue, ch_attention_json"
 )
 
@@ -3145,7 +3901,7 @@ def relink_company_from_companies_house(company_id, name, companies_house_number
     return company_row, None
 
 
-def update_company_compliance(company_id, data):
+def update_company_compliance(company_id, data, actor=None):
     current = query_db(f"SELECT {COMPANY_STAFF_SELECT} FROM companies WHERE id = ?;", (company_id,), one=True)
     if not current:
         return None, 'Company not found'
@@ -3153,6 +3909,25 @@ def update_company_compliance(company_id, data):
     sets = []
     params = []
     now = datetime.datetime.now().isoformat(sep=' ', timespec='seconds')
+    import compliance_alerts as _ca
+    if data.get('unverify_business_email'):
+        _, email_err = _ca.unverify_company_business_email(company_id, actor=actor, source='staff_unverify')
+        if email_err:
+            return None, email_err
+    elif data.get('verify_business_email') and 'registered_email' not in data:
+        _, email_err = _ca.verify_company_business_email(company_id, actor=actor, source='staff_verify')
+        if email_err:
+            return None, email_err
+    elif 'registered_email' in data:
+        _, email_err = _ca.set_company_business_email(
+            company_id,
+            data.get('registered_email'),
+            actor=actor,
+            source='staff',
+            verify=bool(data.get('verify_business_email')),
+        )
+        if email_err:
+            return None, email_err
     if 'utr_number' in data:
         utr, utr_err = normalize_compliance_field(data.get('utr_number'), 15)
         if utr_err:
@@ -3197,12 +3972,21 @@ def update_company_compliance(company_id, data):
         else:
             sets.append('psc_verified_at = ?')
             params.append(None)
-    if 'registered_email' in data:
-        email, email_err = normalize_registered_email(data.get('registered_email'))
-        if email_err:
-            return None, email_err
-        sets.append('registered_email = ?')
-        params.append(email or None)
+    if 'whatsapp_number' in data:
+        existing_wa = str(current.get('whatsapp_number') or '').strip()
+        if existing_wa:
+            incoming = str(data.get('whatsapp_number') or '').strip()
+            if incoming and incoming != existing_wa:
+                return None, 'WhatsApp number is locked after the first save and cannot be changed.'
+            # Ignore blank / same value once locked.
+        else:
+            wa, wa_err = normalize_whatsapp_number(data.get('whatsapp_number'))
+            if wa_err:
+                return None, wa_err
+            if not wa:
+                return None, 'Enter a WhatsApp number'
+            sets.append('whatsapp_number = ?')
+            params.append(wa)
     if sets:
         params.append(company_id)
         execute_db(f"UPDATE companies SET {', '.join(sets)} WHERE id = ?;", params)
@@ -3689,7 +4473,7 @@ def current_accounts_period(inc_date, filings, today=None):
 
 def list_accountancy_rows(user_id=None, for_client=False):
     if not for_client:
-        sync_registered_companies_from_companies_house()
+        schedule_portfolio_ch_sync(user_id=user_id)
     sql = """
         SELECT c.id, c.name, c.company_number, c.inc_date, c.user_id, c.status, c.director,
                c.reg_office, c.utr_number, c.authentication_code, c.activation_code,
@@ -3703,7 +4487,7 @@ def list_accountancy_rows(user_id=None, for_client=False):
         sql += " WHERE c.user_id = ?"
         params.append(user_id)
     sql += " ORDER BY c.name COLLATE NOCASE;"
-    companies = query_db(sql, params) or []
+    companies = filter_companies_for_portfolio_list(query_db(sql, params) or [])
     rows = []
     stats = {'overdue': 0, 'due_soon': 0, 'in_progress': 0, 'filed': 0, 'issues': 0, 'idv_outstanding': 0}
     today = datetime.date.today()
@@ -3942,7 +4726,19 @@ def public_document(row, for_client=False):
     is_customer_upload = (
         uploaded_by == 'Customer Upload'
         or category == 'Checkout Upload'
+        or str(src.get('review_notes') or '').strip() == 'Smart Document Intake'
+        or str(src.get('lifecycle_status') or '').upper() in (
+            'CUSTOMER_UPLOADS', 'PROCESSING', 'REVIEW_REQUIRED', 'READY_FOR_APPROVAL', 'QUARANTINE'
+        )
     )
+    lifecycle = str(src.get('lifecycle_status') or '').strip() or (
+        'CUSTOMER_UPLOADS' if is_customer_upload else 'POSTED_DOCUMENTS'
+    )
+    is_posted_raw = src.get('is_posted')
+    if is_posted_raw is None:
+        is_posted_val = 0 if is_customer_upload else 1
+    else:
+        is_posted_val = int(is_posted_raw)
     out = {
         'id': src.get('id'),
         'user_id': src.get('user_id'),
@@ -3968,8 +4764,8 @@ def public_document(row, for_client=False):
         'crm_status': src.get('crm_status') or 'MATCHED',
         'ch_status': src.get('ch_status') or 'NOT_APPLICABLE',
         'overall_status': src.get('overall_status') or 'COMPLETED',
-        'lifecycle_status': src.get('lifecycle_status') or 'POSTED_DOCUMENTS',
-        'is_posted': int(src.get('is_posted') if src.get('is_posted') is not None else 1),
+        'lifecycle_status': lifecycle,
+        'is_posted': is_posted_val,
         'ocr_confidence': float(src.get('ocr_confidence') if src.get('ocr_confidence') is not None else 100.0),
         'classification_confidence': float(src.get('classification_confidence') if src.get('classification_confidence') is not None else 100.0),
         'identity_confidence': float(src.get('identity_confidence') if src.get('identity_confidence') is not None else 100.0),
@@ -3997,6 +4793,51 @@ def public_document(row, for_client=False):
         out['score_gap'] = (meta or {}).get('score_gap')
         out['top_candidates'] = (meta or {}).get('top_candidates') or []
     return out
+
+
+def delete_document_record(doc_id, actor=None):
+    doc = query_db("SELECT * FROM documents WHERE id = ?;", (doc_id,), one=True)
+    if not doc:
+        return None, 'Document not found'
+    remove_stored_document_files([doc.get('file_path')])
+    execute_db("DELETE FROM documents WHERE id = ?;", (doc_id,))
+    if actor:
+        log_activity(
+            actor,
+            'DOCUMENT_DELETED',
+            'documents',
+            str(doc_id),
+            f"Deleted document {doc.get('name')} (company {doc.get('company_id') or 'none'})",
+        )
+    return doc, None
+
+
+def schedule_company_detail_refresh(company_id):
+    """Refresh CH/director data after company detail is already returned."""
+    def _job():
+        try:
+            company = query_db(
+                f"SELECT {COMPANY_STAFF_SELECT} FROM companies WHERE id = ?;",
+                (company_id,),
+                one=True,
+            )
+            if not company:
+                return
+            sync_pending_companies_from_companies_house(company_id=company_id, limit=1)
+            sync_registered_company_from_companies_house(company)
+            persist_company_registered_email(company)
+            if looks_like_uk_company_number(company.get('company_number')):
+                live_directors = fetch_companies_house_active_directors(company.get('company_number'))
+                if live_directors:
+                    sync_company_directors_from_list(company_id, live_directors)
+            ensure_company_order_documents(company_id)
+        except Exception as exc:
+            print(f"[Company detail refresh] {company_id}: {exc}")
+
+    try:
+        BULK_JOB_POOL.submit(_job)
+    except Exception as exc:
+        print(f"[Company detail refresh] schedule failed: {exc}")
 
 
 def client_greeting_label(now=None):
@@ -4897,12 +5738,13 @@ def resolve_client_document_links(client_id, company_id, order_id):
     return {'client': client, 'company': company, 'order': order}, None
 
 
-def notify_client_document_uploaded(client, doc_name, client_message=None, company_name=None, order_number=None):
+def notify_client_document_uploaded(client, doc_name, client_message=None, company_name=None, order_number=None, company=None, order=None, company_id=None):
     extra = (client_message or '').strip()
     message = 'Brixen Consultants has uploaded a new document to your client portal. Log in to view and download it.'
     if extra:
         message = f"{message} {extra}"
     subject, email_text, email_html = build_client_document_email(client, doc_name, client_message, company_name=company_name, order_number=order_number)
+    company_row = company or (load_company_for_notify(company_id) if company_id else None)
     return notify_client(
         client,
         'New document available',
@@ -4912,6 +5754,8 @@ def notify_client_document_uploaded(client, doc_name, client_message=None, compa
         email_subject=subject,
         email_text=email_text,
         email_html=email_html,
+        company=company_row,
+        order=order,
     )
 
 
@@ -5980,6 +6824,20 @@ def _company_status_score(status_text):
     return 0, None
 
 
+def company_status_hidden_from_list(status_text):
+    """Hide dissolved / closed companies from portfolio lists (DB rows kept)."""
+    status = str(status_text or '').strip().lower()
+    if not status:
+        return False
+    return any(token in status for token in (
+        'dissolved', 'liquidation', 'liquidat', 'converted-closed', 'closed', 'removed', 'inactive',
+    ))
+
+
+def filter_companies_for_portfolio_list(rows):
+    return [row for row in (rows or []) if not company_status_hidden_from_list((row or {}).get('status'))]
+
+
 def score_intake_company_candidate(candidate, client_id, person_name, extracted_dob, extracted_nationality=None):
     score = 0
     reasons = []
@@ -6013,13 +6871,24 @@ def score_intake_company_candidate(candidate, client_id, person_name, extracted_
         if dob_reason:
             reasons.append(dob_reason)
 
-    # 3. Nationality / Country Compatibility
+    # 3. Nationality / Country Compatibility (identity triad)
     cand_nat = (candidate.get('officer_nationality') or candidate.get('nationality') or '').strip().lower()
     ext_nat = (extracted_nationality or '').strip().lower()
     if ext_nat and cand_nat:
-        if ext_nat in cand_nat or cand_nat in ext_nat or (ext_nat.startswith('pak') and 'pak' in cand_nat) or (ext_nat.startswith('brit') and 'brit' in cand_nat):
-            score += 10
-            reasons.append('Nationality/country compatible')
+        if (
+            ext_nat in cand_nat
+            or cand_nat in ext_nat
+            or (ext_nat.startswith('pak') and 'pak' in cand_nat)
+            or (ext_nat.startswith('brit') and 'brit' in cand_nat)
+            or (ext_nat.startswith('ind') and 'ind' in cand_nat)
+        ):
+            score += 20
+            reasons.append('Nationality matched')
+        else:
+            score -= 8
+            reasons.append('Nationality differs from officer record')
+    elif ext_nat and not cand_nat:
+        reasons.append(f'Nationality from document: {extracted_nationality}')
 
     # 4. Existing CRM Relationship
     cid = candidate.get('company_id')
@@ -6395,12 +7264,14 @@ def _mrz_quality_score(text):
     return score
 
 
-def _prepare_ocr_gray(image, sharpen=1.6, median=False, threshold=None, min_edge=1800):
-    from PIL import ImageOps, ImageEnhance, ImageFilter
+def _prepare_ocr_gray(image, sharpen=1.6, median=False, threshold=None, min_edge=2200):
+    from PIL import Image, ImageOps, ImageEnhance, ImageFilter
     gray = ImageOps.grayscale(image)
     gray = ImageOps.autocontrast(gray)
     if sharpen:
         gray = ImageEnhance.Sharpness(gray).enhance(sharpen)
+    contrast = ImageEnhance.Contrast(gray)
+    gray = contrast.enhance(1.15)
     if median:
         gray = gray.filter(ImageFilter.MedianFilter(size=3))
     if threshold is not None:
@@ -6409,7 +7280,11 @@ def _prepare_ocr_gray(image, sharpen=1.6, median=False, threshold=None, min_edge
     edge = max(width, height)
     if edge < min_edge:
         scale = min_edge / edge
-        gray = gray.resize((max(1, int(width * scale)), max(1, int(height * scale))))
+        resample = getattr(Image, 'Resampling', Image).LANCZOS if hasattr(Image, 'LANCZOS') else Image.BICUBIC
+        gray = gray.resize(
+            (max(1, int(width * scale)), max(1, int(height * scale))),
+            resample=resample,
+        )
     return gray
 
 
@@ -6425,7 +7300,8 @@ def _tesseract_string(image, psm='6'):
         return ''
 
 
-def _ocr_image_to_text(image):
+def _ocr_image_to_text(image, high_quality=True):
+    """High-quality OCR for phone photos / scans that are not PDF text."""
     try:
         from PIL import ImageOps
     except Exception:
@@ -6433,29 +7309,50 @@ def _ocr_image_to_text(image):
     try:
         width, height = image.size
         candidates = []
+        min_edge = 2600 if high_quality else 1800
 
         # Full page — avoid median blur (it destroys thin MRZ strokes).
-        full = _prepare_ocr_gray(image, sharpen=1.5, median=False, min_edge=1700)
-        for psm in ('6', '4'):
+        full = _prepare_ocr_gray(image, sharpen=1.55, median=False, min_edge=min_edge)
+        for psm in ('6', '4', '3'):
             chunk = _tesseract_string(full, psm)
             if chunk.strip():
                 candidates.append(chunk)
 
+        # Sparse / mixed layout pass (invoices, statements, ID cards).
+        if high_quality:
+            sparse = _prepare_ocr_gray(image, sharpen=1.35, median=False, min_edge=min_edge)
+            for psm in ('11', '12'):
+                chunk = _tesseract_string(sparse, psm)
+                if chunk.strip():
+                    candidates.append(chunk)
+
         # Mild denoise pass for noisy phone photos.
-        soft = _prepare_ocr_gray(image, sharpen=1.2, median=True, min_edge=1700)
+        soft = _prepare_ocr_gray(image, sharpen=1.2, median=True, min_edge=min_edge)
         chunk = _tesseract_string(soft, '6')
         if chunk.strip():
             candidates.append(chunk)
 
+        # High-contrast binarized pass for faded scans.
+        if high_quality:
+            for thresh in (145, 160):
+                bin_img = _prepare_ocr_gray(
+                    image, sharpen=1.3, median=False, threshold=thresh, min_edge=min_edge,
+                )
+                chunk = _tesseract_string(bin_img, '6')
+                if chunk.strip():
+                    candidates.append(chunk)
+
         # Biodata page is usually the lower half of an open passport photo.
         if height >= 900:
             biodata = image.crop((0, int(height * 0.42), width, height))
-            bio_gray = _prepare_ocr_gray(biodata, sharpen=1.7, median=False, min_edge=2000)
+            bio_gray = _prepare_ocr_gray(biodata, sharpen=1.7, median=False, min_edge=max(min_edge, 2200))
             for psm in ('6', '4'):
                 chunk = _tesseract_string(bio_gray, psm)
                 if chunk.strip():
                     candidates.append(chunk)
-            bio_bin = _prepare_ocr_gray(biodata, sharpen=1.2, median=False, threshold=150, min_edge=2000)
+            bio_bin = _prepare_ocr_gray(
+                biodata, sharpen=1.2, median=False, threshold=150, min_edge=max(min_edge, 2200),
+            )
             chunk = _tesseract_string(bio_bin, '6')
             if chunk.strip():
                 candidates.append(chunk)
@@ -6463,12 +7360,14 @@ def _ocr_image_to_text(image):
         # Thin MRZ strip at the bottom — high contrast, large scale.
         if height >= 700:
             mrz_band = image.crop((0, int(height * 0.82), width, height))
-            mrz_gray = _prepare_ocr_gray(mrz_band, sharpen=2.0, median=False, min_edge=2400)
+            mrz_gray = _prepare_ocr_gray(mrz_band, sharpen=2.0, median=False, min_edge=max(min_edge, 2600))
             for psm in ('6', '7'):
                 chunk = _tesseract_string(mrz_gray, psm)
                 if chunk.strip():
                     candidates.append(chunk)
-            mrz_bin = _prepare_ocr_gray(mrz_band, sharpen=1.0, median=False, threshold=140, min_edge=2600)
+            mrz_bin = _prepare_ocr_gray(
+                mrz_band, sharpen=1.0, median=False, threshold=140, min_edge=max(min_edge, 2800),
+            )
             chunk = _tesseract_string(mrz_bin, '6')
             if chunk.strip():
                 candidates.append(chunk)
@@ -6485,7 +7384,7 @@ def _ocr_image_to_text(image):
         return ''
 
 
-def _ocr_image_bytes(file_bytes):
+def _ocr_image_bytes(file_bytes, high_quality=True):
     try:
         import io
         from PIL import Image, ImageOps
@@ -6494,12 +7393,12 @@ def _ocr_image_bytes(file_bytes):
         image = ImageOps.exif_transpose(image)
         if image.mode not in ('L', 'RGB'):
             image = image.convert('RGB')
-        return _ocr_image_to_text(image)
+        return _ocr_image_to_text(image, high_quality=high_quality)
     except Exception:
         return ''
 
 
-def _extract_pdf_text(file_bytes):
+def _extract_pdf_text(file_bytes, high_quality=True):
     text = ''
     try:
         import io
@@ -6514,12 +7413,13 @@ def _extract_pdf_text(file_bytes):
     try:
         import pypdfium2
         pdf = pypdfium2.PdfDocument(file_bytes)
-        page_count = min(len(pdf), 3)
+        page_count = min(len(pdf), 4 if high_quality else 3)
+        render_scale = 3.2 if high_quality else 2.5
         for index in range(page_count):
             page = pdf[index]
-            bitmap = page.render(scale=2.5)
+            bitmap = page.render(scale=render_scale)
             pil_image = bitmap.to_pil()
-            ocr_chunks.append(_ocr_image_to_text(pil_image))
+            ocr_chunks.append(_ocr_image_to_text(pil_image, high_quality=high_quality))
             try:
                 page.close()
             except Exception:
@@ -6695,20 +7595,65 @@ def _parse_mrz_nationality(text):
     compact = _compact_mrz_text(text)
     match = re.search(r'P<([A-Z]{3})', compact)
     if not match:
-        match = re.search(r'(?:^|[^A-Z])(PAK|GBR|IND|USA|IRL|CAN|AUS|DEU|FRA)[A-Z]+<<', compact)
+        match = re.search(r'(?:^|[^A-Z])(PAK|GBR|IND|USA|IRL|CAN|AUS|DEU|FRA|NLD|ESP|ITA|POL|BGD|NGA|ZAF)[A-Z]+<<', compact)
     if match:
         code = match.group(1)
         country_map = {
             'PAK': 'Pakistani', 'GBR': 'British', 'USA': 'American',
             'IND': 'Indian', 'CAN': 'Canadian', 'AUS': 'Australian',
-            'DEU': 'German', 'FRA': 'French', 'IRL': 'Irish'
+            'DEU': 'German', 'FRA': 'French', 'IRL': 'Irish',
+            'NLD': 'Dutch', 'ESP': 'Spanish', 'ITA': 'Italian',
+            'POL': 'Polish', 'BGD': 'Bangladeshi', 'NGA': 'Nigerian',
+            'ZAF': 'South African',
         }
         return country_map.get(code, code)
-    match_labeled = re.search(r'(?:nationality|citizenship)\s*[:\-]?\s*([A-Za-z]{3,20})', text, re.IGNORECASE)
-    if match_labeled:
-        return match_labeled.group(1).strip().title()
-    if re.search(r'\bpakistani\b', text, re.IGNORECASE):
-        return 'Pakistani'
+    return None
+
+
+def _extract_nationality(text):
+    """Pull nationality from MRZ, labelled fields, or common passport/ID wording."""
+    mrz = _parse_mrz_nationality(text)
+    if mrz:
+        return mrz
+    blob = str(text or '')
+    labeled = re.search(
+        r'(?:nationality|citizenship|citizen of|nationalité)\s*[:\-]?\s*([A-Za-z][A-Za-z\s\-]{2,30})',
+        blob,
+        re.IGNORECASE,
+    )
+    if labeled:
+        raw = re.sub(r'\s+', ' ', labeled.group(1)).strip(' ,.-')
+        # Stop at next field labels that often follow on the same OCR line.
+        raw = re.split(
+            r'\b(?:sex|gender|date of birth|d\.?o\.?b|place of birth|passport|document)\b',
+            raw,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0].strip(' ,.-')
+        if raw and len(raw) >= 3 and raw.lower() not in INTAKE_NAME_NOISE:
+            return raw.title()
+    word_map = {
+        r'\bpakistani\b': 'Pakistani',
+        r'\bbritish\b|\bbritish citizen\b': 'British',
+        r'\bindian\b': 'Indian',
+        r'\bamerican\b|\bunited states\b': 'American',
+        r'\birish\b': 'Irish',
+        r'\bcanadian\b': 'Canadian',
+        r'\baustralian\b': 'Australian',
+        r'\bbangladeshi\b': 'Bangladeshi',
+        r'\bnigerian\b': 'Nigerian',
+        r'\bpolish\b': 'Polish',
+    }
+    for pattern, label in word_map.items():
+        if re.search(pattern, blob, re.IGNORECASE):
+            return label
+    code_only = re.search(r'\b(PAK|GBR|IND|USA|IRL|CAN|AUS|BGD|NGA)\b', blob.upper())
+    if code_only:
+        return {
+            'PAK': 'Pakistani', 'GBR': 'British', 'IND': 'Indian', 'USA': 'American',
+            'IRL': 'Irish', 'CAN': 'Canadian', 'AUS': 'Australian',
+            'BGD': 'Bangladeshi', 'NGA': 'Nigerian',
+        }.get(code_only.group(1), code_only.group(1))
     return None
 
 
@@ -6845,15 +7790,221 @@ def _extract_dob(text):
     return None
 
 
-def _extract_company_number(text):
+# Common bank/fintech names OCR picks up from statements — never auto-create these
+# as the client's company unless the document filename itself carries that number.
+_BANK_NOISE_COMPANY_NAMES = frozenset({
+    'REVOLUT LTD', 'REVOLUT LIMITED', 'MONZO BANK LIMITED', 'MONZO LTD',
+    'STARLING BANK LIMITED', 'STARLING BANK LTD', 'WISE PAYMENTS LIMITED',
+    'TRANSFERWISE LTD', 'PAYPAL (EUROPE)', 'BARCLAYS BANK UK PLC',
+    'BANK OF SCOTLAND PLC', 'BANK OF SCOTLAND', 'LLOYDS BANK PLC',
+    'HSBC UK BANK PLC', 'NATWEST', 'NATIONAL WESTMINSTER BANK PLC',
+    'SANTANDER UK PLC', 'THE ROYAL BANK OF SCOTLAND PLC',
+})
+_BANK_NOISE_COMPANY_NUMBERS = frozenset({
+    '08804411',  # Revolut
+    '09465813',  # Monzo
+    '09064104',  # Starling
+    'SC327000',  # Bank of Scotland
+})
+
+
+def extract_company_number_from_filename(filename):
+    """Pull a UK company number from CH-style filenames (newinc/profile/proof)."""
+    base = urllib.parse.unquote(os.path.basename(str(filename or '')).strip())
+    if not base:
+        return None
+    patterns = (
+        r'^((?:SC|NI|OC|SO)\d{6}|\d{8})(?=_)',
+        r'(?i)(?:company[_\s\-]?profile|address[_\s\-]?proof)[_\s\-]?((?:SC|NI|OC|SO)\d{6}|\d{8})\b',
+        r'(?:^|[^A-Za-z0-9])((?:SC|NI|OC|SO)\d{6})(?=[^0-9A-Za-z]|$)',
+        r'(?:^|[^0-9])(\d{8})(?=[_\-\s.]|$)',
+    )
+    for pat in patterns:
+        match = re.search(pat, base)
+        if not match:
+            continue
+        num = normalize_company_number(match.group(1))
+        if looks_like_uk_company_number(num):
+            return num
+    return None
+
+
+def _extract_company_number(text, filename=None):
     match = re.search(
         r'(?:company(?:\s+(?:registration|registered))?\s+(?:number|no\.?)|co\.?\s*no\.?|registration no\.?|reg(?:istered)? no\.?)\s*[:\-]?\s*([0-9]{8}|[A-Za-z]{2}[0-9]{6})',
-        text,
+        text or '',
         re.IGNORECASE,
     )
     if match:
         return normalize_company_number(match.group(1))
-    return None
+    # Filename often carries the definitive CH number when OCR text is weak/empty.
+    return extract_company_number_from_filename(filename or text)
+
+
+def _is_bank_noise_company_candidate(name=None, company_number=None):
+    num = normalize_company_number(company_number) if company_number else ''
+    if num and num in _BANK_NOISE_COMPANY_NUMBERS:
+        return True
+    label = re.sub(r'\s+', ' ', str(name or '').strip()).upper()
+    return bool(label) and label in _BANK_NOISE_COMPANY_NAMES
+
+
+def parse_document_match_meta(doc):
+    raw = (doc or {}).get('match_meta_json')
+    if isinstance(raw, dict):
+        return raw
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def document_complete_company_signals(doc):
+    """
+    Return (company_number, company_name, source) when a document has enough
+    data to place it on the Companies list. Prefer filename CH numbers.
+    """
+    if not doc:
+        return None, None, None
+    if doc.get('company_id'):
+        existing = query_db(
+            "SELECT name, company_number FROM companies WHERE id = ?;",
+            (doc['company_id'],),
+            one=True,
+        )
+        if existing:
+            return (
+                normalize_company_number(existing.get('company_number')),
+                existing.get('name'),
+                'linked',
+            )
+
+    fname_num = extract_company_number_from_filename(doc.get('name'))
+    if fname_num:
+        return fname_num, None, 'filename'
+
+    meta = parse_document_match_meta(doc)
+    for cand in (meta.get('top_candidates') or []):
+        if not isinstance(cand, dict):
+            continue
+        num = normalize_company_number(cand.get('company_number'))
+        name = (cand.get('name') or '').strip() or None
+        if not looks_like_uk_company_number(num):
+            continue
+        if num.startswith('REG') or _is_bank_noise_company_candidate(name, num):
+            continue
+        score = float(cand.get('score') or doc.get('company_match_confidence') or 0)
+        if score < 70:
+            continue
+        return num, name, 'match_meta'
+
+    return None, None, None
+
+
+def ensure_company_for_document(doc, actor=None, *, promote_lifecycle=True):
+    """
+    Create/link a CRM company for a document that already has complete company
+    signals (filename CH number, prior link, or high-confidence match).
+    Returns (company_row_or_None, status_string).
+    """
+    if not doc or not doc.get('id'):
+        return None, 'missing_document'
+
+    if doc.get('company_id'):
+        existing = query_db("SELECT * FROM companies WHERE id = ?;", (doc['company_id'],), one=True)
+        if existing:
+            # Repair junk REG companies when filename carries a real CH number.
+            fname_num = extract_company_number_from_filename(doc.get('name'))
+            existing_num = normalize_company_number(existing.get('company_number'))
+            if fname_num and (
+                not looks_like_uk_company_number(existing_num)
+                or str(existing_num or '').startswith('REG')
+            ):
+                repaired = auto_import_companies_house_from_intake(
+                    None, fname_num, client_user_id=doc.get('user_id'),
+                )
+                if repaired and repaired.get('id') != existing.get('id'):
+                    execute_db(
+                        "UPDATE documents SET company_id = ?, company_match_confidence = 100, matched_at = CURRENT_TIMESTAMP, matched_by_id = ? WHERE id = ?;",
+                        (repaired['id'], (actor or {}).get('id'), doc['id']),
+                    )
+                    return repaired, 'repaired'
+            return existing, 'already_linked'
+
+    company_num, company_name, source = document_complete_company_signals(doc)
+    if not company_num and not company_name:
+        return None, 'incomplete'
+
+    company = auto_import_companies_house_from_intake(
+        company_name, company_num, client_user_id=doc.get('user_id'),
+    )
+    if not company:
+        return None, 'import_failed'
+
+    new_lifecycle = None
+    if promote_lifecycle and (doc.get('lifecycle_status') or '') in (
+        'QUARANTINE', 'REVIEW_REQUIRED', 'CUSTOMER_UPLOADS', 'PROCESSING',
+    ):
+        new_lifecycle = 'READY_FOR_APPROVAL'
+
+    if new_lifecycle:
+        execute_db(
+            """
+            UPDATE documents SET
+                company_id = ?,
+                company_match_confidence = 100,
+                lifecycle_status = ?,
+                matched_at = CURRENT_TIMESTAMP,
+                matched_by_id = ?,
+                review_notes = COALESCE(?, review_notes)
+            WHERE id = ?;
+            """,
+            (
+                company['id'],
+                new_lifecycle,
+                (actor or {}).get('id'),
+                f"Linked to {company.get('name')} via {source}",
+                doc['id'],
+            ),
+        )
+    else:
+        execute_db(
+            """
+            UPDATE documents SET
+                company_id = ?,
+                company_match_confidence = 100,
+                matched_at = CURRENT_TIMESTAMP,
+                matched_by_id = ?,
+                review_notes = COALESCE(?, review_notes)
+            WHERE id = ?;
+            """,
+            (
+                company['id'],
+                (actor or {}).get('id'),
+                f"Linked to {company.get('name')} via {source}",
+                doc['id'],
+            ),
+        )
+
+    log_document_audit(
+        doc['id'],
+        'HUMAN' if actor else 'SYSTEM',
+        (actor or {}).get('id'),
+        (actor or {}).get('full_name') or 'system',
+        'COMPANY_LINKED',
+        doc.get('lifecycle_status'),
+        new_lifecycle or doc.get('lifecycle_status'),
+        {
+            'source': source,
+            'company_id': company.get('id'),
+            'company_name': company.get('name'),
+            'company_number': company.get('company_number'),
+        },
+    )
+    return company, 'linked'
 
 
 def _extract_company_name(text):
@@ -6907,6 +8058,10 @@ def _classify_intake_document(filename_clean, text):
     lower_text = f'{filename_clean}\n{text}'.lower()
     if _looks_like_passport_text(filename_clean, text):
         return 'ID Document'
+    if any(k in lower_text for k in ('invoice', 'tax invoice', 'amount due', 'vat number')) and not any(
+        k in lower_text for k in ('passport', 'bank statement', 'certificate of incorporation')
+    ):
+        return 'Invoice'
     if any(k in lower_text for k in ('statement', 'sort code', 'iban', 'account number', 'hsbc', 'barclays', 'lloyds', 'natwest', 'tide', 'revolut', 'monzo', 'santander')):
         return 'Bank statement'
     if any(k in lower_text for k in ('utility', 'council tax', 'tenancy', 'proof of address', 'water bill', 'electric', 'gas bill')):
@@ -6917,25 +8072,31 @@ def _classify_intake_document(filename_clean, text):
 
 
 def _intake_extraction_quality(person_name, dob, passport_num, nationality, cat, scan_method, raw_text):
+    """Score identity extraction only: name, date of birth, nationality."""
     hits = 0
-    total = 4
+    total = 3
     if person_name:
         hits += 1
     if dob:
         hits += 1
-    if passport_num or nationality:
-        hits += 1
-    if cat in ('ID Document', 'Passport', 'Bank statement', 'Proof of Address', 'Certificate of Incorporation'):
+    if nationality:
         hits += 1
     pct = int(round((hits / total) * 100))
-    label = 'High' if pct >= 75 else ('Medium' if pct >= 50 else ('Low' if hits else 'None'))
+    label = 'High' if pct >= 67 else ('Medium' if pct >= 34 else ('Low' if hits else 'None'))
     return {
         'score': pct,
         'label': label,
         'fields_found': hits,
         'fields_checked': total,
+        'identity_fields': {
+            'name': bool(person_name),
+            'dob': bool(dob),
+            'nationality': bool(nationality),
+        },
         'ocr_used': scan_method == 'ocr',
         'mrz_score': _mrz_quality_score(raw_text or ''),
+        'passport_number_seen': bool(passport_num),
+        'document_category': cat,
     }
 
 
@@ -7073,15 +8234,20 @@ def find_recent_passport_identity_for_name(person_name, limit=40):
     return best, best_pts, best_reason
 
 
-def extract_document_text_and_metadata(filename, b64_content):
+def extract_document_text_and_metadata(filename, b64_content, high_quality=True):
     file_bytes, decode_err = decode_document_base64(b64_content)
     if decode_err or not file_bytes:
         return {'error': decode_err or 'Empty file'}
 
     file_hash = hashlib.sha256(file_bytes).hexdigest()
+    ocr_version = 'v2.2-identity' if high_quality else 'v2.0'
 
     # SHA-256 Deduplication Cache Check (<5ms hit)
-    cached_entry = query_db("SELECT extracted_text, metadata_json FROM ocr_cache WHERE file_hash = ? AND processing_version = 'v2.0';", (file_hash,), one=True)
+    cached_entry = query_db(
+        "SELECT extracted_text, metadata_json FROM ocr_cache WHERE file_hash = ? AND processing_version = ?;",
+        (file_hash, ocr_version),
+        one=True,
+    )
     if cached_entry:
         try:
             cached_meta = json.loads(cached_entry['metadata_json'])
@@ -7098,9 +8264,9 @@ def extract_document_text_and_metadata(filename, b64_content):
     raw_text = ''
 
     if ext == '.pdf':
-        raw_text, scan_method = _extract_pdf_text(file_bytes)
+        raw_text, scan_method = _extract_pdf_text(file_bytes, high_quality=high_quality)
     elif ext in ('.png', '.jpg', '.jpeg', '.webp', '.tif', '.tiff'):
-        raw_text = _ocr_image_bytes(file_bytes)
+        raw_text = _ocr_image_bytes(file_bytes, high_quality=high_quality)
         scan_method = 'ocr' if raw_text.strip() else 'none'
     elif ext in ('.doc', '.docx'):
         raw_text = _extract_docx_text(file_bytes)
@@ -7115,9 +8281,11 @@ def extract_document_text_and_metadata(filename, b64_content):
             scan_method = 'embedded-text'
 
     combined_text = f"{filename_clean}\n{raw_text}"
+    # Core identity triad — name, date of birth, nationality — drives matching.
     person_name = _extract_person_name(combined_text, filename_clean)
     dob = _extract_dob(combined_text)
-    company_number = _extract_company_number(combined_text)
+    nationality = _extract_nationality(combined_text)
+    company_number = _extract_company_number(combined_text, filename_clean)
     company_name = _extract_company_name(combined_text)
     email, phone = _extract_email_phone(combined_text)
 
@@ -7130,7 +8298,11 @@ def extract_document_text_and_metadata(filename, b64_content):
         if holder:
             person_name = holder
     passport_num = _parse_mrz_passport_num(combined_text) if is_passport else None
-    nationality = _parse_mrz_nationality(combined_text) if is_passport else None
+    # Identity documents: ignore noisy company numbers — match via name/DOB/nationality.
+    identity_primary = is_passport or cat in ('ID Document', 'Passport')
+    if identity_primary:
+        company_number = None
+        company_name = None
     doc_type = 'Passport' if is_passport else cat
     quality = _intake_extraction_quality(person_name, dob, passport_num, nationality, cat, scan_method, raw_text)
 
@@ -7149,10 +8321,12 @@ def extract_document_text_and_metadata(filename, b64_content):
         'extracted_company_name': company_name,
         'extracted_email': email,
         'extracted_phone': phone,
+        'identity_primary': identity_primary,
         'scan_method': scan_method,
         'extraction_quality': quality,
-        'text_preview': re.sub(r'\s+', ' ', raw_text).strip()[:240],
+        'text_preview': re.sub(r'\s+', ' ', raw_text).strip()[:1200],
         'cached': False,
+        'high_quality_ocr': bool(high_quality),
     }
 
     # Save to ocr_cache table
@@ -7161,15 +8335,200 @@ def extract_document_text_and_metadata(filename, b64_content):
         cache_copy.pop('file_bytes', None)
         execute_db("""
             INSERT OR REPLACE INTO ocr_cache (file_hash, extracted_text, metadata_json, processing_version)
-            VALUES (?, ?, ?, 'v2.0');
-        """, (file_hash, raw_text, json.dumps(cache_copy)))
+            VALUES (?, ?, ?, ?);
+        """, (file_hash, raw_text, json.dumps(cache_copy), ocr_version))
     except Exception:
         pass
 
     return result_dict
 
 
-def process_smart_intake_files(files_data, user, batch_identities=None):
+INTAKE_ALLOWED_EXTENSIONS = frozenset({
+    '.pdf', '.png', '.jpg', '.jpeg', '.webp', '.tif', '.tiff',
+})
+INTAKE_JUNK_BASENAMES = frozenset({
+    '.ds_store', 'thumbs.db', 'desktop.ini', '.localized', 'ehthumbs.db',
+})
+_INTAKE_PASSPORT_RE = re.compile(r'passport', re.I)
+_INTAKE_ID_CARD_RE = re.compile(
+    r'(?:\bid\b[\s_-]?card|identity\s*card|national\s*id|cnic|nicop|\bnid\b|\bnic\b|id[\s_-]?verif)',
+    re.I,
+)
+_INTAKE_LICENCE_RE = re.compile(r'driving\s*licen[cs]e|\bdvla\b|\blicen[cs]e\b', re.I)
+_INTAKE_STATEMENT_RE = re.compile(
+    r'bank\s*statement|\bstatement\b|account\s*statement|balance\s*statement',
+    re.I,
+)
+_INTAKE_COMPANY_RE = re.compile(
+    r'certificate\s*of\s*incorporat|incorporat|newinc|company[\s_-]?profile|'
+    r'confirmation\s*statement|psc0[0-9]|ap0[0-9]|tm0[0-9]|\baa_|'
+    r'memorandum|articles\s*of\s*association|companies\s*house|company\s*doc|'
+    r'share\s*cert|officer|director\s*list|subscriber',
+    re.I,
+)
+_INTAKE_COMPANY_NUM_RE = re.compile(
+    r'(?:^|[^0-9A-Za-z])((?:SC|NI|OC|SO)\d{6}|\d{8})(?=[_\-\s.]|$)',
+    re.I,
+)
+_INTAKE_BLOCKED_RE = re.compile(r'\breceipt\b', re.I)
+_INTAKE_INVOICE_RE = re.compile(r'invoice|tax\s*invoice', re.I)
+_INTAKE_CONTENT_INVOICE_RE = re.compile(
+    r'\binvoice\b|\btax invoice\b|\breceipt\b|\bamount due\b|\bvat number\b',
+    re.I,
+)
+INTAKE_ID_KINDS = frozenset({'Passport', 'Identity Card', 'Driving Licence'})
+INTAKE_ALLOWED_KINDS = frozenset({
+    'Passport', 'Identity Card', 'Driving Licence',
+    'Bank Statement', 'Company Document', 'Invoice',
+})
+
+
+def normalize_intake_document_kind(raw):
+    text = re.sub(r'\s+', ' ', str(raw or '').strip()).lower()
+    if not text or text in ('auto', 'auto-detect', 'document'):
+        return None
+    if text in ('passport',):
+        return 'Passport'
+    if text in ('identity card', 'id card', 'id', 'id document'):
+        return 'Identity Card'
+    if text in ('driving licence', 'driving license', 'licence', 'license'):
+        return 'Driving Licence'
+    if text in ('bank statement', 'statement'):
+        return 'Bank Statement'
+    if text in ('company document', 'company documents', 'company'):
+        return 'Company Document'
+    if text in ('invoice', 'invoices'):
+        return 'Invoice'
+    # Already-normalized labels
+    for kind in INTAKE_ALLOWED_KINDS:
+        if text == kind.lower():
+            return kind
+    return None
+
+
+def intake_kind_to_category(kind):
+    if kind in ('Passport', 'Identity Card', 'Driving Licence'):
+        return 'ID Document'
+    if kind == 'Bank Statement':
+        return 'Bank statement'
+    if kind == 'Invoice':
+        return 'Invoice'
+    if kind == 'Company Document':
+        return 'Company Documents'
+    return 'Company Documents'
+
+
+def classify_intake_document_kind(path_label):
+    text = str(path_label or '')
+    if _INTAKE_PASSPORT_RE.search(text):
+        return 'Passport'
+    if _INTAKE_ID_CARD_RE.search(text):
+        return 'Identity Card'
+    if _INTAKE_LICENCE_RE.search(text):
+        return 'Driving Licence'
+    if _INTAKE_STATEMENT_RE.search(text):
+        return 'Bank Statement'
+    if _INTAKE_COMPANY_RE.search(text) or _INTAKE_COMPANY_NUM_RE.search(text):
+        return 'Company Document'
+    if _INTAKE_INVOICE_RE.search(text):
+        return 'Invoice'
+    return None
+
+
+def classify_intake_document_kind_from_content(filename, text):
+    """Detect allowed doc type from OCR/text when the filename is generic (e.g. Screenshot)."""
+    blob = f"{filename or ''}\n{text or ''}"
+    lower = blob.lower()
+    if _looks_like_passport_text(filename, text) or _INTAKE_PASSPORT_RE.search(blob):
+        return 'Passport'
+    if (
+        'islamic republic of pakistan' in lower
+        or 'ministry of interior' in lower
+        or re.search(r'p<[a-z]{3}[a-z<]+<<', lower)
+        or 'given names' in lower and 'surname' in lower and 'nationality' in lower
+    ):
+        return 'Passport'
+    if (
+        _INTAKE_ID_CARD_RE.search(blob)
+        or 'national identity' in lower
+        or 'citizenship number' in lower
+        or re.search(r'\b\d{5}-\d{7}-\d\b', blob)  # Pakistani CNIC
+    ):
+        return 'Identity Card'
+    if _INTAKE_LICENCE_RE.search(blob) or 'driving licence' in lower or 'driving license' in lower:
+        return 'Driving Licence'
+    if (
+        _INTAKE_STATEMENT_RE.search(blob)
+        or 'sort code' in lower
+        or 'iban' in lower
+        or 'account number' in lower
+        or 'account holder' in lower
+    ):
+        return 'Bank Statement'
+    if (
+        _INTAKE_COMPANY_RE.search(blob)
+        or _INTAKE_COMPANY_NUM_RE.search(blob)
+        or 'companies house' in lower
+        or 'certificate of incorporation' in lower
+    ):
+        return 'Company Document'
+    if _INTAKE_CONTENT_INVOICE_RE.search(blob):
+        return 'Invoice'
+    return classify_intake_document_kind(filename)
+
+
+def assess_intake_file_relevance(
+    filename, *, source_mode='CUSTOMER_UPLOADS', folder_path=None, size_bytes=None, forced_kind=None,
+):
+    """Return (ok: bool, reason: str). Screenshots allowed; invoices allowed when selected/detected."""
+    path = str(folder_path or filename or '').strip() or 'document.pdf'
+    base = os.path.basename(urllib.parse.unquote(str(filename or path)))
+    lower_base = base.lower()
+    lower_path = path.lower().replace('\\', '/')
+    ext = os.path.splitext(base)[1].lower()
+    mode = (source_mode or 'CUSTOMER_UPLOADS').strip().upper() or 'CUSTOMER_UPLOADS'
+    forced = normalize_intake_document_kind(forced_kind)
+
+    if ext not in INTAKE_ALLOWED_EXTENSIONS:
+        return False, f'Unsupported type ({ext or "unknown"}) — use PDF, JPEG, or PNG'
+    if lower_base in INTAKE_JUNK_BASENAMES:
+        return False, 'System/junk file'
+    if any(part in lower_path for part in ('__macosx', '/.git/', '/.svn/', '/node_modules/', '/.trash/')):
+        return False, 'Ignored folder path'
+    if size_bytes is not None:
+        try:
+            size_n = int(size_bytes)
+        except (TypeError, ValueError):
+            size_n = None
+        if size_n is not None and size_n < 800:
+            return False, 'File too small / empty'
+        if size_n is not None and size_n > 45 * 1024 * 1024:
+            return False, 'File too large (max 45MB)'
+
+    if forced:
+        if mode == 'ID_ONLY_DISCOVERY' and forced not in INTAKE_ID_KINDS:
+            return False, 'ID-Only mode: passport / ID card / driving licence only'
+        return True, forced
+
+    # Soft-skip bare receipts unless filename also looks like an invoice.
+    if _INTAKE_BLOCKED_RE.search(f'{lower_path} {lower_base}') and not _INTAKE_INVOICE_RE.search(
+        f'{lower_path} {lower_base}'
+    ):
+        return False, 'Receipts skipped — select Invoice type to include them'
+
+    kind = classify_intake_document_kind(f'{lower_path} {lower_base}')
+    if kind:
+        if mode == 'ID_ONLY_DISCOVERY' and kind not in INTAKE_ID_KINDS:
+            return False, 'ID-Only mode: passport / ID card / driving licence only'
+        return True, kind
+
+    # Generic Screenshot_*.png / camera images: queue and verify with OCR on process.
+    if ext in INTAKE_ALLOWED_EXTENSIONS:
+        return True, 'Scan queued — high-quality OCR will confirm document type'
+    return False, 'Only passports, licences, ID cards, bank statements, company docs, or invoices'
+
+
+def process_smart_intake_files(files_data, user, batch_identities=None, source_mode='CUSTOMER_UPLOADS'):
     """
     Process one or more Smart Intake files.
     Each file is OCR'd and matched independently so mixed batches stay accurate
@@ -7191,19 +8550,64 @@ def process_smart_intake_files(files_data, user, batch_identities=None):
     file_results = []
     filed_documents = []
     filing_errors = []
+    skipped_irrelevant = []
     last_client = None
     last_company = None
     last_match_meta = {}
     last_ch_status = 'no_ch_match'
     last_ch_msg = ''
     last_dob = None
+    last_nationality = None
     any_ocr = False
     methods = []
 
     for file_item in files_data:
         fname = (file_item.get('file_name') or 'document.pdf').strip()
+        folder_path = (file_item.get('folder_path') or fname).strip()
+        forced_kind = normalize_intake_document_kind(
+            file_item.get('document_type')
+            or file_item.get('forced_document_type')
+        )
+        allowed_types = []
+        raw_allowed = file_item.get('allowed_types')
+        if isinstance(raw_allowed, str) and raw_allowed.strip():
+            try:
+                raw_allowed = json.loads(raw_allowed)
+            except Exception:
+                raw_allowed = [p.strip() for p in raw_allowed.split(',') if p.strip()]
+        if isinstance(raw_allowed, (list, tuple)):
+            for item in raw_allowed:
+                kind = normalize_intake_document_kind(item)
+                if kind and kind not in allowed_types:
+                    allowed_types.append(kind)
+        hq_ocr = str(file_item.get('hq_ocr') if file_item.get('hq_ocr') is not None else '1').strip().lower() not in (
+            '0', 'false', 'no', '',
+        )
         b64 = file_item.get('file_content_base64', '')
-        res = extract_document_text_and_metadata(fname, b64)
+        size_bytes = None
+        if b64:
+            try:
+                size_bytes = int(len(b64) * 0.75)
+            except Exception:
+                size_bytes = None
+        ok_relevant, reason = assess_intake_file_relevance(
+            fname,
+            source_mode=source_mode,
+            folder_path=folder_path,
+            size_bytes=size_bytes,
+            forced_kind=forced_kind,
+        )
+        if not ok_relevant:
+            skipped_irrelevant.append({'file_name': fname, 'reason': reason})
+            filing_errors.append(f"{fname}: skipped — {reason}")
+            file_results.append({
+                'file_name': fname,
+                'filing_status': {'status': 'skipped', 'message': reason},
+                'document_processing': {'status': 'skipped', 'reason': reason},
+                'companies_house_matching': {'status': 'not_applicable', 'message': reason},
+            })
+            continue
+        res = extract_document_text_and_metadata(fname, b64, high_quality=hq_ocr)
         if 'error' in res:
             filing_errors.append(f"{fname}: {res.get('error')}")
             file_results.append({
@@ -7214,6 +8618,84 @@ def process_smart_intake_files(files_data, user, batch_identities=None):
             })
             continue
 
+        # Confirm allowed type from OCR when filename was generic (Screenshot / photo).
+        content_kind = None
+        if res.get('doc_type') in ('Passport', 'ID Document') or res.get('category') == 'ID Document':
+            content_kind = 'Passport'
+        elif res.get('category') == 'Bank statement':
+            content_kind = 'Bank Statement'
+        elif res.get('category') == 'Invoice':
+            content_kind = 'Invoice'
+        elif res.get('extracted_company_number') or res.get('extracted_company_name'):
+            content_kind = 'Company Document'
+        elif res.get('extracted_passport_num') or (
+            res.get('extracted_name') and res.get('extracted_dob') and res.get('extracted_nationality')
+        ):
+            content_kind = 'Passport'
+        if not content_kind:
+            content_kind = classify_intake_document_kind_from_content(
+                fname, res.get('text_preview') or '',
+            )
+        name_kind = classify_intake_document_kind(f'{folder_path} {fname}')
+        # Admin-selected type wins; otherwise filename then OCR content.
+        final_kind = forced_kind or name_kind or content_kind
+        if allowed_types:
+            if forced_kind and forced_kind in allowed_types:
+                final_kind = forced_kind
+            elif final_kind and final_kind not in allowed_types:
+                skip_msg = (
+                    f'Skipped ({final_kind}) — not in selected options: '
+                    + ', '.join(allowed_types)
+                )
+                skipped_irrelevant.append({'file_name': fname, 'reason': skip_msg})
+                filing_errors.append(f"{fname}: skipped — {skip_msg}")
+                file_results.append({
+                    'file_name': fname,
+                    'filing_status': {'status': 'skipped', 'message': skip_msg},
+                    'document_processing': {'status': 'skipped', 'reason': skip_msg},
+                    'companies_house_matching': {'status': 'not_applicable', 'message': skip_msg},
+                })
+                continue
+            elif not final_kind:
+                skip_msg = (
+                    'Not recognised within selected options: '
+                    + ', '.join(allowed_types)
+                )
+                skipped_irrelevant.append({'file_name': fname, 'reason': skip_msg})
+                filing_errors.append(f"{fname}: skipped — {skip_msg}")
+                file_results.append({
+                    'file_name': fname,
+                    'filing_status': {'status': 'skipped', 'message': skip_msg},
+                    'document_processing': {'status': 'skipped', 'reason': skip_msg},
+                    'companies_house_matching': {'status': 'not_applicable', 'message': skip_msg},
+                })
+                continue
+        if not final_kind:
+            skip_msg = (
+                'Not recognised as passport, ID card, driving licence, bank statement, '
+                'company document, or invoice — pick a type and retry'
+            )
+            skipped_irrelevant.append({'file_name': fname, 'reason': skip_msg})
+            filing_errors.append(f"{fname}: skipped — {skip_msg}")
+            file_results.append({
+                'file_name': fname,
+                'filing_status': {'status': 'skipped', 'message': skip_msg},
+                'document_processing': {'status': 'skipped', 'reason': skip_msg},
+                'companies_house_matching': {'status': 'not_applicable', 'message': skip_msg},
+            })
+            continue
+        if (source_mode or '').upper() == 'ID_ONLY_DISCOVERY' and final_kind not in INTAKE_ID_KINDS:
+            skip_msg = 'ID-Only mode: passport / ID card / driving licence only'
+            skipped_irrelevant.append({'file_name': fname, 'reason': skip_msg})
+            filing_errors.append(f"{fname}: skipped — {skip_msg}")
+            file_results.append({
+                'file_name': fname,
+                'filing_status': {'status': 'skipped', 'message': skip_msg},
+                'document_processing': {'status': 'skipped', 'reason': skip_msg},
+                'companies_house_matching': {'status': 'not_applicable', 'message': skip_msg},
+            })
+            continue
+
         extracted_client_name = res.get('extracted_name')
         extracted_dob = res.get('extracted_dob')
         extracted_company_name = res.get('extracted_company_name')
@@ -7221,12 +8703,18 @@ def process_smart_intake_files(files_data, user, batch_identities=None):
         extracted_email = res.get('extracted_email')
         extracted_phone = res.get('extracted_phone')
         extracted_nat = res.get('extracted_nationality')
-        cat = res.get('category') or 'Company Documents'
-        is_bank_statement = cat == 'Bank statement' or 'statement' in (fname or '').lower()
+        cat = intake_kind_to_category(final_kind) if final_kind else (res.get('category') or 'Company Documents')
+        is_bank_statement = cat == 'Bank statement' or final_kind == 'Bank Statement'
         is_passport_doc = (
             (res.get('doc_type') in ('Passport', 'ID Document'))
             or (cat in ('ID Document', 'Passport'))
+            or final_kind in INTAKE_ID_KINDS
+            or bool(res.get('identity_primary'))
         )
+        # ID / passport / licence: match only from name + DOB + nationality.
+        if is_passport_doc:
+            extracted_company_name = None
+            extracted_company_num = None
         any_ocr = any_ocr or (res.get('scan_method') == 'ocr')
         methods.append(res.get('scan_method'))
 
@@ -7302,10 +8790,11 @@ def process_smart_intake_files(files_data, user, batch_identities=None):
         name_detected = bool(extracted_client_name)
         last_client = client_user
         last_dob = extracted_dob or last_dob
+        last_nationality = extracted_nat or last_nationality
 
         company_obj = None
         ch_status = 'no_ch_match'
-        ch_msg = 'No Companies House match found for this person. Document processing succeeded.'
+        ch_msg = 'No Companies House match from name / date of birth / nationality yet.'
         ch_candidates = []
         match_meta = {
             'confidence': 0,
@@ -7317,12 +8806,12 @@ def process_smart_intake_files(files_data, user, batch_identities=None):
             'extracted_name': extracted_client_name,
             'extracted_dob': extracted_dob,
             'extracted_nationality': extracted_nat,
+            'match_basis': 'name_dob_nationality',
         }
 
         id_only_intake = is_passport_doc and not (extracted_company_num or extracted_company_name)
 
         # Same person / same form: reuse company already matched to the ID/passport name.
-        # Keep explicit company number/name on the document as higher priority below.
         if linked_identity and linked_identity.get('company_id') and not (
             extracted_company_num or extracted_company_name
         ):
@@ -7334,17 +8823,18 @@ def process_smart_intake_files(files_data, user, batch_identities=None):
             if company_obj:
                 ch_status = 'matched'
                 ch_msg = (
-                    f"Same person form — name matched ID/passport "
-                    f"({linked_identity.get('full_name') or extracted_client_name}) "
-                    f"→ {company_obj.get('name')}"
+                    f"Matched from identity (name"
+                    f"{' + DOB' if extracted_dob or linked_identity.get('dob') else ''}"
+                    f"{' + nationality' if extracted_nat or linked_identity.get('nationality') else ''}"
+                    f") → {company_obj.get('name')}"
                 )
                 match_meta = {
                     'confidence': max(80, int(linked_identity.get('confidence') or linked_pts or 80)),
                     'confidence_label': 'HIGH',
                     'score': max(80, int(linked_identity.get('confidence') or linked_pts or 80)),
                     'reasons': [
-                        f"Document name matched ID/passport identity ({linked_reason or 'name match'})",
-                        f"Filed on same form/company: {company_obj.get('name')}",
+                        f"Name matched prior ID/passport ({linked_reason or 'name match'})",
+                        'Company linked from name / DOB / nationality identity',
                     ],
                     'score_gap': 80,
                     'top_candidates': [{
@@ -7352,17 +8842,18 @@ def process_smart_intake_files(files_data, user, batch_identities=None):
                         'company_number': company_obj.get('company_number'),
                         'score': max(80, int(linked_identity.get('confidence') or 80)),
                         'confidence_label': 'HIGH',
-                        'reasons': ['ID/passport ↔ document name match'],
+                        'reasons': ['Matched via name + DOB + nationality'],
                     }],
                     'extracted_name': extracted_client_name,
                     'extracted_dob': extracted_dob,
                     'extracted_nationality': extracted_nat,
+                    'match_basis': 'name_dob_nationality',
                     'linked_from': linked_identity.get('source') or 'batch_id',
                     'linked_document_id': linked_identity.get('source_document_id'),
                     'same_person_form': True,
                 }
 
-        if not company_obj and (extracted_company_num or extracted_company_name):
+        if not company_obj and (extracted_company_num or extracted_company_name) and not is_passport_doc:
             company_obj = auto_import_companies_house_from_intake(
                 extracted_company_name,
                 extracted_company_num,
@@ -7390,6 +8881,7 @@ def process_smart_intake_files(files_data, user, batch_identities=None):
                     'extracted_name': extracted_client_name,
                     'extracted_dob': extracted_dob,
                     'extracted_nationality': extracted_nat,
+                    'match_basis': 'company_number_or_name',
                     'same_person_form': bool(linked_identity),
                 }
             else:
@@ -7409,6 +8901,14 @@ def process_smart_intake_files(files_data, user, batch_identities=None):
             match_meta['extracted_name'] = extracted_client_name
             match_meta['extracted_dob'] = resolve_dob
             match_meta['extracted_nationality'] = resolve_nat
+            match_meta['match_basis'] = 'name_dob_nationality'
+            if company_obj and ch_status == 'matched':
+                ch_msg = (
+                    f"Matched from name"
+                    f"{' + DOB' if resolve_dob else ''}"
+                    f"{' + nationality' if resolve_nat else ''}"
+                    f" → {company_obj.get('name')}"
+                )
             if linked_identity:
                 reasons = list(match_meta.get('reasons') or [])
                 reasons.insert(0, f"Same person as ID/passport ({linked_reason or 'name match'})")
@@ -7416,7 +8916,7 @@ def process_smart_intake_files(files_data, user, batch_identities=None):
                 match_meta['same_person_form'] = True
         elif not company_obj and id_only_intake:
             ch_status = 'not_applicable'
-            ch_msg = 'Passport/ID processed. Company left unassigned (no person name extracted).'
+            ch_msg = 'Passport/ID processed. Need name (and ideally DOB / nationality) to find Companies House details.'
 
         company_id = company_obj['id'] if company_obj else None
         last_company = company_obj
@@ -7426,7 +8926,7 @@ def process_smart_intake_files(files_data, user, batch_identities=None):
 
         ext = res['ext']
         file_bytes = res['file_bytes']
-        doc_type = res.get('doc_type', cat)
+        doc_type = final_kind or res.get('doc_type', cat)
         doc_id = None
         store_err = None
 
@@ -7438,19 +8938,23 @@ def process_smart_intake_files(files_data, user, batch_identities=None):
             f_hash = res.get('file_hash') or hashlib.sha256(file_bytes).hexdigest()
             stage_ts = json.dumps({'upload': time.time(), 'ocr': time.time(), 'ch': time.time()})
             meta_json = json.dumps(match_meta)
+            # Successful intake always lands in Customer Uploads for staff triage.
+            # OCR / CH match evidence is kept on the row; only duplicates go to Quarantine.
             overall_st = 'COMPLETED' if ch_status == 'matched' else (
                 'REVIEW_REQUIRED' if ch_status == 'review_required' else 'COMPLETED'
             )
-            if ch_status == 'matched' and float((match_meta or {}).get('confidence') or 0) >= 75:
-                lifecycle = 'READY_FOR_APPROVAL'
-            elif ch_status in ('review_required', 'not_applicable'):
-                lifecycle = 'REVIEW_REQUIRED'
-            else:
-                lifecycle = 'READY_FOR_APPROVAL'
+            lifecycle = 'CUSTOMER_UPLOADS'
             company_conf = float((match_meta or {}).get('confidence') or 0)
-            identity_conf = 90.0 if name_detected else 40.0
+            identity_conf = 40.0
+            if extracted_client_name:
+                identity_conf += 30.0
+            if extracted_dob:
+                identity_conf += 15.0
+            if extracted_nat:
+                identity_conf += 15.0
             if linked_identity:
                 identity_conf = max(identity_conf, 85.0)
+            identity_conf = min(100.0, identity_conf)
             ocr_conf = float(((res.get('extraction_quality') or {}).get('score') or 70))
             prior = find_document_by_file_hash(f_hash)
             dup_conf = 0.0
@@ -7481,13 +8985,14 @@ def process_smart_intake_files(files_data, user, batch_identities=None):
                 user['id'], user['id'],
             ))
             log_document_audit(
-                doc_id, 'AI', user['id'], user.get('full_name'), 'INTAKE_TRIAGED',
-                'CUSTOMER_UPLOADS', lifecycle, {
+                doc_id, 'AI', user['id'], user.get('full_name'), 'INTAKE_STORED',
+                None, lifecycle, {
                     'ch_status': ch_status,
                     'company_match_confidence': company_conf,
                     'duplicate_confidence': dup_conf,
                     'linked_passport': bool(linked_identity),
                     'linked_reason': linked_reason,
+                    'stored_in': 'CUSTOMER_UPLOADS' if lifecycle == 'CUSTOMER_UPLOADS' else lifecycle,
                 },
             )
             filed_documents.append({
@@ -7589,6 +9094,15 @@ def process_smart_intake_files(files_data, user, batch_identities=None):
         return {'status': 'error', 'message': 'Could not parse uploaded files'}, "400 Bad Request"
 
     if not filed_documents:
+        if skipped_irrelevant and len(skipped_irrelevant) == len(file_results):
+            return {
+                'status': 'error',
+                'message': 'No relevant documents to process. Only bank statements, driving licences, company docs, passports, or ID cards (PDF/image) are accepted.',
+                'skipped_irrelevant': skipped_irrelevant,
+                'file_results': file_results,
+                'filed_documents': [],
+                'batch_identities': identities,
+            }, "400 Bad Request"
         detail = '; '.join(filing_errors[:3]) if filing_errors else 'Unknown storage error'
         return {
             'status': 'error',
@@ -7596,6 +9110,7 @@ def process_smart_intake_files(files_data, user, batch_identities=None):
             'file_results': file_results,
             'filed_documents': [],
             'batch_identities': identities,
+            'skipped_irrelevant': skipped_irrelevant,
         }, "500 Internal Server Error"
 
     if filed_documents:
@@ -7616,9 +9131,11 @@ def process_smart_intake_files(files_data, user, batch_identities=None):
     if client_user and not client_user.get('phone'):
         missing_fields.append('Phone Number')
 
-    msg = f"Smart Intake successfully processed {len(filed_documents)} document(s)."
+    msg = f"Smart Intake stored {len(filed_documents)} document(s) in Customer Uploads."
     if filing_errors:
         msg += f" {len(filing_errors)} file(s) failed."
+    if skipped_irrelevant:
+        msg += f" {len(skipped_irrelevant)} irrelevant file(s) skipped (not stored)."
     linked_count = sum(1 for fr in file_results if (fr.get('companies_house_matching') or {}).get('linked_from_passport'))
     if linked_count:
         msg += f" {linked_count} filed on the same person form via ID/passport name match."
@@ -7631,6 +9148,7 @@ def process_smart_intake_files(files_data, user, batch_identities=None):
             'id': client_user.get('id'),
             'full_name': client_user.get('full_name') or 'Unassigned Document Intake',
             'dob': last_dob or 'Not detected',
+            'nationality': last_nationality or 'Not detected',
             'email': client_user.get('email'),
         },
         'company': {
@@ -7652,6 +9170,7 @@ def process_smart_intake_files(files_data, user, batch_identities=None):
         'file_results': file_results,
         'filed_documents': filed_documents,
         'batch_identities': identities,
+        'skipped_irrelevant': skipped_irrelevant,
     }, None
 
 
@@ -8009,7 +9528,7 @@ def company_directors_list(company):
         return names
     raw = str((company or {}).get('director') or '').strip()
     if raw:
-        for part in re.split(r'\s*;\s*|\s*·\s*|\n+', raw):
+        for part in re.split(r'[,;&|·]|\band\b|\n+', raw, flags=re.IGNORECASE):
             _add(part)
     return names
 
@@ -8353,7 +9872,17 @@ def persist_companies_house_filing_state(company, snapshot, send_email=True):
         company['reg_office'] = office
     company['status'] = status
     if send_email:
-        notify_companies_house_attention(company_id, issues)
+        # When automated compliance alerts are enabled, the Asia/Karachi daily
+        # worker owns outbound mail. Sync only refreshes stored attention state.
+        try:
+            import compliance_alerts as _ca
+            alerts_on = _ca.compliance_alert_settings().get('enabled')
+        except Exception:
+            alerts_on = False
+        if alerts_on:
+            pass
+        else:
+            notify_companies_house_attention(company_id, issues)
     return issues
 
 
@@ -8364,19 +9893,20 @@ def build_companies_house_attention_email(client, company, issues, greeting_name
     return build_client_notification_email(
         client,
         f'Action needed for {name} at Companies House',
-        f'Companies House currently shows an issue that needs fixing for {name}. Please action this now so the company stays in good standing.',
-        subject=f'Action needed for {name} at Companies House',
+        f'We are contacting you regarding {name}.',
+        subject=f'Action Required — {name}',
         badge='Attention required',
         greeting_name=greeting_name,
         extra_message=extra,
-        detail_title='Company number',
-        detail_value=number,
-        cta_label='View on Companies House',
-        cta_url=companies_house_company_url(number),
+        company_name=name,
+        company_number=number or None,
+        cta_label='View on Companies House' if number else None,
+        cta_url=companies_house_company_url(number) if number else None,
+        suppress_default_cta=not bool(number),
         extra_cta_label='Open Client Panel',
         extra_cta_url=client_website_url(),
         layout='activity',
-        footer_note='This email is about a Companies House filing or registered office issue on your Brixen Consultants company.',
+        email_category='COMPANIES_HOUSE',
     )
 
 
@@ -8734,26 +10264,24 @@ def looks_like_placeholder_director(name, company_name=None):
 
 
 def persist_official_director(company_id, name):
-    pretty = pretty_director_name(name)
-    if not company_id or not pretty or pretty.lower() == 'director':
+    if not company_id or not name:
         return ''
+    parts = [p.strip() for p in re.split(r'[,;&|]|\band\b', str(name), flags=re.IGNORECASE) if p.strip()]
+    cleaned = []
+    seen = set()
+    for p in parts:
+        pretty = pretty_director_name(p)
+        if pretty and pretty.lower() != 'director' and pretty.lower() not in seen:
+            seen.add(pretty.lower())
+            cleaned.append(pretty)
+    if not cleaned:
+        return ''
+    combined_name = ', '.join(cleaned)
     execute_db(
         "UPDATE companies SET director = ?, ch_checked_at = CURRENT_TIMESTAMP WHERE id = ?;",
-        (pretty, company_id),
+        (combined_name, company_id),
     )
-    existing = query_db(
-        "SELECT id FROM company_directors WHERE company_id = ? AND LOWER(name) = LOWER(?) LIMIT 1;",
-        (company_id, pretty),
-        one=True,
-    )
-    if not existing:
-        execute_db(
-            """
-            INSERT INTO company_directors (company_id, name, role, nationality, appointed_date)
-            VALUES (?, ?, 'Director', 'British', date('now'));
-            """,
-            (company_id, pretty),
-        )
+    sync_company_directors_from_list(company_id, cleaned)
     owners = query_db(
         "SELECT id, full_name, order_id FROM company_owners WHERE company_id = ?;",
         (company_id,),
@@ -8890,6 +10418,37 @@ def sync_registered_companies_from_companies_house(limit=CH_REGISTERED_SYNC_BATC
         if sync_registered_company_from_companies_house(company):
             updated += 1
     return updated
+
+
+_CH_LIST_SYNC_LAST = 0.0
+_CH_LIST_SYNC_LOCK = threading.Lock()
+
+
+def schedule_portfolio_ch_sync(user_id=None):
+    """
+    Companies House refresh must never block page-open APIs.
+    Run a small batch in the background at most once every 45s.
+    """
+    global _CH_LIST_SYNC_LAST
+    now = time.time()
+    with _CH_LIST_SYNC_LOCK:
+        if (now - _CH_LIST_SYNC_LAST) < 45:
+            return False
+        _CH_LIST_SYNC_LAST = now
+
+    def _job():
+        try:
+            sync_pending_companies_from_companies_house(user_id=user_id, limit=2)
+            sync_registered_companies_from_companies_house(limit=3, user_id=user_id)
+        except Exception as exc:
+            print(f"[CH list sync] {exc}")
+
+    try:
+        BULK_JOB_POOL.submit(_job)
+        return True
+    except Exception as exc:
+        print(f"[CH list sync] schedule failed: {exc}")
+        return False
 
 
 def official_company_director(company):
@@ -9792,6 +11351,271 @@ def build_monthly_revenue_chart(months=6):
     return series
 
 
+def build_admin_dashboard_payload(user):
+    """Rich overview payload for the Apple-style admin dashboard."""
+    tot_customers = int(query_db("SELECT COUNT(*) as c FROM users WHERE role = 'CLIENT';", one=True)['c'] or 0)
+    tot_companies = int(query_db(
+        "SELECT COUNT(*) as c FROM companies WHERE COALESCE(status, '') NOT IN ('Dissolved', 'Liquidation', 'Closed');",
+        one=True,
+    )['c'] or 0)
+    tot_orders = int(query_db("SELECT COUNT(*) as c FROM orders;", one=True)['c'] or 0)
+    pending_orders = int(query_db(
+        "SELECT COUNT(*) as c FROM orders WHERE status IN ('Pending', 'Pending Verification', 'Processing', 'In Progress');",
+        one=True,
+    )['c'] or 0)
+    completed_orders = int(query_db("SELECT COUNT(*) as c FROM orders WHERE status = 'Completed';", one=True)['c'] or 0)
+    open_tickets = int(query_db(
+        "SELECT COUNT(*) as c FROM support_tickets WHERE status IN ('Open', 'In Progress');",
+        one=True,
+    )['c'] or 0)
+    tot_docs = int(query_db("SELECT COUNT(*) as c FROM documents;", one=True)['c'] or 0)
+    pending_docs = int(query_db(
+        "SELECT COUNT(*) as c FROM documents WHERE status IN ('Pending Review', 'Pending') OR overall_status IN ('REVIEW_REQUIRED', 'PENDING');",
+        one=True,
+    )['c'] or 0)
+    staff_count = int(query_db(
+        "SELECT COUNT(*) as c FROM users WHERE role IN ('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF');",
+        one=True,
+    )['c'] or 0)
+
+    today = datetime.date.today()
+    today_orders = int(query_db(
+        "SELECT COUNT(*) as c FROM orders WHERE date(created_at) = date('now', 'localtime');",
+        one=True,
+    )['c'] or 0)
+    today_customers = int(query_db(
+        "SELECT COUNT(*) as c FROM users WHERE role = 'CLIENT' AND date(created_at) = date('now', 'localtime');",
+        one=True,
+    )['c'] or 0)
+    month_orders = int(query_db(
+        "SELECT COUNT(*) as c FROM orders WHERE strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now', 'localtime');",
+        one=True,
+    )['c'] or 0)
+
+    def _pct(part, whole):
+        whole = float(whole or 0)
+        if whole <= 0:
+            return 0
+        return int(round(100.0 * float(part or 0) / whole))
+
+    stats = {
+        'total_customers': tot_customers,
+        'total_companies': tot_companies,
+        'total_orders': tot_orders,
+        'pending_orders': pending_orders,
+        'completed_orders': completed_orders,
+        'open_tickets': open_tickets,
+        'total_documents': tot_docs,
+        'pending_documents': pending_docs,
+        'staff_count': staff_count,
+        'today_orders': today_orders,
+        'today_customers': today_customers,
+        'month_orders': month_orders,
+        'completion_rate': _pct(completed_orders, tot_orders),
+        'pending_rate': _pct(pending_orders, tot_orders),
+    }
+
+    charts = {
+        'monthly': [],
+        'orders_daily': [],
+        'orders_weekly': [],
+        'orders_yearly': [],
+    }
+
+    # Daily order counts for the current month (User Stat / Monthly)
+    daily_rows = query_db("""
+        SELECT CAST(strftime('%d', created_at) AS INTEGER) AS day_n, COUNT(*) AS cnt
+        FROM orders
+        WHERE strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now', 'localtime')
+        GROUP BY strftime('%d', created_at)
+        ORDER BY day_n;
+    """) or []
+    by_day = {int(r['day_n']): int(r['cnt'] or 0) for r in daily_rows if r.get('day_n')}
+    days_in_month = (datetime.date(today.year + (1 if today.month == 12 else 0), 1 if today.month == 12 else today.month + 1, 1) - datetime.timedelta(days=1)).day
+    charts['orders_daily'] = [
+        {'label': str(d), 'cnt': by_day.get(d, 0)}
+        for d in range(1, days_in_month + 1)
+        if d <= today.day or d % 2 == 1
+    ]
+    # Keep chart readable: show every day up to today
+    charts['orders_daily'] = [{'label': str(d), 'cnt': by_day.get(d, 0)} for d in range(1, today.day + 1)]
+
+    # Last 7 days
+    week_rows = query_db("""
+        SELECT date(created_at) AS d, COUNT(*) AS cnt
+        FROM orders
+        WHERE date(created_at) >= date('now', 'localtime', '-6 days')
+        GROUP BY date(created_at)
+        ORDER BY d;
+    """) or []
+    by_week = {str(r['d']): int(r['cnt'] or 0) for r in week_rows if r.get('d')}
+    for offset in range(6, -1, -1):
+        day = today - datetime.timedelta(days=offset)
+        key = day.isoformat()
+        charts['orders_weekly'].append({
+            'label': day.strftime('%a'),
+            'cnt': by_week.get(key, 0),
+        })
+
+    # Last 12 months order counts
+    year_rows = query_db("""
+        SELECT strftime('%Y-%m', created_at) AS month, COUNT(*) AS cnt
+        FROM orders
+        GROUP BY strftime('%Y-%m', created_at);
+    """) or []
+    by_year_month = {str(r['month']): int(r['cnt'] or 0) for r in year_rows if r.get('month')}
+    for offset in range(11, -1, -1):
+        year, month = shift_calendar_month(today.year, today.month, -offset)
+        key = f'{year:04d}-{month:02d}'
+        charts['orders_yearly'].append({
+            'label': datetime.date(year, month, 1).strftime('%b'),
+            'cnt': by_year_month.get(key, 0),
+        })
+
+    # Recent activity feed for top carousel
+    activity = []
+    for row in (query_db("""
+        SELECT o.id, o.order_number, o.service_name, o.status, o.created_at, u.full_name AS client_name
+        FROM orders o
+        LEFT JOIN users u ON u.id = o.user_id
+        ORDER BY o.created_at DESC LIMIT 4;
+    """) or []):
+        activity.append({
+            'kind': 'order',
+            'icon': 'shopping-bag',
+            'tone': 'blue',
+            'title': row.get('service_name') or 'New order',
+            'subtitle': f"Order {row.get('order_number') or row.get('id')} · {row.get('status') or 'Pending'}",
+            'meta_time': _format_activity_time(row.get('created_at')),
+            'meta_tag': 'Order',
+            'meta_user': row.get('client_name') or 'Client',
+            'view': 'admin-orders',
+        })
+    while len(activity) < 4:
+        for row in (query_db("""
+            SELECT id, full_name, email, created_at FROM users
+            WHERE role = 'CLIENT' ORDER BY created_at DESC LIMIT 4;
+        """) or []):
+            if len(activity) >= 4:
+                break
+            activity.append({
+                'kind': 'customer',
+                'icon': 'user-plus',
+                'tone': 'orange',
+                'title': f"New client {row.get('full_name') or 'Customer'}",
+                'subtitle': row.get('email') or 'Client account created',
+                'meta_time': _format_activity_time(row.get('created_at')),
+                'meta_tag': 'Client',
+                'meta_user': row.get('full_name') or 'Staff',
+                'view': 'admin-customers',
+            })
+        break
+    while len(activity) < 4:
+        activity.append({
+            'kind': 'placeholder',
+            'icon': 'sparkles',
+            'tone': 'green',
+            'title': 'Portal activity',
+            'subtitle': 'New orders and clients will appear here.',
+            'meta_time': '—',
+            'meta_tag': 'System',
+            'meta_user': 'Brixen',
+            'view': 'admin-dashboard',
+        })
+
+    # Horizontal / vertical bar metrics
+    breakdown = [
+        {'key': 'customers', 'label': 'Clients', 'value': tot_customers, 'tone': 'purple'},
+        {'key': 'companies', 'label': 'Companies', 'value': tot_companies, 'tone': 'red'},
+        {'key': 'orders', 'label': 'Orders', 'value': tot_orders, 'tone': 'orange'},
+        {'key': 'tickets', 'label': 'Open tickets', 'value': open_tickets, 'tone': 'blue'},
+    ]
+    max_break = max([b['value'] for b in breakdown] + [1])
+    for item in breakdown:
+        item['pct'] = _pct(item['value'], max_break) if max_break else 0
+
+    rings = [
+        {
+            'key': 'completed',
+            'label': 'Completed',
+            'pct': stats['completion_rate'],
+            'value': completed_orders,
+            'tone': 'purple',
+            'view': 'admin-orders',
+        },
+        {
+            'key': 'pending',
+            'label': 'In progress',
+            'pct': stats['pending_rate'],
+            'value': pending_orders,
+            'tone': 'orange',
+            'view': 'admin-orders',
+        },
+        {
+            'key': 'documents',
+            'label': 'Documents',
+            'pct': _pct(tot_docs - pending_docs, tot_docs) if tot_docs else 0,
+            'value': tot_docs,
+            'tone': 'blue',
+            'view': 'admin-documents',
+        },
+        {
+            'key': 'companies',
+            'label': 'Companies',
+            'pct': min(100, _pct(tot_companies, max(tot_customers, 1) * 2)),
+            'value': tot_companies,
+            'tone': 'green',
+            'view': 'admin-companies',
+        },
+    ]
+
+    ops = {
+        'grade': stats['completion_rate'],
+        'pending_orders': pending_orders,
+        'open_tickets': open_tickets,
+        'pending_documents': pending_docs,
+        'gauge_value': pending_orders + open_tickets,
+        'gauge_label': 'Open work',
+    }
+
+    if can_view_revenue(user):
+        total_revenue = float(query_db(
+            "SELECT COALESCE(SUM(total), 0) as s FROM orders WHERE status != 'Cancelled';",
+            one=True,
+        )['s'] or 0)
+        pending_payments = float(query_db(
+            "SELECT COALESCE(SUM(total), 0) as s FROM invoices WHERE status = 'Pending';",
+            one=True,
+        )['s'] or 0)
+        stats['total_revenue'] = f"£{total_revenue:,.2f}"
+        stats['pending_payments'] = f"£{pending_payments:,.2f}"
+        stats['total_revenue_raw'] = round(total_revenue, 2)
+        ops['revenue'] = stats['total_revenue']
+        charts['monthly'] = build_monthly_revenue_chart(6)
+
+    return {
+        'stats': stats,
+        'charts': charts,
+        'activity': activity[:4],
+        'breakdown': breakdown,
+        'rings': rings,
+        'ops': ops,
+    }
+
+
+def _format_activity_time(raw):
+    if not raw:
+        return '—'
+    text = str(raw)
+    try:
+        # SQLite timestamps: YYYY-MM-DD HH:MM:SS
+        if ' ' in text:
+            return text.split(' ')[1][:5]
+        return text[:10]
+    except Exception:
+        return text[:5]
+
+
 def ensure_order_timeline(order_id):
     existing = query_db("SELECT id FROM order_timeline WHERE order_id = ? LIMIT 1;", (order_id,), one=True)
     if existing:
@@ -10202,6 +12026,14 @@ def notify_staff_new_order(order_number, client_name):
             'order_update',
             '#admin-orders'
         ))
+    subject = f"New website order {order_number} — Brixen Consultants"
+    body = (
+        f"A new website order is in the CRM.\n\n"
+        f"Order: {order_number}\n"
+        f"Client: {client_name}\n\n"
+        f"Open orders: {portal_page_url()}#admin-orders"
+    )
+    email_team_about_clients(subject, body)
 
 
 def is_plausible_uk_phone(value):
@@ -10243,6 +12075,22 @@ def format_uk_phone(value):
     if len(national) == 10:
         return f"+44 {national[:4]} {national[4:]}"
     return f"+44 {national}"
+
+
+def normalize_whatsapp_number(value):
+    """Normalize a WhatsApp contact number for company cards."""
+    text = str(value or '').strip()
+    if not text:
+        return '', None
+    formatted = format_uk_phone(text)
+    if formatted:
+        return formatted, None
+    digits = re.sub(r'\D', '', text)
+    if len(digits) < 8 or len(digits) > 15:
+        return None, 'Enter a valid WhatsApp number'
+    if digits.startswith('00'):
+        digits = digits[2:]
+    return f'+{digits}', None
 
 
 def billing_phone_from_webhook_payload(data):
@@ -13092,6 +14940,12 @@ except Exception:
 
 def application(environ, start_response):
     start_registration_notice_worker()
+    try:
+        import compliance_alerts as _compliance_alerts
+        _compliance_alerts.ensure_compliance_alert_settings()
+        _compliance_alerts.start_compliance_alert_worker()
+    except Exception as err:
+        print(f"[ComplianceAlerts] Failed to start worker: {err}")
     path = environ.get('PATH_INFO', '')
     method = environ.get('REQUEST_METHOD', 'GET')
     allowed_origin = cors_allowed_origin(environ)
@@ -13202,6 +15056,21 @@ def application(environ, start_response):
         if streamed is not None:
             return streamed
         return json_response(start_response, {'status': 'error', 'message': 'Certificate file not found'}, "404 Not Found")
+
+    # Compliance email CTA engagement (click tracking — no open pixels).
+    if path.startswith('/api/public/compliance-engage/') and method == 'GET':
+        token = path.rsplit('/', 1)[-1].strip()
+        qs = urllib.parse.parse_qs(environ.get('QUERY_STRING', ''))
+        target = (_qs_first(qs, 'to') or '').strip()
+        import compliance_alerts as _ca
+        redirect_to = _ca.record_compliance_engagement(token, target)
+        if not redirect_to:
+            return json_response(start_response, {'status': 'error', 'message': 'Invalid engagement link'}, "404 Not Found")
+        start_response('302 Found', [
+            ('Location', redirect_to),
+            ('Cache-Control', 'no-store'),
+        ])
+        return [b'']
 
     # ----------------------------------------------------
     # WORDPRESS INTEGRATION & WEBHOOK APIs
@@ -13655,11 +15524,12 @@ def application(environ, start_response):
             return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
             
         cid = path.split('/')[4]
-        target_user = query_db("SELECT id, wordpress_user_id, email, full_name, phone, country, address, avatar_url, role, status, last_synced_at, created_at FROM users WHERE id = ?;", (cid,), one=True)
+        target_user = query_db("SELECT id, wordpress_user_id, email, notification_email, full_name, phone, country, address, avatar_url, role, status, last_synced_at, created_at FROM users WHERE id = ?;", (cid,), one=True)
         if not target_user:
             return json_response(start_response, {'status': 'error', 'message': 'Client not found'}, "404 Not Found")
             
         companies = query_db("SELECT * FROM companies WHERE user_id = ? ORDER BY id DESC;", (cid,))
+        companies = filter_companies_for_portfolio_list(companies)
         orders = [dict(row) for row in query_db("SELECT o.*, c.name as company_name FROM orders o LEFT JOIN companies c ON o.company_id = c.id WHERE o.user_id = ? ORDER BY o.created_at DESC;", (cid,))]
         invoices = [enrich_invoice_row(dict(row)) for row in query_db("SELECT * FROM invoices WHERE user_id = ? ORDER BY created_at DESC;", (cid,))]
         if not can_view_revenue(user):
@@ -13784,7 +15654,10 @@ def application(environ, start_response):
         origin_rec = session_user_from_token(origin_token)
         impersonated = bool(origin_rec and origin_rec.get('id') != user.get('id'))
         u_dict = public_me_user(user, impersonated=impersonated)
-        return json_response(start_response, {'status': 'success', 'user': u_dict})
+        # Slide cookie Max-Age on every successful me check so refresh never drops the session.
+        token = session_token_from_environ(environ)
+        extra = [('Set-Cookie', session_cookie_header(token, environ=environ))] if token else None
+        return json_response(start_response, {'status': 'success', 'user': u_dict}, extra_headers=extra)
 
     if path == '/api/auth/logout' and method == 'POST':
         cookie_str = environ.get('HTTP_COOKIE', '')
@@ -13890,10 +15763,10 @@ def application(environ, start_response):
         comp_count = query_db("SELECT COUNT(*) as c FROM companies WHERE user_id = ?;", (uid,), one=True)['c']
         uk_comps = comp_count
         intl_comps = 0
-        companies = query_db("""
+        companies = query_db(f"""
             SELECT id, name, company_number, status, inc_date, director, reg_office, package, account_status,
-                   created_at, utr_number, identity_verified, psc_verified
-            FROM companies WHERE user_id = ? ORDER BY created_at DESC;
+                   created_at, utr_number, identity_verified, psc_verified, registered_email, registered_email_locked, whatsapp_number
+            FROM companies WHERE user_id = ? ORDER BY {company_list_order_sql()};
         """, (uid,))
         public_companies = [public_client_company(row) for row in companies]
 
@@ -14250,12 +16123,13 @@ def application(environ, start_response):
             return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
         if user['role'] == 'CLIENT':
             return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
-        ch_synced = sync_pending_companies_from_companies_house()
-        registered_synced = sync_registered_companies_from_companies_house()
+        ch_synced = 0
+        schedule_portfolio_ch_sync()
         comps = query_db(f"""
             SELECT {COMPANY_STAFF_SELECT}
-            FROM companies ORDER BY created_at DESC;
+            FROM companies ORDER BY {company_list_order_sql()};
         """)
+        comps = filter_companies_for_portfolio_list(comps)
         deadlines_map = upcoming_deadlines_by_company(None, [row['id'] for row in comps])
         uk_count = len(comps or [])
         clients = query_db("SELECT id, full_name, email FROM users WHERE role = 'CLIENT' AND status = 'Active' ORDER BY full_name COLLATE NOCASE;") or []
@@ -14314,6 +16188,44 @@ def application(environ, start_response):
             **summary,
         })
 
+    if path == '/api/admin/companies/bulk-delete' and method == 'POST':
+        if not user:
+            return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
+        if user['role'] not in ('SUPER_ADMIN', 'ADMIN'):
+            return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
+        data = parse_body(environ) or {}
+        ids = data.get('company_ids') or data.get('ids') or []
+        if not isinstance(ids, list) or not ids:
+            return json_response(start_response, {'status': 'error', 'message': 'Select at least one company'}, "400 Bad Request")
+        if len(ids) > 200:
+            return json_response(start_response, {'status': 'error', 'message': 'Delete up to 200 companies at a time'}, "400 Bad Request")
+        summary = bulk_delete_company_cards(ids, actor=user)
+        return json_response(start_response, {
+            'status': 'success',
+            'message': f"Deleted {summary['deleted_count']} compan{'y' if summary['deleted_count'] == 1 else 'ies'}.",
+            **summary,
+        })
+
+    if path == '/api/admin/companies/bulk-update' and method == 'POST':
+        if not user:
+            return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
+        if user['role'] not in ('SUPER_ADMIN', 'ADMIN', 'MANAGER'):
+            return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
+        data = parse_body(environ) or {}
+        ids = data.get('company_ids') or data.get('ids') or []
+        if not isinstance(ids, list) or not ids:
+            return json_response(start_response, {'status': 'error', 'message': 'Select at least one company'}, "400 Bad Request")
+        if len(ids) > 200:
+            return json_response(start_response, {'status': 'error', 'message': 'Update up to 200 companies at a time'}, "400 Bad Request")
+        summary, error = bulk_update_company_cards(ids, data, actor=user)
+        if error:
+            return json_response(start_response, {'status': 'error', 'message': error}, "400 Bad Request")
+        return json_response(start_response, {
+            'status': 'success',
+            'message': f"Updated {summary['updated_count']} compan{'y' if summary['updated_count'] == 1 else 'ies'}.",
+            **summary,
+        })
+
     if path.startswith('/api/admin/companies/') and method == 'PUT':
         if not user:
             return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
@@ -14345,7 +16257,7 @@ def application(environ, start_response):
             if error:
                 status_code = "404 Not Found" if error == 'Company not found' else "400 Bad Request"
                 return json_response(start_response, {'status': 'error', 'message': error}, status_code)
-        company, error = update_company_compliance(company_id, data)
+        company, error = update_company_compliance(company_id, data, actor=user)
         if error:
             status_code = "404 Not Found" if error == 'Company not found' else "400 Bad Request"
             return json_response(start_response, {'status': 'error', 'message': error}, status_code)
@@ -14373,7 +16285,6 @@ def application(environ, start_response):
             company_id = int(parts[3])
         except (TypeError, ValueError):
             return json_response(start_response, {'status': 'error', 'message': 'Company not found'}, "404 Not Found")
-        sync_pending_companies_from_companies_house(company_id=company_id, limit=1)
         company = query_db(
             f"SELECT {COMPANY_STAFF_SELECT} FROM companies WHERE id = ?;",
             (company_id,),
@@ -14381,13 +16292,11 @@ def application(environ, start_response):
         )
         if not company:
             return json_response(start_response, {'status': 'error', 'message': 'Company not found'}, "404 Not Found")
-        sync_registered_company_from_companies_house(company)
-        persist_company_registered_email(company)
-        company = query_db(f"SELECT {COMPANY_STAFF_SELECT} FROM companies WHERE id = ?;", (company_id,), one=True) or company
+        # Return DB state immediately — CH / WP refresh runs in background.
+        schedule_company_detail_refresh(company_id)
         owner_id = company.get('user_id')
         deadlines_map = upcoming_deadlines_by_company(owner_id, [company_id])
         registered_office = company_registered_office_record(company_id, company)
-        ensure_company_order_documents(company_id)
         orders = query_db(
             """
             SELECT id, order_number, service_name, status, progress_percent, created_at, expected_date
@@ -14405,12 +16314,19 @@ def application(environ, start_response):
         )
         return json_response(start_response, {
             'status': 'success',
-            'company': public_client_company(company, deadlines_map.get(company_id, []), for_staff=True, resolve_owner=True),
+            'company': public_client_company(company, deadlines_map.get(company_id, []), for_staff=True, resolve_owner=False),
             'client_id': company.get('user_id'),
             'registered_office': registered_office,
             'orders': [public_client_order_summary(row) for row in orders],
-            'documents': [public_document(row, for_client=True) for row in documents],
+            'documents': [public_document(row, for_client=False) for row in documents],
             'tickets': [public_client_ticket_summary(row) for row in tickets],
+            'email_verification_history': [
+                dict(row) for row in (__import__('compliance_alerts').email_verification_history(company_id))
+            ],
+            'notification_history': [
+                dict(row) for row in (__import__('compliance_alerts').compliance_notification_history(company_id))
+            ],
+            'compliance_contact': (__import__('compliance_alerts').brand_contact_block()),
         })
 
     if path.startswith('/api/admin/companies/') and method == 'DELETE':
@@ -14438,34 +16354,10 @@ def application(environ, start_response):
             company_id = int(parts[3])
         except (TypeError, ValueError):
             return json_response(start_response, {'status': 'error', 'message': 'Company not found'}, "404 Not Found")
-        company = query_db("SELECT * FROM companies WHERE id = ?;", (company_id,), one=True)
-        if not company:
-            return json_response(start_response, {'status': 'error', 'message': 'Company not found'}, "404 Not Found")
-        record_dismissed_company_card(company)
-        replacement = match_company_for_client(company.get('user_id'), company.get('name'), exclude_id=company_id)
-        replacement_row = query_db(
-            "SELECT id, company_number FROM companies WHERE id = ?;",
-            (replacement,),
-            one=True,
-        ) if replacement else None
-        if replacement_row and not is_pending_company_number(replacement_row.get('company_number')):
-            linked_orders = query_db("SELECT id FROM orders WHERE company_id = ?;", (company_id,)) or []
-            for order in linked_orders:
-                attach_order_to_company(order['id'], replacement_row['id'])
-        else:
-            execute_db(
-                "UPDATE orders SET company_id = NULL, portfolio_hidden = 1 WHERE company_id = ?;",
-                (company_id,),
-            )
-            execute_db("UPDATE company_owners SET company_id = NULL WHERE company_id = ?;", (company_id,))
-        execute_db("DELETE FROM companies WHERE id = ?;", (company_id,))
-        log_activity(
-            user,
-            'COMPANY_DELETED',
-            'companies',
-            str(company_id),
-            f"Deleted company {company.get('name')} ({company.get('company_number') or 'no number'})",
-        )
+        company, error = delete_company_card(company_id, actor=user)
+        if error:
+            status_code = "404 Not Found" if error == 'Company not found' else "400 Bad Request"
+            return json_response(start_response, {'status': 'error', 'message': error}, status_code)
         return json_response(start_response, {
             'status': 'success',
             'message': f"Company {company.get('name')} deleted.",
@@ -14475,15 +16367,16 @@ def application(environ, start_response):
     if path == '/api/client/companies' and method == 'GET':
         if not user:
             return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
-        ch_synced = sync_pending_companies_from_companies_house(user_id=user['id'])
-        registered_synced = sync_registered_companies_from_companies_house(user_id=user['id'])
+        ch_synced = 0
+        schedule_portfolio_ch_sync(user_id=user['id'])
         comps = query_db(
             f"""
             SELECT {COMPANY_LIST_SELECT}
-            FROM companies WHERE user_id = ? ORDER BY created_at DESC;
+            FROM companies WHERE user_id = ? ORDER BY {company_list_order_sql()};
             """,
             (user['id'],),
         )
+        comps = filter_companies_for_portfolio_list(comps)
         deadlines_map = upcoming_deadlines_by_company(user['id'], [row['id'] for row in comps])
         return json_response(start_response, {
             'status': 'success',
@@ -14773,6 +16666,17 @@ def application(environ, start_response):
         """, (tid, user['id'], user['full_name'], user['role'], message))
         
         log_activity(user, 'SUPPORT_TICKET_CREATED', 'support_tickets', str(tid), f"Created ticket {tnum}")
+        email_team_about_clients(
+            f"New support ticket {tnum} — Brixen Consultants",
+            (
+                f"A client opened a support ticket.\n\n"
+                f"Ticket: {tnum}\n"
+                f"Client: {user.get('full_name') or user.get('email')}\n"
+                f"Subject: {subject}\n"
+                f"Priority: {priority}\n\n"
+                f"Open support: {portal_page_url()}#admin-tickets"
+            ),
+        )
         return json_response(start_response, {'status': 'success', 'message': 'Support ticket submitted.', 'ticket_id': tid})
 
     if path.startswith('/api/client/tickets/') and path.endswith('/messages'):
@@ -14855,32 +16759,10 @@ def application(environ, start_response):
             return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
         if not can_view_admin_dashboard(user):
             return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
-            
-        tot_customers = query_db("SELECT COUNT(*) as c FROM users WHERE role = 'CLIENT';", one=True)['c']
-        tot_companies = query_db("SELECT COUNT(*) as c FROM companies;", one=True)['c']
-        tot_orders = query_db("SELECT COUNT(*) as c FROM orders;", one=True)['c']
-        pending_orders = query_db("SELECT COUNT(*) as c FROM orders WHERE status IN ('Pending', 'Processing', 'In Progress');", one=True)['c']
-        completed_orders = query_db("SELECT COUNT(*) as c FROM orders WHERE status = 'Completed';", one=True)['c']
-        open_tickets = query_db("SELECT COUNT(*) as c FROM support_tickets WHERE status IN ('Open', 'In Progress');", one=True)['c']
-        stats = {
-            'total_customers': tot_customers,
-            'total_companies': tot_companies,
-            'total_orders': tot_orders,
-            'pending_orders': pending_orders,
-            'completed_orders': completed_orders,
-            'open_tickets': open_tickets
-        }
-        charts = {}
-        if can_view_revenue(user):
-            total_revenue = query_db("SELECT COALESCE(SUM(total), 0) as s FROM orders WHERE status != 'Cancelled';", one=True)['s']
-            pending_payments = query_db("SELECT COALESCE(SUM(total), 0) as s FROM invoices WHERE status = 'Pending';", one=True)['s']
-            stats['total_revenue'] = f"£{total_revenue:,.2f}"
-            stats['pending_payments'] = f"£{pending_payments:,.2f}"
-            charts['monthly'] = build_monthly_revenue_chart(6)
+        payload = build_admin_dashboard_payload(user)
         return json_response(start_response, {
             'status': 'success',
-            'stats': stats,
-            'charts': charts,
+            **payload,
         })
 
     if path == '/api/admin/customers' and method == 'GET':
@@ -14937,6 +16819,38 @@ def application(environ, start_response):
             'phone': phone
         })
 
+    if path == '/api/admin/customers/notification-email' and method == 'POST':
+        if not user or not check_permission(user, 'clients.edit'):
+            return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
+        data = parse_body(environ)
+        customer_id, err = to_optional_int(data.get('customer_id'), 'customer_id')
+        if err or not customer_id:
+            return json_response(start_response, {'status': 'error', 'message': 'Customer is required'}, "400 Bad Request")
+        raw_email = (data.get('notification_email') or '').strip()
+        if raw_email:
+            notification_email = normalize_notify_email(raw_email)
+            if not notification_email:
+                return json_response(start_response, {'status': 'error', 'message': 'Enter a valid notification email.'}, "400 Bad Request")
+        else:
+            notification_email = None
+        target = query_db("SELECT id, email, full_name, role FROM users WHERE id = ?;", (customer_id,), one=True)
+        if not target or target.get('role') != 'CLIENT':
+            return json_response(start_response, {'status': 'error', 'message': 'Customer not found'}, "404 Not Found")
+        execute_db("UPDATE users SET notification_email = ? WHERE id = ?;", (notification_email, customer_id))
+        log_activity(
+            user,
+            'CUSTOMER_NOTIFICATION_EMAIL_UPDATE',
+            'users',
+            str(customer_id),
+            f"Notification email for {target.get('email')} set to {notification_email or '(login email)'}",
+        )
+        return json_response(start_response, {
+            'status': 'success',
+            'message': 'Notification email saved. All client emails for this customer will use it.',
+            'notification_email': notification_email or '',
+            'effective_email': notification_email or target.get('email') or '',
+        })
+
     if path == '/api/admin/customers/password' and method == 'POST':
         if not user or not check_permission(user, 'clients.edit'):
             return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
@@ -14962,6 +16876,19 @@ def application(environ, start_response):
             'status': 'success',
             'message': f'{target.get("full_name") or "Customer"} can now sign in at the portal with {target.get("email")}.',
             'portal_login_ready': True,
+        })
+
+    if path == '/api/admin/orders' and method == 'POST':
+        if not user or not check_permission(user, 'orders.edit'):
+            return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
+        data = parse_body(environ)
+        created, err = create_manual_crm_order(data, actor=user)
+        if err:
+            return json_response(start_response, {'status': 'error', 'message': err}, "400 Bad Request")
+        return json_response(start_response, {
+            'status': 'success',
+            'message': f"Manual order {created.get('order_number')} created. Notifications will use the company email.",
+            'order': apply_connector_display(dict(created)) if created else created,
         })
 
     if path == '/api/admin/orders' and method == 'GET':
@@ -15790,12 +17717,21 @@ def application(environ, start_response):
             email_status = 'not_applicable'
 
             if client_visible_flag == 1:
-                company_obj = query_db("SELECT name FROM companies WHERE id = ?;", (resolved_company_id,), one=True) if resolved_company_id else None
-                order_obj = query_db("SELECT order_number FROM orders WHERE id = ?;", (order_id,), one=True) if order_id else None
+                company_obj = query_db("SELECT id, user_id, name, registered_email FROM companies WHERE id = ?;", (resolved_company_id,), one=True) if resolved_company_id else None
+                order_obj = query_db("SELECT id, order_number, company_id, owner_form_email, user_id FROM orders WHERE id = ?;", (order_id,), one=True) if order_id else None
                 comp_name = company_obj['name'] if company_obj else None
                 ord_num = order_obj['order_number'] if order_obj else None
                 
-                delivery = notify_client_document_uploaded(target_client, doc_name, client_message, company_name=comp_name, order_number=ord_num)
+                delivery = notify_client_document_uploaded(
+                    target_client,
+                    doc_name,
+                    client_message,
+                    company_name=comp_name,
+                    order_number=ord_num,
+                    company=company_obj,
+                    order=order_obj,
+                    company_id=resolved_company_id,
+                )
                 notification_created = delivery['notification_created']
                 email_sent = delivery['email_sent']
                 email_status = delivery['email_status']
@@ -15855,11 +17791,51 @@ def application(environ, start_response):
         if denied:
             return denied
         try:
-            data = parse_body(environ)
-            files_data = data.get('files') or []
-            batch_identities = data.get('batch_identities') or []
+            ctype = (environ.get('CONTENT_TYPE') or '').lower()
+            files_data = []
+            batch_identities = []
+            source_mode = 'CUSTOMER_UPLOADS'
+            if 'multipart/form-data' in ctype:
+                fields, files = parse_multipart_form(environ)
+                source_mode = (fields.get('source_mode') or 'CUSTOMER_UPLOADS').strip().upper()
+                try:
+                    batch_identities = json.loads(fields.get('batch_identities') or '[]')
+                except Exception:
+                    batch_identities = []
+                upload = files.get('file') or files.get('document')
+                if upload and upload.get('bytes'):
+                    fname = (
+                        (fields.get('file_name') or '').strip()
+                        or upload.get('filename')
+                        or 'document.pdf'
+                    )
+                    folder_path = (fields.get('folder_path') or fname).strip()
+                    files_data = [{
+                        'file_name': fname,
+                        'folder_path': folder_path,
+                        'document_type': (fields.get('document_type') or '').strip(),
+                        'allowed_types': (fields.get('allowed_types') or '').strip(),
+                        'hq_ocr': (fields.get('hq_ocr') or '1').strip(),
+                        'file_content_base64': base64.b64encode(upload['bytes']).decode('ascii'),
+                    }]
+            else:
+                data = parse_body(environ)
+                files_data = data.get('files') or []
+                batch_identities = data.get('batch_identities') or []
+                source_mode = (data.get('source_mode') or 'CUSTOMER_UPLOADS').strip().upper()
+                # Propagate top-level document_type onto each file when not set per-file.
+                top_type = (data.get('document_type') or '').strip()
+                if top_type:
+                    for item in files_data:
+                        if isinstance(item, dict) and not item.get('document_type'):
+                            item['document_type'] = top_type
+                for item in files_data:
+                    if isinstance(item, dict) and item.get('hq_ocr') is None:
+                        item['hq_ocr'] = data.get('hq_ocr', '1')
             payload, err_status = process_smart_intake_files(
-                files_data, user, batch_identities=batch_identities,
+                files_data, user,
+                batch_identities=batch_identities,
+                source_mode=source_mode,
             )
             if err_status:
                 return json_response(start_response, payload, err_status)
@@ -15989,6 +17965,10 @@ def application(environ, start_response):
         if not doc:
             return json_response(start_response, {'status': 'error', 'message': 'Document not found'}, "404 Not Found")
 
+        # Complete company data → ensure it appears on the Companies list by name/number.
+        linked_company, link_status = ensure_company_for_document(doc, actor=user, promote_lifecycle=False)
+        doc = query_db("SELECT * FROM documents WHERE id = ?;", (doc_id,), one=True) or doc
+
         conn = get_db()
         try:
             conn.execute("""
@@ -16005,7 +17985,15 @@ def application(environ, start_response):
             conn.execute("""
                 INSERT INTO document_audit_log (document_id, actor_type, actor_id, actor_name, action, previous_state, new_state, reason_evidence_json)
                 VALUES (?, 'HUMAN', ?, ?, 'POST_APPROVED', ?, 'POSTED_DOCUMENTS', ?);
-            """, (doc_id, user['id'], user['full_name'], doc.get('lifecycle_status'), json.dumps({'approved_by': user['full_name']})))
+            """, (
+                doc_id, user['id'], user['full_name'], doc.get('lifecycle_status'),
+                json.dumps({
+                    'approved_by': user['full_name'],
+                    'company_link': link_status,
+                    'company_id': (linked_company or {}).get('id'),
+                    'company_name': (linked_company or {}).get('name'),
+                }),
+            ))
             conn.commit()
         except Exception as exc:
             conn.rollback()
@@ -16018,7 +18006,13 @@ def application(environ, start_response):
         return json_response(start_response, {
             'status': 'success',
             'message': f"Document '{doc['name']}' approved and posted atomically.",
-            'document': public_document(updated)
+            'document': public_document(updated),
+            'company': {
+                'id': (linked_company or {}).get('id'),
+                'name': (linked_company or {}).get('name'),
+                'company_number': (linked_company or {}).get('company_number'),
+                'link_status': link_status,
+            } if linked_company else None,
         })
 
     m_rej = re.match(r'^/api/admin/documents/(\d+)/reject$', path)
@@ -16117,6 +18111,87 @@ def application(environ, start_response):
             'document': public_document(updated),
         })
 
+    if path == '/api/admin/documents/promote-to-companies' and method == 'POST':
+        denied = require_permission(start_response, user, 'documents.upload')
+        if denied:
+            return denied
+        data = parse_body(environ) or {}
+        doc_ids = data.get('document_ids') or []
+        include_all_complete = bool(data.get('all_complete'))
+
+        if doc_ids:
+            placeholders = ','.join('?' for _ in doc_ids)
+            docs = query_db(
+                f"SELECT * FROM documents WHERE id IN ({placeholders}) ORDER BY id ASC;",
+                tuple(int(x) for x in doc_ids),
+            ) or []
+        elif include_all_complete:
+            docs = query_db(
+                """
+                SELECT * FROM documents
+                WHERE COALESCE(is_posted, 0) = 0
+                  AND COALESCE(lifecycle_status, '') IN (
+                      'READY_FOR_APPROVAL', 'REVIEW_REQUIRED', 'QUARANTINE',
+                      'CUSTOMER_UPLOADS', 'PROCESSING'
+                  )
+                ORDER BY id ASC
+                LIMIT 500;
+                """
+            ) or []
+        else:
+            return json_response(
+                start_response,
+                {'status': 'error', 'message': 'Provide document_ids or all_complete=true'},
+                "400 Bad Request",
+            )
+
+        linked = []
+        skipped = []
+        failed = []
+        companies_seen = {}
+        for doc in docs:
+            num, name, source = document_complete_company_signals(doc)
+            if not num and not name and not doc.get('company_id'):
+                skipped.append({'id': doc.get('id'), 'name': doc.get('name'), 'reason': 'incomplete'})
+                continue
+            try:
+                company, status = ensure_company_for_document(doc, actor=user, promote_lifecycle=True)
+            except Exception as exc:
+                failed.append({'id': doc.get('id'), 'name': doc.get('name'), 'error': str(exc)})
+                continue
+            if not company:
+                skipped.append({'id': doc.get('id'), 'name': doc.get('name'), 'reason': status})
+                continue
+            companies_seen[company['id']] = {
+                'id': company['id'],
+                'name': company.get('name'),
+                'company_number': company.get('company_number'),
+            }
+            linked.append({
+                'document_id': doc.get('id'),
+                'document_name': doc.get('name'),
+                'status': status,
+                'source': source,
+                'company_id': company.get('id'),
+                'company_name': company.get('name'),
+                'company_number': company.get('company_number'),
+            })
+
+        return json_response(start_response, {
+            'status': 'success',
+            'message': (
+                f"Added {len(companies_seen)} companies from {len(linked)} documents "
+                f"({len(skipped)} skipped, {len(failed)} failed)."
+            ),
+            'linked_count': len(linked),
+            'skipped_count': len(skipped),
+            'failed_count': len(failed),
+            'companies': list(companies_seen.values()),
+            'linked': linked,
+            'skipped': skipped[:50],
+            'failed': failed[:50],
+        })
+
     if path == '/api/admin/documents/bulk-approve' and method == 'POST':
         denied = require_permission(start_response, user, 'documents.upload')
         if denied:
@@ -16145,6 +18220,10 @@ def application(environ, start_response):
                         'REVIEW_REQUIRED', 'CUSTOMER_UPLOADS', 'PROCESSING', 'READY_FOR_APPROVAL'
                     )
                 ):
+                    try:
+                        ensure_company_for_document(d, actor=user, promote_lifecycle=False)
+                    except Exception as link_exc:
+                        errors.append(f"Doc #{did} company link: {link_exc}")
                     conn = get_db()
                     try:
                         conn.execute(
@@ -16240,6 +18319,8 @@ def application(environ, start_response):
         delivery = notify_client_document_uploaded(
             {'id': doc['user_id'], 'email': doc['email'], 'full_name': doc['full_name'], 'role': 'CLIENT'},
             doc['name'],
+            company_id=doc.get('company_id'),
+            order_number=doc.get('order_number'),
         )
         log_activity(user, 'DOCUMENT_SENT', 'documents', str(doc_id), f"Sent {doc['name']} to customer")
         updated = query_db("SELECT * FROM documents WHERE id = ?;", (doc_id,), one=True)
@@ -16283,6 +18364,25 @@ def application(environ, start_response):
             
         log_activity(user, 'DOCUMENT_REVIEW', 'documents', str(doc_id), f"Reviewed document status to {status}")
         return json_response(start_response, {'status': 'success', 'message': f'Document status updated to {status}'})
+
+    m_doc_del = re.match(r'^/api/admin/documents/(\d+)$', path)
+    if m_doc_del and method == 'DELETE':
+        denied = require_permission(start_response, user, 'documents.upload')
+        if denied:
+            return denied
+        try:
+            doc_id = int(m_doc_del.group(1))
+        except (TypeError, ValueError):
+            return json_response(start_response, {'status': 'error', 'message': 'Document not found'}, "404 Not Found")
+        doc, error = delete_document_record(doc_id, actor=user)
+        if error:
+            status_code = "404 Not Found" if error == 'Document not found' else "400 Bad Request"
+            return json_response(start_response, {'status': 'error', 'message': error}, status_code)
+        return json_response(start_response, {
+            'status': 'success',
+            'message': f"Deleted {doc.get('name') or 'document'}.",
+            'document_id': doc_id,
+        })
 
     if path == '/api/admin/activity-logs' and method == 'GET':
         denied = require_permission(start_response, user, 'settings.manage')
@@ -16362,19 +18462,34 @@ def application(environ, start_response):
         if existing:
             return json_response(start_response, {'status': 'error', 'message': 'Email is already in use'}, "409 Conflict")
         local_id = f"local_user_{uuid.uuid4().hex[:16]}"
+        client_type = (data.get('client_type') or '').strip().lower()
+        if role == 'CLIENT':
+            if client_type == 'b2c' or data.get('is_b2b') == 0 or data.get('is_b2b') == '0':
+                is_b2b_val = 0
+                acct_type_val = 'Normal Client (Standard Website Account)'
+                success_msg = 'Normal Client account created for Brixen Official Website. They can sign in with this email and password.'
+            else:
+                is_b2b_val = 1
+                acct_type_val = 'B2B Client (Brixen Website Panel)'
+                success_msg = 'B2B Client account created for Brixen Official Website Client Panel. They can sign in with this email and password.'
+        else:
+            is_b2b_val = 0
+            acct_type_val = 'Internal Staff'
+            success_msg = 'User created. They can sign in with this email and password.'
+
         user_id = execute_db("""
-            INSERT INTO users (wordpress_user_id, email, password_hash, full_name, phone, country, role, status, department)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
-        """, (local_id, email, hash_password(password), full_name, phone, country, role, status_val, department))
+            INSERT INTO users (wordpress_user_id, email, password_hash, full_name, phone, country, role, status, department, is_b2b, account_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """, (local_id, email, hash_password(password), full_name, phone, country, role, status_val, department, is_b2b_val, acct_type_val))
         created = query_db("""
-            SELECT id, wordpress_user_id, email, full_name, phone, country, role, department, status, avatar_url, created_at
+            SELECT id, wordpress_user_id, email, full_name, phone, country, role, department, status, avatar_url, created_at, is_b2b, account_type
             FROM users WHERE id = ?;
         """, (user_id,), one=True)
-        log_activity(user, 'USER_CREATED', 'users', str(user_id), f"Created user {email} ({role})")
+        log_activity(user, 'USER_CREATED', 'users', str(user_id), f"Created user {email} ({role} - {acct_type_val})")
         public_user = public_staff_user(created)
         return json_response(start_response, {
             'status': 'success',
-            'message': 'User created. They can sign in with this email and password.',
+            'message': success_msg,
             'user': public_user
         })
 
@@ -16620,6 +18735,73 @@ def application(environ, start_response):
         updated = fetch_task(task_id)
         return json_response(start_response, {'status': 'success', 'message': 'Task completed.', 'task': dict(updated)})
 
+    if path == '/api/admin/tasks/incentives-report' and method == 'GET':
+        denied = task_auth_error(start_response, user, 'tasks.view')
+        if denied:
+            return denied
+        qs = urllib.parse.parse_qs(environ.get('QUERY_STRING', ''))
+        selected_month = qs.get('month', [None])[0] or datetime.datetime.now().strftime('%Y-%m')
+        
+        staff_rows = query_db("SELECT * FROM users WHERE role IN ('STAFF', 'MANAGER', 'ADMIN', 'SUPER_ADMIN') AND status = 'Active' ORDER BY full_name ASC;") or []
+        report = []
+        for s in staff_rows:
+            sid = s['id']
+            assigned_c = query_db("SELECT COUNT(*) AS c FROM tasks WHERE assigned_staff_id = ? AND strftime('%Y-%m', created_at) = ?;", (sid, selected_month), one=True)['c']
+            completed_c = query_db("SELECT COUNT(*) AS c FROM tasks WHERE assigned_staff_id = ? AND status = 'Completed' AND strftime('%Y-%m', completed_at) = ?;", (sid, selected_month), one=True)['c']
+            on_time_c = query_db("SELECT COUNT(*) AS c FROM tasks WHERE assigned_staff_id = ? AND status = 'Completed' AND strftime('%Y-%m', completed_at) = ? AND (due_date IS NULL OR date(completed_at) <= date(due_date));", (sid, selected_month), one=True)['c']
+            overdue_c = query_db("SELECT COUNT(*) AS c FROM tasks WHERE assigned_staff_id = ? AND status NOT IN ('Completed', 'Cancelled') AND due_date IS NOT NULL AND date(due_date) < date('now');", (sid,), one=True)['c']
+            pending_c = query_db("SELECT COUNT(*) AS c FROM tasks WHERE assigned_staff_id = ? AND status = 'Pending';", (sid,), one=True)['c']
+            in_prog_c = query_db("SELECT COUNT(*) AS c FROM tasks WHERE assigned_staff_id = ? AND status = 'In Progress';", (sid,), one=True)['c']
+
+            grade_info = calculate_staff_incentive_grade(completed_c, assigned_c, on_time_c, overdue_c)
+            report.append({
+                'staff': public_staff_user(s),
+                'assigned_count': assigned_c,
+                'completed_count': completed_c,
+                'on_time_count': on_time_c,
+                'overdue_count': overdue_c,
+                'pending_count': pending_c,
+                'in_progress_count': in_prog_c,
+                'grade': grade_info['grade'],
+                'grade_label': grade_info['status_label'],
+                'bonus_badge': grade_info['bonus_badge'],
+                'completion_rate': grade_info['completion_rate'],
+                'sla_rate': grade_info['sla_rate']
+            })
+            
+        grade_order = {'A+': 0, 'A': 1, 'B': 2, 'C': 3, 'D': 4}
+        report.sort(key=lambda r: (grade_order.get(r['grade'], 5), -r['completed_count']))
+
+        return json_response(start_response, {
+            'status': 'success',
+            'month': selected_month,
+            'leaderboard': report
+        })
+
+    if path.startswith('/api/admin/tasks/') and path.endswith('/audit-logs') and method == 'GET':
+        denied = task_auth_error(start_response, user, 'tasks.view')
+        if denied:
+            return denied
+        parts = path.strip('/').split('/')
+        if len(parts) != 5 or not parts[3].isdigit():
+            return json_response(start_response, {'status': 'error', 'message': 'Invalid task id'}, "400 Bad Request")
+        task_id = int(parts[3])
+        task = fetch_task(task_id)
+        if not task:
+            return json_response(start_response, {'status': 'error', 'message': 'Task not found'}, "404 Not Found")
+        if not staff_can_access_task(user, task):
+            return json_response(start_response, {'status': 'error', 'message': 'Access denied to target task'}, "403 Forbidden")
+
+        logs = query_db("""
+            SELECT a.*, u.full_name AS actor_name, u.role AS actor_role
+            FROM activity_logs a
+            LEFT JOIN users u ON a.user_id = u.id
+            WHERE a.entity_type = 'tasks' AND a.entity_id = ?
+            ORDER BY a.created_at DESC;
+        """, (str(task_id),)) or []
+        
+        return json_response(start_response, {'status': 'success', 'task_id': task_id, 'audit_logs': [dict(l) for l in logs]})
+
     if path.startswith('/api/admin/tasks/') and method == 'GET':
         denied = task_auth_error(start_response, user, 'tasks.view')
         if denied:
@@ -16741,20 +18923,79 @@ def application(environ, start_response):
                 f"You have been assigned task '{title}'.",
                 'task_assigned'
             )
+            log_activity(user, 'TASK_REASSIGNED', 'tasks', str(task_id), f"Reassigned task '{title}' to staff ID #{assigned_staff_id}")
+        if status_val != task['status']:
+            log_activity(user, 'TASK_STATUS_UPDATED', 'tasks', str(task_id), f"Status changed from '{task['status']}' to '{status_val}'")
         updated = fetch_task(task_id)
         return json_response(start_response, {'status': 'success', 'message': 'Task updated successfully', 'task': dict(updated)})
+
+    if path == '/api/staff/my-dashboard' and method == 'GET':
+        if not user or user.get('role') not in ('STAFF', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'):
+            return json_response(start_response, {'status': 'error', 'message': 'Access denied to staff dashboard'}, "403 Forbidden")
+        
+        staff_id = user['id']
+        pending_count = query_db("SELECT COUNT(*) AS c FROM tasks WHERE assigned_staff_id = ? AND status = 'Pending';", (staff_id,), one=True)['c']
+        in_progress_count = query_db("SELECT COUNT(*) AS c FROM tasks WHERE assigned_staff_id = ? AND status = 'In Progress';", (staff_id,), one=True)['c']
+        completed_month = query_db("SELECT COUNT(*) AS c FROM tasks WHERE assigned_staff_id = ? AND status = 'Completed' AND strftime('%Y-%m', completed_at) = strftime('%Y-%m', 'now');", (staff_id,), one=True)['c']
+        completed_total = query_db("SELECT COUNT(*) AS c FROM tasks WHERE assigned_staff_id = ? AND status = 'Completed';", (staff_id,), one=True)['c']
+        overdue_count = query_db("SELECT COUNT(*) AS c FROM tasks WHERE assigned_staff_id = ? AND status NOT IN ('Completed', 'Cancelled') AND due_date IS NOT NULL AND date(due_date) < date('now');", (staff_id,), one=True)['c']
+        total_assigned_month = query_db("SELECT COUNT(*) AS c FROM tasks WHERE assigned_staff_id = ? AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now');", (staff_id,), one=True)['c']
+        on_time_month = query_db("SELECT COUNT(*) AS c FROM tasks WHERE assigned_staff_id = ? AND status = 'Completed' AND strftime('%Y-%m', completed_at) = strftime('%Y-%m', 'now') AND (due_date IS NULL OR date(completed_at) <= date(due_date));", (staff_id,), one=True)['c']
+
+        grade_info = calculate_staff_incentive_grade(completed_month, total_assigned_month, on_time_month, overdue_count)
+
+        my_tasks_sql = TASK_DETAIL_SQL + " WHERE t.assigned_staff_id = ? AND t.status NOT IN ('Completed', 'Cancelled') ORDER BY CASE WHEN t.due_date IS NOT NULL AND date(t.due_date) < date('now') THEN 1 ELSE 2 END, t.created_at DESC LIMIT 20;"
+        active_tasks = [dict(r) for r in (query_db(my_tasks_sql, (staff_id,)) or [])]
+
+        return json_response(start_response, {
+            'status': 'success',
+            'staff': public_staff_user(user),
+            'metrics': {
+                'pending_tasks': pending_count,
+                'in_progress_tasks': in_progress_count,
+                'completed_this_month': completed_month,
+                'completed_all_time': completed_total,
+                'overdue_tasks': overdue_count,
+                'total_assigned_month': total_assigned_month,
+                'on_time_month': on_time_month,
+                'grade': grade_info['grade'],
+                'grade_label': grade_info['status_label'],
+                'bonus_badge': grade_info['bonus_badge'],
+                'completion_rate': grade_info['completion_rate'],
+                'sla_rate': grade_info['sla_rate']
+            },
+            'my_tasks': active_tasks
+        })
+
+
 
     if path == '/api/admin/settings' and method == 'GET':
         denied = require_permission(start_response, user, 'settings.manage')
         if denied:
             return denied
         rows = query_db("SELECT key, value FROM settings;") or []
-        allowed = {'company_name', 'support_email', 'currency', 'order_prefix', 'invoice_prefix', 'support_phone', 'logo_url', 'smtp_host', 'smtp_port', 'smtp_user', 'smtp_from', 'uk_formfill_pro_url'}
+        allowed = {
+            'company_name', 'support_email', 'currency', 'order_prefix', 'invoice_prefix',
+            'support_phone', 'logo_url', 'smtp_host', 'smtp_port', 'smtp_user', 'smtp_from',
+            'uk_formfill_pro_url', 'team_notification_emails',
+            'compliance_alerts_enabled', 'compliance_alerts_send_hour', 'compliance_alerts_timezone',
+            'compliance_alerts_interval_hours', 'compliance_alerts_verified_only',
+            'compliance_alerts_whatsapp_enabled', 'compliance_alerts_test_mode',
+            'compliance_alerts_test_recipient', 'compliance_alerts_website', 'compliance_alerts_whatsapp_url',
+        }
         settings_dict = {row['key']: row['value'] for row in rows if row['key'] in allowed}
         settings_dict['companies_house_configured'] = bool(companies_house_api_key())
         settings_dict['smtp_configured'] = smtp_configured()
         if not settings_dict.get('uk_formfill_pro_url'):
             settings_dict['uk_formfill_pro_url'] = uk_formfill_pro_url()
+        if 'team_notification_emails' not in settings_dict:
+            settings_dict['team_notification_emails'] = ''
+        try:
+            import compliance_alerts as _ca
+            _ca.ensure_compliance_alert_settings()
+            settings_dict['compliance_alerts'] = _ca.compliance_alert_settings()
+        except Exception:
+            settings_dict['compliance_alerts'] = {}
         return json_response(start_response, {'status': 'success', 'settings': settings_dict})
 
     if path == '/api/admin/formfill' and method == 'GET':
@@ -16816,12 +19057,36 @@ def application(environ, start_response):
         denied = require_permission(start_response, user, 'settings.manage')
         if denied:
             return denied
-        data = parse_body(environ)
+        data = parse_body(environ) or {}
+        writable = {
+            'company_name', 'support_email', 'currency', 'order_prefix', 'invoice_prefix',
+            'support_phone', 'logo_url', 'smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass', 'smtp_from',
+            'uk_formfill_pro_url', 'team_notification_emails', 'companies_house_api_key',
+            'compliance_alerts_enabled', 'compliance_alerts_send_hour', 'compliance_alerts_timezone',
+            'compliance_alerts_interval_hours', 'compliance_alerts_verified_only',
+            'compliance_alerts_whatsapp_enabled', 'compliance_alerts_test_mode',
+            'compliance_alerts_test_recipient', 'compliance_alerts_website', 'compliance_alerts_whatsapp_url',
+            'rbac_audit_probe',
+        }
         for k, v in data.items():
+            if k not in writable:
+                continue
             if k == 'companies_house_api_key' and not str(v or '').strip():
                 continue
             if k == 'smtp_pass' and not str(v or '').strip():
                 continue
+            if k == 'team_notification_emails':
+                cleaned = ', '.join(parse_team_notification_emails(v))
+                execute_db("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?);", (k, cleaned))
+                continue
+            if k in (
+                'compliance_alerts_enabled',
+                'compliance_alerts_verified_only',
+                'compliance_alerts_whatsapp_enabled',
+                'compliance_alerts_test_mode',
+            ):
+                vv = str(v).strip().lower()
+                v = '1' if vv in ('1', 'true', 'yes', 'on') else '0'
             execute_db("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?);", (k, str(v)))
         log_activity(user, 'SETTINGS_UPDATE', 'settings', '1', 'Updated admin system settings')
         return json_response(start_response, {
@@ -16829,6 +19094,35 @@ def application(environ, start_response):
             'message': 'System settings saved.',
             'smtp_configured': smtp_configured(),
         })
+
+    if path == '/api/admin/compliance-alerts/test-rmk' and method == 'POST':
+        denied = require_permission(start_response, user, 'settings.manage')
+        if denied:
+            return denied
+        if user.get('role') not in ('SUPER_ADMIN', 'ADMIN'):
+            return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
+        data = parse_body(environ) or {}
+        import compliance_alerts as _ca
+        result = _ca.send_rmk_trading_test_email(
+            actor=user,
+            recipient_override=(data.get('email') or data.get('recipient') or '').strip() or None,
+        )
+        if not result.get('ok'):
+            msg = result.get('message') or result.get('blocked_reason') or 'Test email blocked'
+            return json_response(start_response, {'status': 'error', 'message': msg, **result}, "400 Bad Request")
+        log_activity(user, 'COMPLIANCE_TEST_EMAIL', 'companies', str((result.get('company') or {}).get('id') or ''), 'RMK TRADING compliance test email')
+        return json_response(start_response, {'status': 'success', 'message': 'Test compliance email sent.', **result})
+
+    if path == '/api/admin/compliance-alerts/run' and method == 'POST':
+        denied = require_permission(start_response, user, 'settings.manage')
+        if denied:
+            return denied
+        if user.get('role') not in ('SUPER_ADMIN', 'ADMIN'):
+            return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
+        import compliance_alerts as _ca
+        summary = _ca.run_daily_compliance_alert_pass(force=True)
+        log_activity(user, 'COMPLIANCE_ALERT_PASS', 'settings', '1', f"Manual compliance pass sent={summary.get('sent')}")
+        return json_response(start_response, {'status': 'success', 'summary': summary})
 
     start_response("404 Not Found", [('Content-Type', 'application/json')])
     return [json.dumps({'status': 'error', 'message': f'Route {path} not found'}).encode('utf-8')]
@@ -16839,7 +19133,7 @@ def run():
     for attempt in range(5):
         try:
             print(f"Hypetex Limited Server starting on http://{HOST}:{port_to_try}")
-            httpd = make_server(HOST, port_to_try, application)
+            httpd = make_server(HOST, port_to_try, application, server_class=ThreadingWSGIServer)
             httpd.serve_forever()
             break
         except OSError as e:
@@ -16850,6 +19144,12 @@ def run():
                 raise e
 
 start_registration_notice_worker()
+try:
+    import compliance_alerts as _compliance_alerts_boot
+    _compliance_alerts_boot.ensure_compliance_alert_settings()
+    _compliance_alerts_boot.start_compliance_alert_worker()
+except Exception as _boot_err:
+    print(f"[ComplianceAlerts] Boot failed: {_boot_err}")
 
 if __name__ == '__main__':
     run()

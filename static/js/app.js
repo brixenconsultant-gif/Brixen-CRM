@@ -9,10 +9,78 @@ let adminChart = null;
 let lastNotifications = [];
 let notificationsOpen = false;
 let accountMenuOpen = false;
+let authCheckGeneration = 0;
+let logoutInProgress = false;
 
 const APPLE_UI_FONT = '"SF Pro Text", "SF Pro Display", "SF Pro", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif';
-if (typeof Chart === 'function' && Chart.defaults && Chart.defaults.font) {
-    Chart.defaults.font.family = APPLE_UI_FONT;
+const AUTH_USER_CACHE_KEY = 'brixen_portal_user_v1';
+const LUCIDE_SRC = '/static/js/vendor/lucide.min.js?v=0.469.0';
+const CHART_SRC = '/static/js/vendor/chart.umd.min.js?v=4.4.1';
+
+function loadExternalScript(src) {
+    return new Promise((resolve, reject) => {
+        const existing = document.querySelector(`script[data-src="${src}"]`) || document.querySelector(`script[src="${src}"]`);
+        if (existing) {
+            if (existing.dataset.loaded === '1') return resolve();
+            existing.addEventListener('load', () => resolve(), { once: true });
+            existing.addEventListener('error', () => reject(new Error(`Failed ${src}`)), { once: true });
+            return;
+        }
+        const script = document.createElement('script');
+        script.src = src;
+        script.async = true;
+        script.dataset.src = src;
+        script.onload = () => {
+            script.dataset.loaded = '1';
+            resolve();
+        };
+        script.onerror = () => reject(new Error(`Failed ${src}`));
+        document.head.appendChild(script);
+    });
+}
+
+function ensureLucideLoaded() {
+    if (window.lucide && typeof window.lucide.createIcons === 'function') {
+        return Promise.resolve();
+    }
+    if (!window.__lucideLoadPromise) {
+        window.__lucideLoadPromise = loadExternalScript(LUCIDE_SRC).catch(() => {});
+    }
+    return window.__lucideLoadPromise;
+}
+
+function ensureChartJs() {
+    if (typeof Chart === 'function') {
+        if (Chart.defaults && Chart.defaults.font) Chart.defaults.font.family = APPLE_UI_FONT;
+        return Promise.resolve();
+    }
+    if (!window.__chartLoadPromise) {
+        window.__chartLoadPromise = loadExternalScript(CHART_SRC).then(() => {
+            if (typeof Chart === 'function' && Chart.defaults && Chart.defaults.font) {
+                Chart.defaults.font.family = APPLE_UI_FONT;
+            }
+        });
+    }
+    return window.__chartLoadPromise;
+}
+
+function readCachedAuthUser() {
+    try {
+        const raw = localStorage.getItem(AUTH_USER_CACHE_KEY) || sessionStorage.getItem(AUTH_USER_CACHE_KEY);
+        if (!raw) return null;
+        const user = JSON.parse(raw);
+        return user && user.id ? user : null;
+    } catch (_) {
+        return null;
+    }
+}
+
+function writeCachedAuthUser(user) {
+    try {
+        sessionStorage.removeItem(AUTH_USER_CACHE_KEY);
+        if (user && user.id) localStorage.setItem(AUTH_USER_CACHE_KEY, JSON.stringify(user));
+        else localStorage.removeItem(AUTH_USER_CACHE_KEY);
+    } catch (_) { /* ignore quota */ }
 }
 
 const ALL_USER_ROLES = ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF', 'CLIENT'];
@@ -317,27 +385,40 @@ function syncCreateUserButtons() {
 }
 
 function safeCreateIcons() {
-    try {
-        if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
-    } catch (err) {
-        console.warn('Icon render skipped', err);
-    }
+    ensureLucideLoaded().then(() => {
+        try {
+            if (window.lucide && typeof lucide.createIcons === 'function') lucide.createIcons();
+        } catch (err) {
+            console.warn('Icon render skipped', err);
+        }
+    });
 }
 
-// Immediately lock shell state on script load
-setAuthShellState(true, false);
+// Prefer instant shell from session cache; auth check confirms in background.
+(function bootAuthShellHint() {
+    const cached = readCachedAuthUser();
+    if (cached) {
+        currentUser = cached;
+        setAuthShellState(false, true);
+    } else {
+        setAuthShellState(true, false);
+    }
+})();
 
 // Initialize Application on Page Load
 document.addEventListener('DOMContentLoaded', async () => {
-    safeCreateIcons();
     try {
         await checkAuth();
     } catch (err) {
         console.error('Auth check error:', err);
-        currentUser = null;
-        showLoginView();
+        // Keep any cached session on boot errors — never force logout on refresh.
+        if (!readCachedAuthUser()) {
+            currentUser = null;
+            showLoginView();
+        }
     }
     setupEventListeners();
+    requestAnimationFrame(() => safeCreateIcons());
     window.addEventListener('hashchange', () => {
         if (!currentUser) return;
         const view = viewFromHash(location.hash);
@@ -350,14 +431,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 window.addEventListener('pageshow', (event) => {
     if (!event.persisted) return;
-    currentUser = null;
-    setAuthShellState(true, false);
     checkAuth();
 });
 
 function setupEventListeners() {
-    // Nav Click Listeners
-    document.querySelectorAll('.nav-item').forEach(item => {
+    // Nav Click Listeners (sidebar + top menu)
+    document.querySelectorAll('.nav-item, .top-menu-item').forEach(item => {
         item.addEventListener('click', (e) => {
             e.preventDefault();
             const view = item.getAttribute('data-view');
@@ -463,23 +542,43 @@ function setupEventListeners() {
 // Authentication & Production Login Flow
 // ----------------------------------------------------
 async function checkAuth() {
-    setAuthShellState(true, false);
+    const generation = ++authCheckGeneration;
+    const cached = readCachedAuthUser();
+    if (cached && cached.id) {
+        currentUser = cached;
+        updateUserUI();
+        switchView(initialPortalView(), { force: true });
+        setAuthShellState(false, true);
+    } else {
+        setAuthShellState(true, false);
+    }
     try {
         const res = await fetch('/api/auth/me', { credentials: 'same-origin' });
-        const data = await res.json();
-        if (data.status === 'success' && data.user) {
+        if (generation !== authCheckGeneration) return;
+        const data = await res.json().catch(() => ({}));
+        if (generation !== authCheckGeneration) return;
+        if (res.ok && data.status === 'success' && data.user) {
             currentUser = data.user;
+            writeCachedAuthUser(data.user);
             updateUserUI();
-            switchView(initialPortalView());
+            switchView(initialPortalView(), { force: true });
             setAuthShellState(false, true);
-        } else {
+            return;
+        }
+        // Only clear session on a confirmed unauthenticated response with no usable cache recovery.
+        if (res.status === 401) {
+            currentUser = null;
+            writeCachedAuthUser(null);
+            showLoginView();
+        }
+        // Any other failure: keep cached signed-in state (refresh / server blip).
+    } catch (err) {
+        console.error('Auth check error:', err);
+        if (generation !== authCheckGeneration) return;
+        if (!cached) {
             currentUser = null;
             showLoginView();
         }
-    } catch (err) {
-        console.error('Auth check error:', err);
-        currentUser = null;
-        showLoginView();
     }
 }
 
@@ -516,6 +615,8 @@ function clearLoggedInChrome() {
 
 function showLoginView() {
     currentUser = null;
+    writeCachedAuthUser(null);
+    activeView = 'login';
     closeAccountMenu();
     closeNotificationsDropdown();
     if (typeof closeCrmClientModal === 'function') {
@@ -545,11 +646,18 @@ async function handleFormLogin(e) {
     const emailInput = document.getElementById('login-email');
     const passInput = document.getElementById('login-password');
     const errDiv = document.getElementById('login-error-msg');
+    const submitBtn = e && e.target && e.target.querySelector
+        ? e.target.querySelector('button[type="submit"]')
+        : document.querySelector('#login-form button[type="submit"]');
     
     if (!emailInput || !passInput) return;
     const email = emailInput.value;
     const password = passInput.value;
     if (errDiv) errDiv.style.display = 'none';
+    if (submitBtn) submitBtn.disabled = true;
+
+    // Invalidate any in-flight /api/auth/me so a stale 401 cannot wipe this login.
+    const generation = ++authCheckGeneration;
 
     try {
         const res = await fetch('/api/auth/login', {
@@ -559,11 +667,14 @@ async function handleFormLogin(e) {
             body: JSON.stringify({ email, password })
         });
         const data = await res.json();
-        if (data.status === 'success') {
+        if (generation !== authCheckGeneration) return;
+        if (data.status === 'success' && data.user) {
             currentUser = data.user;
-            updateUserUI();
-            switchView(initialPortalView());
+            writeCachedAuthUser(data.user);
             setAuthShellState(false, true);
+            updateUserUI();
+            // Force dashboard open — activeView may still look like a prior page after a soft logout.
+            switchView(defaultPortalView(), { force: true });
         } else {
             if (errDiv) {
                 errDiv.textContent = data.message || 'Login failed.';
@@ -575,15 +686,22 @@ async function handleFormLogin(e) {
             errDiv.textContent = 'Server communication error.';
             errDiv.style.display = 'block';
         }
+    } finally {
+        if (submitBtn) submitBtn.disabled = false;
     }
 }
 
 async function handleLogout() {
+    if (logoutInProgress) return;
+    logoutInProgress = true;
     currentUser = null;
     closeAccountMenu();
     closeNotificationsDropdown();
     showLoginView();
-    await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+    try {
+        await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+    } catch (_) { /* ignore */ }
+    logoutInProgress = false;
 }
 
 function closeAccountMenu() {
@@ -674,6 +792,7 @@ async function switchToUser(userId, event) {
             throw new Error(data.message || 'Unable to switch user.');
         }
         currentUser = data.user;
+        writeCachedAuthUser(data.user);
         closeAccountMenu();
         resetClientDashboardView();
         updateUserUI();
@@ -696,6 +815,7 @@ async function stopImpersonation(event) {
             throw new Error(data.message || 'Unable to return to original account.');
         }
         currentUser = data.user;
+        writeCachedAuthUser(data.user);
         closeAccountMenu();
         resetClientDashboardView();
         updateUserUI();
@@ -880,7 +1000,35 @@ function updateUserUI() {
 // ----------------------------------------------------
 // View Router & Page Switching
 // ----------------------------------------------------
-function switchView(viewName) {
+function capturePageScroll() {
+    const main = document.querySelector('.main-wrapper');
+    return {
+        x: window.scrollX || window.pageXOffset || 0,
+        y: window.scrollY || window.pageYOffset || 0,
+        mainX: main ? main.scrollLeft : 0,
+        mainY: main ? main.scrollTop : 0,
+    };
+}
+
+function restorePageScroll(pos) {
+    if (!pos) return;
+    const apply = () => {
+        window.scrollTo(pos.x, pos.y);
+        const main = document.querySelector('.main-wrapper');
+        if (main) {
+            main.scrollLeft = pos.mainX;
+            main.scrollTop = pos.mainY;
+        }
+    };
+    apply();
+    requestAnimationFrame(() => {
+        apply();
+        requestAnimationFrame(apply);
+    });
+}
+
+function switchView(viewName, options) {
+    const opts = options || {};
     closeAccountMenu();
     closeMobileNav();
     let tasksTeamTab = null;
@@ -901,6 +1049,16 @@ function switchView(viewName) {
         showLoginView();
         return;
     }
+    // Same page click: stay put — but never skip leaving the login screen.
+    if (!opts.force && viewName === activeView && viewName !== 'login') {
+        syncViewHash(viewName);
+        return;
+    }
+    if (viewName === 'login') {
+        showLoginView();
+        return;
+    }
+    const scrollPos = capturePageScroll();
     activeView = viewName;
     setActiveViewPanel(viewName);
     syncViewHash(viewName);
@@ -952,12 +1110,15 @@ function switchView(viewName) {
         case 'admin-services': loadAdminServices(); break;
         case 'admin-invoices': loadAdminInvoices(); break;
         case 'admin-documents': loadAdminDocuments(); break;
-        case 'admin-intake': resetSmartIntakeForm(); break;
+        case 'admin-intake': loadSmartIntakeView(); break;
+        case 'admin-incentives': loadTeamIncentivesReport(); break;
+        case 'staff-dashboard': loadStaffDashboard(); break;
         case 'admin-logs': loadAdminLogs(); break;
         case 'admin-settings': loadAdminSettings(); break;
     }
     
     lucide.createIcons();
+    if (!opts.resetScroll) restorePageScroll(scrollPos);
 }
 
 // ----------------------------------------------------
@@ -1792,6 +1953,8 @@ let clientCompaniesCache = [];
 let clientPendingCache = [];
 let adminCompaniesCache = [];
 let adminPendingCache = [];
+let adminCompaniesSelection = new Set();
+let adminCompaniesSearchTimer = null;
 let portfolioDetailCache = null;
 let activePortfolioDocumentsTab = 'customer';
 let adminCompanyClientsCache = [];
@@ -1869,9 +2032,16 @@ function renderRegisteredCompanyCard(company, isAdmin) {
     const attention = portfolioAttentionIssues(company);
     const needsAttention = attention.length > 0;
     const companyId = Number(company.id);
+    const selected = isAdmin && adminCompaniesSelection.has(companyId);
+    const selectHtml = isAdmin
+        ? `<label class="portfolio-card-select" onclick="event.stopPropagation()">
+                <input type="checkbox" class="adm-company-select" data-company-id="${companyId}" ${selected ? 'checked' : ''} onchange="toggleAdminCompanySelection(${companyId}, this.checked)">
+           </label>`
+        : '';
     return `
-        <article class="portfolio-card${needsAttention ? ' is-attention' : ''}" data-company-id="${companyId}" role="button" tabindex="0" onclick="openCompanyPortfolioDetail(${companyId})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openCompanyPortfolioDetail(${companyId});}">
+        <article class="portfolio-card${needsAttention ? ' is-attention' : ''}${selected ? ' is-selected' : ''}" data-company-id="${companyId}" role="button" tabindex="0" onclick="openCompanyPortfolioDetail(${companyId})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openCompanyPortfolioDetail(${companyId});}">
             <div class="portfolio-card-head">
+                ${selectHtml}
                 <div class="portfolio-card-icon" aria-hidden="true"><i data-lucide="building-2"></i></div>
                 <div class="portfolio-card-titles">
                     <h3>${escapeHtml(company.name || 'Company')}</h3>
@@ -1934,40 +2104,94 @@ function updatePortfolioAttentionBanner(scope, attentionCompanies) {
 function setCompanyRegFilter(scope, value) {
     companyRegFilter[scope] = value || 'all';
     if (scope === 'admin') {
+        clearAdminCompaniesSelection();
         renderPortfolioCompanies(adminCompaniesCache, 'admin-portfolio-companies-grid', 'admin-portfolio-company-count', adminPendingCache);
     } else {
         renderPortfolioCompanies(clientCompaniesCache, 'portfolio-companies-grid', 'portfolio-company-count', clientPendingCache);
     }
 }
 
+function companyMatchesAdminSearch(company, query) {
+    const q = String(query || '').trim().toLowerCase();
+    if (!q) return true;
+    const hay = [
+        company && company.name,
+        company && company.company_number,
+        company && company.director,
+        company && company.reg_office,
+        company && company.package,
+        company && company.status,
+        ...(portfolioDirectorNames(company) || []),
+    ].join(' ').toLowerCase();
+    return hay.includes(q);
+}
+
+function companyFormationSortKey(company) {
+    const inc = String((company && company.inc_date) || '').trim().slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(inc)) return inc;
+    const created = String((company && company.created_at) || '').trim().slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(created)) return created;
+    return '0000-01-01';
+}
+
+function sortCompaniesNewestFormedFirst(companies) {
+    return (Array.isArray(companies) ? companies.slice() : []).sort((a, b) => {
+        const kb = companyFormationSortKey(b);
+        const ka = companyFormationSortKey(a);
+        if (kb !== ka) return kb.localeCompare(ka);
+        return Number((b && b.id) || 0) - Number((a && a.id) || 0);
+    });
+}
+
 function renderPortfolioCompanies(companies, targetGridId = 'portfolio-companies-grid', targetCountId = 'portfolio-company-count', pending = []) {
     const grid = document.getElementById(targetGridId);
     const countPill = document.getElementById(targetCountId);
-    const list = Array.isArray(companies) ? companies : [];
+    let list = sortCompaniesNewestFormedFirst(companies);
     const waiting = Array.isArray(pending) ? pending : [];
     const isAdmin = targetGridId === 'admin-portfolio-companies-grid';
     const scope = isAdmin ? 'admin' : 'client';
     const filter = companyRegFilter[scope] || 'all';
+    if (isAdmin) {
+        const q = (document.getElementById('admin-companies-search') || {}).value || '';
+        list = list.filter((company) => companyMatchesAdminSearch(company, q));
+    }
+    let waitingList = waiting;
+    if (isAdmin) {
+        const q = (document.getElementById('admin-companies-search') || {}).value || '';
+        if (String(q || '').trim()) {
+            waitingList = waiting.filter((item) => {
+                const hay = [
+                    item && item.company_name,
+                    item && item.order_number,
+                    item && item.client_name,
+                    item && item.owner_name,
+                ].join(' ').toLowerCase();
+                return hay.includes(String(q).trim().toLowerCase());
+            });
+        }
+    }
     const onCompaniesHouse = list.filter((company) => isRegisteredCompany(company));
     const notRegistered = list.filter((company) => !isRegisteredCompany(company));
     const attentionCompanies = onCompaniesHouse.filter((company) => companyNeedsAttention(company));
     const attentionIds = new Set(attentionCompanies.map((company) => Number(company.id)));
-    const pendingCount = waiting.length + notRegistered.length;
+    const pendingCount = waitingList.length + notRegistered.length;
     const chCount = onCompaniesHouse.length;
     const attentionCount = attentionCompanies.length;
     if (countPill) countPill.textContent = `${list.length} UK`;
     updateCompanyRegFilterButtons(scope, filter, chCount, pendingCount, attentionCount);
     updatePortfolioAttentionBanner(scope, attentionCompanies);
     if (!grid) return;
-    if (!list.length && !waiting.length) {
+    if (!list.length && !waitingList.length) {
+        const q = isAdmin ? String((document.getElementById('admin-companies-search') || {}).value || '').trim() : '';
         grid.innerHTML = `
             <div class="portfolio-empty" role="status">
                 <i data-lucide="building-2" style="width:40px; height:40px; color:var(--brand-secondary);"></i>
-                <h3>No companies in your Business Portfolio yet.</h3>
-                <p>A card appears here after a Digital, Professional, or All Inclusive company registration is ordered on brixenconsultants.com and the company name is sent from WordPress.</p>
+                <h3>${q ? 'No companies match your search.' : 'No companies in your Business Portfolio yet.'}</h3>
+                <p>${q ? 'Clear the search box or try another name / company number.' : 'A card appears here after a Digital, Professional, or All Inclusive company registration is ordered on brixenconsultants.com and the company name is sent from WordPress.'}</p>
             </div>
         `;
         if (window.lucide) lucide.createIcons();
+        updateAdminCompaniesSelectionCount();
         return;
     }
     const showAttention = filter === 'all' || filter === 'attention';
@@ -1979,7 +2203,7 @@ function renderPortfolioCompanies(companies, targetGridId = 'portfolio-companies
     const attentionHtml = showAttention
         ? attentionCompanies.map((company) => renderRegisteredCompanyCard(company, isAdmin)).join('')
         : '';
-    const pendingHtml = showPending ? `${renderPendingRegistrationCards(waiting, isAdmin)}${notRegistered.map((company) => renderRegisteredCompanyCard(company, isAdmin)).join('')}` : '';
+    const pendingHtml = showPending ? `${renderPendingRegistrationCards(waitingList, isAdmin)}${notRegistered.map((company) => renderRegisteredCompanyCard(company, isAdmin)).join('')}` : '';
     const chHtml = showCh ? chWithoutAttention.map((company) => renderRegisteredCompanyCard(company, isAdmin)).join('') : '';
     const parts = [];
     if (showAttention && (filter === 'attention' || attentionCount > 0)) {
@@ -1996,6 +2220,184 @@ function renderPortfolioCompanies(companies, targetGridId = 'portfolio-companies
     }
     grid.innerHTML = parts.join('');
     if (window.lucide) lucide.createIcons();
+    if (isAdmin) {
+        const pageCb = document.getElementById('admin-companies-select-page');
+        if (pageCb) {
+            const visibleIds = Array.from(document.querySelectorAll('#admin-portfolio-companies-grid .adm-company-select')).map((cb) => Number(cb.getAttribute('data-company-id')));
+            pageCb.checked = visibleIds.length > 0 && visibleIds.every((id) => adminCompaniesSelection.has(id));
+        }
+        updateAdminCompaniesSelectionCount();
+    }
+}
+
+function updateAdminCompaniesSelectionCount() {
+    const el = document.getElementById('admin-companies-selection-count');
+    if (el) el.textContent = adminCompaniesSelection.size ? `${adminCompaniesSelection.size} selected` : '';
+}
+
+function toggleAdminCompanySelection(companyId, checked) {
+    const id = Number(companyId);
+    if (!id) return;
+    if (checked) adminCompaniesSelection.add(id);
+    else adminCompaniesSelection.delete(id);
+    const card = document.querySelector(`#admin-portfolio-companies-grid article.portfolio-card[data-company-id="${id}"]`);
+    if (card) card.classList.toggle('is-selected', checked);
+    updateAdminCompaniesSelectionCount();
+}
+
+function toggleAdminCompaniesPageSelection(checked) {
+    document.querySelectorAll('#admin-portfolio-companies-grid .adm-company-select').forEach((cb) => {
+        const id = Number(cb.getAttribute('data-company-id'));
+        if (!id) return;
+        cb.checked = checked;
+        if (checked) adminCompaniesSelection.add(id);
+        else adminCompaniesSelection.delete(id);
+        const card = cb.closest('article.portfolio-card');
+        if (card) card.classList.toggle('is-selected', checked);
+    });
+    updateAdminCompaniesSelectionCount();
+}
+
+function clearAdminCompaniesSelection() {
+    adminCompaniesSelection = new Set();
+    const pageCb = document.getElementById('admin-companies-select-page');
+    if (pageCb) pageCb.checked = false;
+    document.querySelectorAll('#admin-portfolio-companies-grid .adm-company-select').forEach((cb) => {
+        cb.checked = false;
+        const card = cb.closest('article.portfolio-card');
+        if (card) card.classList.remove('is-selected');
+    });
+    updateAdminCompaniesSelectionCount();
+}
+
+function onAdminCompaniesSearchInput() {
+    window.clearTimeout(adminCompaniesSearchTimer);
+    adminCompaniesSearchTimer = window.setTimeout(() => {
+        renderPortfolioCompanies(adminCompaniesCache, 'admin-portfolio-companies-grid', 'admin-portfolio-company-count', adminPendingCache);
+    }, 150);
+}
+
+function selectedAdminCompanyIds() {
+    return Array.from(adminCompaniesSelection);
+}
+
+async function bulkDeleteAdminCompanies() {
+    if (!canDeleteCompanies()) {
+        alert('You do not have permission to delete companies.');
+        return;
+    }
+    const ids = selectedAdminCompanyIds();
+    if (!ids.length) {
+        alert('Select at least one company.');
+        return;
+    }
+    if (!confirm(`Delete ${ids.length} selected compan${ids.length === 1 ? 'y' : 'ies'}? Linked orders keep their data, but these company cards will be removed.`)) {
+        return;
+    }
+    try {
+        const res = await fetch('/api/admin/companies/bulk-delete', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ company_ids: ids }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Bulk delete failed.');
+        }
+        clearAdminCompaniesSelection();
+        if (typeof loadAdminCompanies === 'function') await loadAdminCompanies();
+        alert(data.message || `Deleted ${ids.length} companies.`);
+    } catch (err) {
+        alert(err.message || 'Bulk delete failed.');
+    }
+}
+
+function fillBulkEditCompanyClientOptions() {
+    const select = document.getElementById('bulk-edit-company-client');
+    if (!select) return;
+    const options = ['<option value="">— keep current —</option>'].concat(
+        (adminCompanyClientsCache || []).map((client) =>
+            `<option value="${Number(client.id)}">${escapeHtml(client.full_name || client.email || 'Client')}</option>`
+        )
+    );
+    select.innerHTML = options.join('');
+}
+
+function openBulkEditCompaniesModal() {
+    const ids = selectedAdminCompanyIds();
+    if (!ids.length) {
+        alert('Select at least one company.');
+        return;
+    }
+    fillBulkEditCompanyClientOptions();
+    const count = document.getElementById('bulk-edit-companies-count');
+    if (count) count.textContent = `${ids.length} compan${ids.length === 1 ? 'y' : 'ies'} selected.`;
+    const err = document.getElementById('bulk-edit-companies-error');
+    if (err) {
+        err.style.display = 'none';
+        err.textContent = '';
+    }
+    const form = document.getElementById('bulk-edit-companies-form');
+    if (form) form.reset();
+    const modal = document.getElementById('modal-bulk-edit-companies');
+    if (modal) modal.style.display = 'flex';
+}
+
+function closeBulkEditCompaniesModal() {
+    const modal = document.getElementById('modal-bulk-edit-companies');
+    if (modal) modal.style.display = 'none';
+}
+
+async function submitBulkEditCompanies(event) {
+    if (event && typeof event.preventDefault === 'function') event.preventDefault();
+    const ids = selectedAdminCompanyIds();
+    const err = document.getElementById('bulk-edit-companies-error');
+    if (!ids.length) {
+        if (err) {
+            err.style.display = 'block';
+            err.textContent = 'Select at least one company.';
+        }
+        return;
+    }
+    const status = (document.getElementById('bulk-edit-company-status') || {}).value || '';
+    const clientId = (document.getElementById('bulk-edit-company-client') || {}).value || '';
+    const packageVal = (document.getElementById('bulk-edit-company-package') || {}).value;
+    const payload = { company_ids: ids };
+    if (status) payload.status = status;
+    if (clientId) payload.client_id = Number(clientId);
+    if (packageVal != null && String(packageVal).trim() !== '') payload.package = String(packageVal).trim();
+    if (!payload.status && !payload.client_id && !('package' in payload)) {
+        if (err) {
+            err.style.display = 'block';
+            err.textContent = 'Choose at least one field to change.';
+        }
+        return;
+    }
+    const submitBtn = document.getElementById('bulk-edit-companies-submit');
+    if (submitBtn) submitBtn.disabled = true;
+    try {
+        const res = await fetch('/api/admin/companies/bulk-update', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Bulk edit failed.');
+        }
+        closeBulkEditCompaniesModal();
+        clearAdminCompaniesSelection();
+        if (typeof loadAdminCompanies === 'function') await loadAdminCompanies();
+    } catch (e) {
+        if (err) {
+            err.style.display = 'block';
+            err.textContent = e.message || 'Bulk edit failed.';
+        }
+    } finally {
+        if (submitBtn) submitBtn.disabled = false;
+    }
 }
 
 let companiesHouseSearchTimer = null;
@@ -2234,10 +2636,15 @@ function documentActionButtons(doc) {
     if (!id) return '';
     const nameJs = JSON.stringify(String((doc && doc.name) || 'Document'));
     const typeJs = JSON.stringify(String((doc && doc.file_type) || ''));
+    const canDelete = isAdminShellUser(currentUser) && typeof canUploadClientDocuments === 'function' && canUploadClientDocuments();
+    const deleteBtn = canDelete
+        ? `<button type="button" class="btn-secondary btn-table portfolio-doc-delete-btn" onclick="event.stopPropagation(); deletePortfolioDocument(${id}, ${nameJs})">Delete</button>`
+        : '';
     return `
         <div class="table-action-btns">
             <button type="button" class="btn-secondary btn-table" onclick='event.stopPropagation(); openDocumentPreview(${id}, ${nameJs}, ${typeJs})'>View</button>
             <a class="btn-primary btn-table" href="/api/documents/${id}/download" onclick="event.stopPropagation();">Download</a>
+            ${deleteBtn}
         </div>
     `;
 }
@@ -2573,17 +2980,22 @@ function previewPortfolioDocument(docId, name, fileType) {
 function renderPortfolioDocumentButtons(documents, emptyMessage) {
     const list = Array.isArray(documents) ? documents : [];
     if (!list.length) {
-        return emptyMessage ? `<p class="portfolio-related-empty">${escapeHtml(emptyMessage)}</p>` : '';
+        return `<p class="portfolio-related-empty">${escapeHtml(emptyMessage || 'No documents in this folder yet.')}</p>`;
     }
     return `
         <div class="portfolio-doc-button-grid">
             ${list.map((doc) => {
                 const customerUpload = isCustomerUploadedDocument(doc);
+                const metaParts = [
+                    doc.category || doc.file_type || 'Document',
+                    doc.lifecycle_status || '',
+                    doc.file_size || '',
+                ].filter(Boolean);
                 const meta = customerUpload
-                    ? `${escapeHtml(doc.status || 'Pending Review')} · ${escapeHtml(doc.file_type || doc.category || 'Upload')}`
-                    : escapeHtml(doc.category || doc.file_type || 'Document');
+                    ? `${escapeHtml(doc.status || 'Pending Review')} · ${escapeHtml(metaParts.join(' · '))}`
+                    : escapeHtml(metaParts.join(' · '));
                 return `
-                    <div class="portfolio-doc-button-card">
+                    <div class="portfolio-doc-button-card" data-document-id="${Number(doc.id) || ''}">
                         <div class="portfolio-doc-button-copy">
                             <strong>${escapeHtml(doc.name || 'Document')}</strong>
                             <span>${meta}</span>
@@ -2596,6 +3008,37 @@ function renderPortfolioDocumentButtons(documents, emptyMessage) {
             }).join('')}
         </div>
     `;
+}
+
+async function deletePortfolioDocument(docId, docName) {
+    const id = Number(docId);
+    if (!id) return;
+    if (!isAdminShellUser(currentUser)) {
+        alert('You do not have permission to delete documents.');
+        return;
+    }
+    const label = docName || 'this document';
+    if (!confirm(`Delete ${label}? This removes the file from the portal.`)) return;
+    try {
+        const res = await fetch(`/api/admin/documents/${id}`, {
+            method: 'DELETE',
+            credentials: 'same-origin',
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Could not delete document.');
+        }
+        document.querySelectorAll(`[data-document-id="${id}"]`).forEach((el) => el.remove());
+        if (portfolioDetailCache && Array.isArray(portfolioDetailCache.documents)) {
+            portfolioDetailCache.documents = portfolioDetailCache.documents.filter((d) => Number(d.id) !== id);
+            fillCompanyPortfolioModal(portfolioDetailCache);
+            switchPortfolioDetailTab('documents');
+            switchPortfolioDocumentsTab(activePortfolioDocumentsTab);
+        }
+        if (window.lucide) lucide.createIcons();
+    } catch (err) {
+        alert(err.message || 'Could not delete document.');
+    }
 }
 
 function setPortfolioText(id, value) {
@@ -2653,7 +3096,88 @@ function fillCompanyPortfolioModal(payload) {
     const directors = portfolioDirectorNames(company);
     if (ownerLabel) ownerLabel.textContent = directors.length > 1 ? 'Directors' : 'Director';
     setPortfolioText('portfolio-detail-director', directors.length ? directors.join(' · ') : '—');
-    setPortfolioText('portfolio-detail-email', company.registered_email || '—');
+    const emailWrap = document.getElementById('portfolio-detail-email-wrap');
+    const emailValue = String(company.registered_email || '').trim();
+    const isEmailVerified = company.business_email_verified === true;
+    if (emailWrap) {
+        if (isAdminShellUser(currentUser)) {
+            emailWrap.innerHTML = `
+                <div class="portfolio-inline-edit">
+                    <input type="email" id="portfolio-company-notify-email" class="apple-input" value="${escapeHtml(emailValue)}" placeholder="company@email.com" autocomplete="off">
+                    <button type="button" class="btn-primary btn-tiny" onclick="savePortfolioCompanyNotifyEmail(false)">Save</button>
+                    <button type="button" class="btn-primary btn-tiny" onclick="savePortfolioCompanyNotifyEmail(true)">${isEmailVerified ? 'Re-verify' : 'Verify'}</button>
+                    ${isEmailVerified ? '<button type="button" class="btn-secondary btn-tiny" onclick="unverifyPortfolioCompanyNotifyEmail()">Unverify</button>' : ''}
+                </div>
+                <span class="portfolio-lock-chip">${isEmailVerified ? 'Verified' : 'Unverified'}</span>
+                <span id="portfolio-company-notify-status" class="portfolio-inline-status" role="status"></span>
+            `;
+        } else {
+            emailWrap.innerHTML = `
+                <div class="portfolio-locked-value">
+                    <strong id="portfolio-detail-email">${escapeHtml(emailValue || '—')}</strong>
+                    ${emailValue ? `<span class="portfolio-lock-chip">${isEmailVerified ? 'Verified' : 'Unverified'}</span>` : ''}
+                </div>
+            `;
+        }
+    }
+    const waCta = document.getElementById('portfolio-compliance-whatsapp-cta');
+    if (waCta) {
+        const contact = (payload && payload.compliance_contact) || {};
+        const waLink = String(contact.whatsapp_link || '').trim();
+        const hasAttention = portfolioAttentionIssues(company).length > 0;
+        if (waLink && hasAttention) {
+            waCta.hidden = false;
+            waCta.innerHTML = `<a class="btn-primary btn-tiny" href="${escapeHtml(waLink)}" target="_blank" rel="noopener noreferrer">Contact via WhatsApp</a>`;
+        } else {
+            waCta.hidden = true;
+            waCta.innerHTML = '';
+        }
+    }
+    const histEl = document.getElementById('portfolio-notification-history');
+    if (histEl) {
+        const rows = Array.isArray(payload.notification_history) ? payload.notification_history : [];
+        if (!rows.length) {
+            histEl.hidden = true;
+            histEl.innerHTML = '';
+        } else {
+            histEl.hidden = false;
+            histEl.innerHTML = `
+                <strong style="display:block; margin:10px 0 6px; font-size:12px;">Notification history</strong>
+                <ul class="portfolio-notification-history-list">
+                    ${rows.slice(0, 12).map((row) => `
+                        <li>
+                            ${escapeHtml(formatUkNumericDate(String(row.created_at || '').slice(0, 10)) || row.created_at || '')}
+                            — ${escapeHtml(row.issue_summary || row.issue_fingerprint || '—')}
+                            — ${escapeHtml(row.status || '')}${row.blocked_reason ? ` (${escapeHtml(row.blocked_reason)})` : ''}
+                            ${row.engagement ? ` — <em>${escapeHtml(row.engagement)}</em>` : ''}
+                        </li>
+                    `).join('')}
+                </ul>
+            `;
+        }
+    }
+    const waWrap = document.getElementById('portfolio-detail-whatsapp-wrap');
+    const waValue = String(company.whatsapp_number || '').trim();
+    if (waWrap) {
+        if (waValue) {
+            waWrap.innerHTML = `
+                <div class="portfolio-locked-value">
+                    <strong id="portfolio-detail-whatsapp">${escapeHtml(waValue)}</strong>
+                    <span class="portfolio-lock-chip">Locked</span>
+                </div>
+            `;
+        } else if (isAdminShellUser(currentUser)) {
+            waWrap.innerHTML = `
+                <div class="portfolio-inline-edit">
+                    <input type="tel" id="portfolio-company-whatsapp" class="apple-input" value="" placeholder="+44 7…" autocomplete="off">
+                    <button type="button" class="btn-primary btn-tiny" onclick="savePortfolioCompanyWhatsApp()">Save</button>
+                </div>
+                <span id="portfolio-company-whatsapp-status" class="portfolio-inline-status" role="status"></span>
+            `;
+        } else {
+            waWrap.innerHTML = `<strong id="portfolio-detail-whatsapp">—</strong>`;
+        }
+    }
     const attentionBox = document.getElementById('portfolio-detail-attention');
     if (attentionBox) {
         const attention = portfolioAttentionIssues(company);
@@ -2688,7 +3212,7 @@ function fillCompanyPortfolioModal(payload) {
             activity.innerHTML = '<p class="portfolio-empty-copy">No SIC or business activity details on file.</p>';
         } else {
             activity.innerHTML = `
-                <div class="portfolio-detail-grid">
+                <div class="portfolio-detail-grid portfolio-apple-group">
                     ${items.map((item) => `
                         <div class="full">
                             <span>SIC ${escapeHtml(item.code)}</span>
@@ -2712,39 +3236,39 @@ function fillCompanyPortfolioModal(payload) {
         const fieldHtml = canEditCompliance ? `
             <form class="portfolio-compliance-form" onsubmit="saveCompanyCompliance(event)">
                 <p class="portfolio-empty-copy">Stored on this company card for filings and HMRC / Companies House work.</p>
-                <div class="portfolio-detail-grid">
+                <div class="portfolio-detail-grid portfolio-apple-group">
                     <div>
                         <label for="portfolio-compliance-utr">UTR number</label>
-                        <input type="text" id="portfolio-compliance-utr" name="utr_number" class="select-filter" maxlength="15" autocomplete="off" value="${escapeHtml(utrValue)}" placeholder="e.g. 1234567890">
+                        <input type="text" id="portfolio-compliance-utr" name="utr_number" class="apple-input" maxlength="15" autocomplete="off" value="${escapeHtml(utrValue)}" placeholder="e.g. 1234567890">
                     </div>
                     <div>
                         <label for="portfolio-compliance-auth">Authentication code</label>
-                        <input type="text" id="portfolio-compliance-auth" name="authentication_code" class="select-filter" maxlength="12" autocomplete="off" value="${escapeHtml(authValue)}" placeholder="Companies House auth code">
+                        <input type="text" id="portfolio-compliance-auth" name="authentication_code" class="apple-input" maxlength="12" autocomplete="off" value="${escapeHtml(authValue)}" placeholder="Companies House auth code">
                     </div>
                     <div class="full">
                         <label for="portfolio-compliance-activation">Personal 11 dijits Code</label>
-                        <input type="text" id="portfolio-compliance-activation" name="activation_code" class="select-filter" maxlength="40" autocomplete="off" value="${escapeHtml(activationValue)}" placeholder="11-digit personal code">
+                        <input type="text" id="portfolio-compliance-activation" name="activation_code" class="apple-input" maxlength="40" autocomplete="off" value="${escapeHtml(activationValue)}" placeholder="11-digit personal code">
                     </div>
                     <div>
                         <label for="portfolio-compliance-identity">Identity verification</label>
-                        <select id="portfolio-compliance-identity" name="identity_verified" class="select-filter">
+                        <select id="portfolio-compliance-identity" name="identity_verified" class="apple-input">
                             ${['Not started', 'In progress', 'Verified', 'Failed'].map((status) => `<option value="${status}"${status === identityValue ? ' selected' : ''}>${status}</option>`).join('')}
                         </select>
                     </div>
                     <div>
                         <label for="portfolio-compliance-psc">PSC verification</label>
-                        <select id="portfolio-compliance-psc" name="psc_verified" class="select-filter">
+                        <select id="portfolio-compliance-psc" name="psc_verified" class="apple-input">
                             ${['Not started', 'In progress', 'Verified', 'Update required'].map((status) => `<option value="${status}"${status === pscValue ? ' selected' : ''}>${status}</option>`).join('')}
                         </select>
                     </div>
                 </div>
                 <div class="portfolio-compliance-actions">
-                    <button type="submit" class="btn-primary" id="portfolio-compliance-save">Save codes</button>
+                    <button type="submit" class="btn-primary btn-tiny" id="portfolio-compliance-save">Save codes</button>
                     <span class="portfolio-compliance-status" id="portfolio-compliance-status" role="status"></span>
                 </div>
             </form>
         ` : `
-            <div class="portfolio-detail-grid">
+            <div class="portfolio-detail-grid portfolio-apple-group">
                 <div><span>UTR number</span><strong>${escapeHtml(utrValue || '—')}</strong></div>
                 <div><span>Identity verification</span><strong>${escapeHtml(identityValue)}</strong></div>
                 <div><span>PSC verification</span><strong>${escapeHtml(pscValue)}</strong></div>
@@ -2758,7 +3282,7 @@ function fillCompanyPortfolioModal(payload) {
             rows.push(`<div class="portfolio-related-row"><div><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(formatUkNumericDate(item.date))}</strong></div></div>`);
         });
         const deadlineHtml = rows.length
-            ? `<div class="portfolio-related-list">${rows.join('')}</div>`
+            ? `<div class="portfolio-related-list portfolio-apple-group">${rows.join('')}</div>`
             : `<p class="portfolio-related-empty">No upcoming deadlines</p>`;
         complianceEl.innerHTML = `${fieldHtml}${deadlineHtml}`;
     }
@@ -2769,13 +3293,13 @@ function fillCompanyPortfolioModal(payload) {
         if (!orders.length) {
             ordersEl.innerHTML = `<p class="portfolio-related-empty">No orders linked to this company.</p>`;
         } else {
-            ordersEl.innerHTML = `<div class="portfolio-related-list">${orders.map((order) => `
+            ordersEl.innerHTML = `<div class="portfolio-related-list portfolio-apple-group">${orders.map((order) => `
                 <div class="portfolio-related-row">
                     <div>
                         <strong>${escapeHtml(order.order_number || 'Order')}</strong>
                         <span>${escapeHtml(order.service_name || '')} · ${escapeHtml(order.status || '')}</span>
                     </div>
-                    <button type="button" class="btn-secondary" style="padding:4px 10px; font-size:0.75rem;" onclick="openPortfolioCompanyOrder(${Number(order.id)})">View</button>
+                    <button type="button" class="btn-secondary btn-tiny" onclick="openPortfolioCompanyOrder(${Number(order.id)})">View</button>
                 </div>
             `).join('')}</div>`;
         }
@@ -2804,23 +3328,23 @@ function fillCompanyPortfolioModal(payload) {
                 <input type="file" name="file" required accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.zip">
                 <textarea name="client_message" rows="2" placeholder="Optional note for the customer"></textarea>
                 <div class="portfolio-doc-upload-actions">
-                    <button type="submit" class="btn-primary">Upload and notify customer</button>
+                    <button type="submit" class="btn-primary btn-tiny">Upload and notify customer</button>
                     <span class="portfolio-doc-upload-status" role="status"></span>
                 </div>
             </form>
         ` : '';
         docsEl.innerHTML = `
             <div class="portfolio-tabs portfolio-doc-tabs" role="tablist" aria-label="Company documents">
-                <button type="button" class="portfolio-tab${activePortfolioDocumentsTab === 'customer' ? ' active' : ''}" data-doc-tab="customer" onclick="switchPortfolioDocumentsTab('customer')">Customer uploads</button>
-                <button type="button" class="portfolio-tab${activePortfolioDocumentsTab === 'posted' ? ' active' : ''}" data-doc-tab="posted" onclick="switchPortfolioDocumentsTab('posted')">Posted documents</button>
+                <button type="button" class="portfolio-tab${activePortfolioDocumentsTab === 'customer' ? ' active' : ''}" data-doc-tab="customer" onclick="switchPortfolioDocumentsTab('customer')">Customer uploads (${customerDocs.length})</button>
+                <button type="button" class="portfolio-tab${activePortfolioDocumentsTab === 'posted' ? ' active' : ''}" data-doc-tab="posted" onclick="switchPortfolioDocumentsTab('posted')">Posted documents (${otherDocs.length})</button>
             </div>
             <div class="portfolio-doc-panel" data-doc-panel="customer"${activePortfolioDocumentsTab === 'customer' ? '' : ' hidden'}>
-                ${renderPortfolioDocumentButtons(customerDocs, '')}
+                ${renderPortfolioDocumentButtons(customerDocs, 'No customer uploads or Smart Intake files linked to this company yet.')}
             </div>
             <div class="portfolio-doc-panel" data-doc-panel="posted"${activePortfolioDocumentsTab === 'posted' ? '' : ' hidden'}>
                 ${renderPortfolioDocumentButtons(otherDocs, 'No posted or staff documents for this company yet.')}
+                ${uploadHtml}
             </div>
-            ${uploadHtml}
         `;
     }
 
@@ -2981,6 +3505,124 @@ async function saveCompanyCompliance(event) {
         }
     } finally {
         if (saveBtn) saveBtn.disabled = false;
+    }
+}
+
+async function savePortfolioCompanyNotifyEmail(verify = false) {
+    if (!isAdminShellUser(currentUser)) return;
+    const companyId = Number(portfolioDetailCache && portfolioDetailCache.company && portfolioDetailCache.company.id);
+    if (!companyId) return;
+    const input = document.getElementById('portfolio-company-notify-email');
+    const statusEl = document.getElementById('portfolio-company-notify-status');
+    const registered_email = ((input && input.value) || '').trim();
+    if (!registered_email) {
+        if (statusEl) {
+            statusEl.textContent = 'Enter a verified business email.';
+            statusEl.style.color = '#dc2626';
+        }
+        return;
+    }
+    if (statusEl) {
+        statusEl.textContent = verify ? 'Saving & verifying…' : 'Saving…';
+        statusEl.style.color = '#64748b';
+    }
+    try {
+        const body = { registered_email };
+        if (verify) body.verify_business_email = true;
+        const res = await fetch(`/api/admin/companies/${companyId}`, {
+            method: 'PUT',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success' || !data.company) {
+            throw new Error(data.message || 'Could not save company email.');
+        }
+        portfolioDetailCache = {
+            ...(portfolioDetailCache || {}),
+            company: { ...((portfolioDetailCache && portfolioDetailCache.company) || {}), ...data.company },
+        };
+        if (typeof openCompanyPortfolioDetail === 'function') {
+            await openCompanyPortfolioDetail(companyId);
+        } else {
+            fillCompanyPortfolioModal(portfolioDetailCache);
+        }
+    } catch (err) {
+        if (statusEl) {
+            statusEl.textContent = err.message || 'Could not save company email.';
+            statusEl.style.color = '#dc2626';
+        }
+    }
+}
+
+async function unverifyPortfolioCompanyNotifyEmail() {
+    if (!isAdminShellUser(currentUser)) return;
+    const companyId = Number(portfolioDetailCache && portfolioDetailCache.company && portfolioDetailCache.company.id);
+    if (!companyId) return;
+    const statusEl = document.getElementById('portfolio-company-notify-status');
+    try {
+        const res = await fetch(`/api/admin/companies/${companyId}`, {
+            method: 'PUT',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ unverify_business_email: true }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success' || !data.company) {
+            throw new Error(data.message || 'Could not unverify email.');
+        }
+        await openCompanyPortfolioDetail(companyId);
+    } catch (err) {
+        if (statusEl) {
+            statusEl.textContent = err.message || 'Could not unverify email.';
+            statusEl.style.color = '#dc2626';
+        }
+    }
+}
+
+async function savePortfolioCompanyWhatsApp() {
+    if (!isAdminShellUser(currentUser)) return;
+    const companyId = Number(portfolioDetailCache && portfolioDetailCache.company && portfolioDetailCache.company.id);
+    if (!companyId) return;
+    if (String((portfolioDetailCache.company && portfolioDetailCache.company.whatsapp_number) || '').trim()) {
+        return;
+    }
+    const input = document.getElementById('portfolio-company-whatsapp');
+    const statusEl = document.getElementById('portfolio-company-whatsapp-status');
+    const whatsapp_number = ((input && input.value) || '').trim();
+    if (!whatsapp_number) {
+        if (statusEl) {
+            statusEl.textContent = 'Enter a WhatsApp number.';
+            statusEl.style.color = '#dc2626';
+        }
+        return;
+    }
+    if (statusEl) {
+        statusEl.textContent = 'Saving…';
+        statusEl.style.color = '#64748b';
+    }
+    try {
+        const res = await fetch(`/api/admin/companies/${companyId}`, {
+            method: 'PUT',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ whatsapp_number }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success' || !data.company) {
+            throw new Error(data.message || 'Could not save WhatsApp number.');
+        }
+        portfolioDetailCache = {
+            ...(portfolioDetailCache || {}),
+            company: { ...((portfolioDetailCache && portfolioDetailCache.company) || {}), ...data.company },
+        };
+        fillCompanyPortfolioModal(portfolioDetailCache);
+    } catch (err) {
+        if (statusEl) {
+            statusEl.textContent = err.message || 'Could not save WhatsApp number.';
+            statusEl.style.color = '#dc2626';
+        }
     }
 }
 
@@ -3161,13 +3803,17 @@ async function loadAdminCompanies() {
             res = await fetch('/api/client/companies', { credentials: 'same-origin' });
             data = await res.json().catch(() => ({}));
         }
-        const list = data.companies || [];
+        const list = (data.companies || []).filter((c) => {
+            const st = String((c && c.status) || '').toLowerCase();
+            return !(st.includes('dissolved') || st.includes('liquidation') || st === 'closed' || st.includes('converted-closed'));
+        });
         if (countPill) countPill.textContent = `${data.total_uk || list.length} UK`;
         const chBanner = document.getElementById('admin-ch-banner');
         if (chBanner) chBanner.hidden = Boolean(data.companies_house_configured);
         adminCompanyClientsCache = Array.isArray(data.clients) ? data.clients : [];
         adminCompaniesCache = list;
         adminPendingCache = data.pending_registrations || [];
+        clearAdminCompaniesSelection();
         renderPortfolioCompanies(list, 'admin-portfolio-companies-grid', 'admin-portfolio-company-count', adminPendingCache);
     } catch (err) {
         if (countPill) countPill.textContent = '0 UK';
@@ -3882,6 +4528,261 @@ async function submitNewTicketForm(e) {
 // ----------------------------------------------------
 // ADMIN CMS LOADERS
 // ----------------------------------------------------
+let adminDashCache = null;
+let adminDashOrderRange = 'monthly';
+let adminDashBreakdownMode = 'today';
+let adminUserStatChart = null;
+
+function scrollAdminDashFeed(dir) {
+    const track = document.getElementById('adm-dash-feed');
+    if (!track) return;
+    track.scrollBy({ left: (dir || 1) * 280, behavior: 'smooth' });
+}
+
+function setAdminDashOrderRange(range) {
+    adminDashOrderRange = range || 'monthly';
+    document.querySelectorAll('[data-dash-range]').forEach((btn) => {
+        btn.classList.toggle('is-active', btn.getAttribute('data-dash-range') === adminDashOrderRange);
+    });
+    if (adminDashCache) renderAdminOrderStatChart(adminDashCache);
+}
+
+function setAdminDashBreakdown(mode) {
+    adminDashBreakdownMode = mode || 'today';
+    document.querySelectorAll('[data-dash-break]').forEach((btn) => {
+        btn.classList.toggle('is-active', btn.getAttribute('data-dash-break') === adminDashBreakdownMode);
+    });
+    if (adminDashCache) renderAdminDashBreakdown(adminDashCache);
+}
+
+function adminDashToneClass(tone) {
+    const t = String(tone || 'blue').toLowerCase();
+    if (['purple', 'red', 'orange', 'blue', 'green'].includes(t)) return t;
+    return 'blue';
+}
+
+function renderAdminDashFeed(payload) {
+    const track = document.getElementById('adm-dash-feed');
+    if (!track) return;
+    const items = Array.isArray(payload.activity) ? payload.activity : [];
+    track.innerHTML = items.map((item) => {
+        const tone = adminDashToneClass(item.tone);
+        const view = escapeHtml(item.view || 'admin-dashboard');
+        return `
+        <article class="dash-feed-card" onclick="switchView('${view}')">
+            <div class="dash-feed-top">
+                <span class="dash-feed-icon tone-${tone}"><i data-lucide="${escapeHtml(item.icon || 'sparkles')}"></i></span>
+                <button type="button" class="dash-feed-menu" tabindex="-1" aria-hidden="true">•••</button>
+            </div>
+            <h4 class="dash-feed-title">${escapeHtml(item.title || 'Activity')}</h4>
+            <p class="dash-feed-sub">${escapeHtml(item.subtitle || '')}</p>
+            <div class="dash-feed-meta">
+                <span>${escapeHtml(item.meta_time || '—')}</span>
+                <span>${escapeHtml(item.meta_tag || '')}</span>
+                <span>${escapeHtml(item.meta_user || '')}</span>
+            </div>
+        </article>`;
+    }).join('');
+    safeCreateIcons();
+}
+
+function renderAdminDashBreakdown(payload) {
+    const host = document.getElementById('adm-dash-breakdown');
+    if (!host) return;
+    const stats = payload.stats || {};
+    let rows = Array.isArray(payload.breakdown) ? payload.breakdown.slice() : [];
+    if (adminDashBreakdownMode === 'today') {
+        rows = [
+            { label: 'Orders today', value: stats.today_orders || 0, tone: 'purple' },
+            { label: 'New clients', value: stats.today_customers || 0, tone: 'red' },
+            { label: 'Open tickets', value: stats.open_tickets || 0, tone: 'orange' },
+            { label: 'Pending docs', value: stats.pending_documents || 0, tone: 'blue' },
+        ];
+    } else if (adminDashBreakdownMode === 'month') {
+        rows = [
+            { label: 'Orders month', value: stats.month_orders || 0, tone: 'purple' },
+            { label: 'Clients', value: stats.total_customers || 0, tone: 'red' },
+            { label: 'Companies', value: stats.total_companies || 0, tone: 'orange' },
+            { label: 'Completed', value: stats.completed_orders || 0, tone: 'blue' },
+        ];
+    } else if (adminDashBreakdownMode === 'new') {
+        rows = [
+            { label: 'Pending orders', value: stats.pending_orders || 0, tone: 'purple' },
+            { label: 'New clients', value: stats.today_customers || 0, tone: 'red' },
+            { label: 'Open tickets', value: stats.open_tickets || 0, tone: 'orange' },
+            { label: 'Staff', value: stats.staff_count || 0, tone: 'blue' },
+        ];
+    }
+    const maxVal = Math.max(...rows.map((r) => Number(r.value) || 0), 1);
+    host.innerHTML = rows.map((row) => {
+        const tone = adminDashToneClass(row.tone);
+        const value = Number(row.value) || 0;
+        const pct = Math.max(8, Math.round((value / maxVal) * 100));
+        return `
+        <div class="dash-break-row">
+            <div class="dash-break-label"><span class="dash-dot tone-${tone}"></span>${escapeHtml(row.label)}</div>
+            <div class="dash-break-bar"><div class="dash-break-fill tone-${tone}" style="width:${pct}%"></div></div>
+            <div class="dash-break-val">${value.toLocaleString('en-GB')}</div>
+        </div>`;
+    }).join('');
+}
+
+function renderAdminDashRings(payload) {
+    const host = document.getElementById('adm-dash-rings');
+    if (!host) return;
+    const rings = Array.isArray(payload.rings) ? payload.rings : [];
+    const circum = 2 * Math.PI * 36;
+    host.innerHTML = rings.map((ring) => {
+        const tone = adminDashToneClass(ring.tone);
+        const pct = Math.max(0, Math.min(100, Number(ring.pct) || 0));
+        const offset = circum - (circum * pct) / 100;
+        const view = escapeHtml(ring.view || 'admin-dashboard');
+        return `
+        <article class="dash-ring-card" onclick="switchView('${view}')">
+            <div class="dash-ring-label">${escapeHtml(ring.label || '')}</div>
+            <div class="dash-ring">
+                <svg viewBox="0 0 80 80" aria-hidden="true">
+                    <circle class="dash-ring-track" cx="40" cy="40" r="36"></circle>
+                    <circle class="dash-ring-value tone-${tone}" cx="40" cy="40" r="36"
+                        style="stroke-dasharray:${circum}; stroke-dashoffset:${offset};"></circle>
+                </svg>
+                <div class="dash-ring-pct">${pct}%</div>
+            </div>
+            <div class="dash-ring-num">${Number(ring.value || 0).toLocaleString('en-GB')}</div>
+            <span class="dash-ring-link">View All</span>
+        </article>`;
+    }).join('');
+}
+
+function renderAdminDashOps(payload) {
+    const list = document.getElementById('adm-dash-ops-list');
+    const gaugeNum = document.getElementById('adm-dash-gauge-num');
+    const gaugeLabel = document.getElementById('adm-dash-gauge-label');
+    const gaugeArc = document.getElementById('adm-dash-gauge-arc');
+    const ops = payload.ops || {};
+    const stats = payload.stats || {};
+    if (list) {
+        const rows = [
+            { label: 'Grade', value: `${ops.grade || stats.completion_rate || 0}%`, tone: 'purple' },
+            { label: 'Pending orders', value: String(ops.pending_orders || 0), tone: 'orange' },
+            { label: 'Open tickets', value: String(ops.open_tickets || 0), tone: 'red' },
+            { label: 'Docs to review', value: String(ops.pending_documents || 0), tone: 'blue' },
+        ];
+        if (canViewRevenue() && stats.total_revenue) {
+            rows[1] = { label: 'Revenue', value: String(stats.total_revenue), tone: 'green' };
+        }
+        list.innerHTML = rows.map((row) => `
+            <li><span class="dash-dot tone-${adminDashToneClass(row.tone)}"></span>${escapeHtml(row.label)}<strong>${escapeHtml(row.value)}</strong></li>
+        `).join('');
+    }
+    const gaugeValue = Number(ops.gauge_value || 0);
+    if (gaugeNum) gaugeNum.textContent = String(gaugeValue);
+    if (gaugeLabel) gaugeLabel.textContent = ops.gauge_label || 'Open work';
+    if (gaugeArc) {
+        const circum = 2 * Math.PI * 46;
+        const pct = Math.max(8, Math.min(100, gaugeValue === 0 ? 8 : Math.min(100, 20 + gaugeValue * 4)));
+        gaugeArc.style.strokeDasharray = String(circum);
+        gaugeArc.style.strokeDashoffset = String(circum - (circum * pct) / 100);
+    }
+}
+
+function renderAdminOrderStatChart(payload) {
+    const canvas = document.getElementById('admin-chart-canvas');
+    if (!canvas) return;
+    const charts = payload.charts || {};
+    let rows = [];
+    if (adminDashOrderRange === 'weekly') rows = charts.orders_weekly || [];
+    else if (adminDashOrderRange === 'yearly') rows = charts.orders_yearly || [];
+    else rows = charts.orders_daily || [];
+    const labels = rows.map((r) => r.label || '');
+    const values = rows.map((r) => Number(r.cnt) || 0);
+    const peak = Math.max(...values, 0);
+    const peakIdx = values.indexOf(peak);
+
+    const draw = () => {
+        if (typeof Chart !== 'function') {
+            drawRevenueFallback(canvas, labels, values);
+            return;
+        }
+        if (adminUserStatChart && typeof adminUserStatChart.destroy === 'function') {
+            adminUserStatChart.destroy();
+            adminUserStatChart = null;
+        }
+        if (adminChart && typeof adminChart.destroy === 'function') {
+            adminChart.destroy();
+            adminChart = null;
+        }
+        adminUserStatChart = new Chart(canvas, {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'Orders',
+                    data: values,
+                    borderColor: '#8b5cf6',
+                    backgroundColor: (ctx) => {
+                        const chart = ctx.chart;
+                        const { ctx: c, chartArea } = chart;
+                        if (!chartArea) return 'rgba(139, 92, 246, 0.12)';
+                        const grad = c.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+                        grad.addColorStop(0, 'rgba(139, 92, 246, 0.35)');
+                        grad.addColorStop(1, 'rgba(139, 92, 246, 0.02)');
+                        return grad;
+                    },
+                    borderWidth: 2.5,
+                    fill: true,
+                    tension: 0.4,
+                    pointRadius: (ctx) => (ctx.dataIndex === peakIdx && peak > 0 ? 5 : 0),
+                    pointHoverRadius: 6,
+                    pointBackgroundColor: '#8b5cf6',
+                    pointBorderColor: '#ffffff',
+                    pointBorderWidth: 2,
+                }],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: '#8b5cf6',
+                        titleColor: '#fff',
+                        bodyColor: '#fff',
+                        padding: 10,
+                        cornerRadius: 10,
+                        displayColors: false,
+                        callbacks: {
+                            title: () => '',
+                            label: (ctx) => `${Number(ctx.parsed.y || 0).toLocaleString('en-GB')} orders`,
+                        },
+                    },
+                },
+                scales: {
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: '#aeaeb2', font: { family: APPLE_UI_FONT, size: 11 } },
+                        border: { display: false },
+                    },
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: 'rgba(0,0,0,0.04)' },
+                        ticks: {
+                            color: '#aeaeb2',
+                            font: { family: APPLE_UI_FONT, size: 11 },
+                            precision: 0,
+                        },
+                        border: { display: false },
+                    },
+                },
+            },
+        });
+        adminChart = adminUserStatChart;
+    };
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+        ensureChartJs().then(draw).catch(() => drawRevenueFallback(canvas, labels, values));
+    }));
+}
+
 async function loadAdminDashboard() {
     if (!canViewAdminDashboard()) return;
     try {
@@ -3904,70 +4805,6 @@ async function loadAdminDashboard() {
     } catch (err) {
         console.error(err);
     }
-}
-
-function drawRevenueFallback(canvas, labels, values) {
-    const wrap = canvas.parentElement;
-    const width = Math.max(wrap ? wrap.clientWidth : 0, 260);
-    const height = Math.max(wrap ? wrap.clientHeight : 0, 200);
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.floor(width * dpr);
-    canvas.height = Math.floor(height * dpr);
-    canvas.style.width = `${width}px`;
-    canvas.style.height = `${height}px`;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, width, height);
-    const pad = { top: 16, right: 12, bottom: 36, left: 48 };
-    const plotW = Math.max(width - pad.left - pad.right, 10);
-    const plotH = Math.max(height - pad.top - pad.bottom, 10);
-    const max = Math.max(...values, 1);
-    ctx.strokeStyle = '#e2e8f0';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(pad.left, pad.top);
-    ctx.lineTo(pad.left, pad.top + plotH);
-    ctx.lineTo(pad.left + plotW, pad.top + plotH);
-    ctx.stroke();
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = `11px ${APPLE_UI_FONT}`;
-    ctx.textAlign = 'right';
-    ctx.fillText(`£${Math.round(max)}`, pad.left - 8, pad.top + 4);
-    ctx.fillText('£0', pad.left - 8, pad.top + plotH);
-    const points = values.map((value, idx) => {
-        const x = pad.left + (values.length === 1 ? plotW / 2 : (plotW * idx) / (values.length - 1));
-        const y = pad.top + plotH - (value / max) * plotH;
-        return { x, y, label: labels[idx] || '' };
-    });
-    ctx.beginPath();
-    points.forEach((pt, idx) => {
-        if (idx === 0) ctx.moveTo(pt.x, pt.y);
-        else ctx.lineTo(pt.x, pt.y);
-    });
-    ctx.strokeStyle = '#003971';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    if (points.length) {
-        ctx.lineTo(points[points.length - 1].x, pad.top + plotH);
-        ctx.lineTo(points[0].x, pad.top + plotH);
-        ctx.closePath();
-        ctx.fillStyle = 'rgba(0, 108, 255, 0.12)';
-        ctx.fill();
-    }
-    points.forEach((pt) => {
-        ctx.beginPath();
-        ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2);
-        ctx.fillStyle = '#006cff';
-        ctx.fill();
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        ctx.fillStyle = '#64748b';
-        ctx.font = `10px ${APPLE_UI_FONT}`;
-        ctx.textAlign = 'center';
-        ctx.fillText(pt.label, pt.x, height - 10);
-    });
 }
 
 function renderAdminChart(monthlyData) {
@@ -8146,6 +8983,8 @@ async function loadAdminSettings() {
             const s = data.settings || {};
             if (s.company_name) document.getElementById('set-company-name').value = s.company_name;
             if (s.support_email) document.getElementById('set-support-email').value = s.support_email;
+            const teamEmails = document.getElementById('set-team-notification-emails');
+            if (teamEmails) teamEmails.value = s.team_notification_emails || '';
             if (s.currency) document.getElementById('set-currency').value = s.currency;
             if (s.order_prefix) document.getElementById('set-order-prefix').value = s.order_prefix;
             const formfillUrl = document.getElementById('set-uk-formfill-url');
@@ -8171,8 +9010,43 @@ async function loadAdminSettings() {
                     ? 'Customer emails are enabled. Uploaded documents will email the client automatically.'
                     : 'Add your Hostinger SMTP details below, save, then send a test email to confirm delivery.';
             }
+            const ca = s.compliance_alerts || {};
+            const setChk = (id, val) => { const el = document.getElementById(id); if (el) el.checked = !!val; };
+            const setVal = (id, val) => { const el = document.getElementById(id); if (el && val != null && val !== '') el.value = val; };
+            setChk('set-compliance-enabled', ca.enabled);
+            setChk('set-compliance-verified-only', !!ca.verified_only);
+            setChk('set-compliance-whatsapp', ca.whatsapp_enabled !== false);
+            setChk('set-compliance-test-mode', ca.test_mode);
+            setVal('set-compliance-hour', ca.send_hour != null ? ca.send_hour : 11);
+            setVal('set-compliance-interval', ca.interval_hours != null ? ca.interval_hours : 24);
+            setVal('set-compliance-timezone', ca.timezone || 'Asia/Karachi');
+            setVal('set-compliance-test-recipient', ca.test_recipient || 'brixenconsultant@gmail.com');
+            setVal('set-compliance-website', ca.website || s.compliance_alerts_website || 'https://brixenconsultants.com');
+            setVal('set-compliance-whatsapp-url', ca.whatsapp_url || s.compliance_alerts_whatsapp_url || '');
         }
     } catch (err) { console.error(err); }
+}
+
+async function sendRmkComplianceTestEmail() {
+    const statusEl = document.getElementById('set-compliance-test-status');
+    if (statusEl) statusEl.textContent = 'Preparing RMK TRADING test…';
+    try {
+        const recipient = ((document.getElementById('set-compliance-test-recipient') || {}).value || '').trim();
+        const res = await fetch('/api/admin/compliance-alerts/test-rmk', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: recipient || 'brixenconsultant@gmail.com' }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'RMK test blocked.');
+        }
+        const companyName = (data.company && data.company.name) || 'RMK TRADING';
+        if (statusEl) statusEl.textContent = `Test sent for ${companyName} → ${data.recipient || recipient}`;
+    } catch (err) {
+        if (statusEl) statusEl.textContent = err.message || 'RMK test failed.';
+    }
 }
 
 async function sendAdminSettingsTestEmail() {
@@ -8203,11 +9077,12 @@ async function saveAdminSettings(e) {
     e.preventDefault();
     const company_name = document.getElementById('set-company-name').value;
     const support_email = document.getElementById('set-support-email').value;
+    const team_notification_emails = (document.getElementById('set-team-notification-emails') || {}).value || '';
     const currency = document.getElementById('set-currency').value;
     const order_prefix = document.getElementById('set-order-prefix').value;
     const companies_house_api_key = (document.getElementById('set-companies-house-api-key') || {}).value || '';
     const uk_formfill_pro_url = ((document.getElementById('set-uk-formfill-url') || {}).value || '').trim();
-    const payload = { company_name, support_email, currency, order_prefix };
+    const payload = { company_name, support_email, team_notification_emails, currency, order_prefix };
     if (companies_house_api_key.trim()) payload.companies_house_api_key = companies_house_api_key.trim();
     if (uk_formfill_pro_url) {
         payload.uk_formfill_pro_url = uk_formfill_pro_url.replace(/\/$/, '');
@@ -8223,6 +9098,16 @@ async function saveAdminSettings(e) {
     if (smtp_user.trim()) payload.smtp_user = smtp_user.trim();
     if (smtp_pass.trim()) payload.smtp_pass = smtp_pass.trim();
     if (smtp_from.trim()) payload.smtp_from = smtp_from.trim();
+    payload.compliance_alerts_enabled = !!(document.getElementById('set-compliance-enabled') || {}).checked;
+    payload.compliance_alerts_verified_only = !!(document.getElementById('set-compliance-verified-only') || {}).checked;
+    payload.compliance_alerts_whatsapp_enabled = !!(document.getElementById('set-compliance-whatsapp') || {}).checked;
+    payload.compliance_alerts_test_mode = !!(document.getElementById('set-compliance-test-mode') || {}).checked;
+    payload.compliance_alerts_send_hour = ((document.getElementById('set-compliance-hour') || {}).value || '11').trim();
+    payload.compliance_alerts_interval_hours = ((document.getElementById('set-compliance-interval') || {}).value || '24').trim();
+    payload.compliance_alerts_timezone = ((document.getElementById('set-compliance-timezone') || {}).value || 'Asia/Karachi').trim();
+    payload.compliance_alerts_test_recipient = ((document.getElementById('set-compliance-test-recipient') || {}).value || '').trim();
+    payload.compliance_alerts_website = ((document.getElementById('set-compliance-website') || {}).value || '').trim();
+    payload.compliance_alerts_whatsapp_url = ((document.getElementById('set-compliance-whatsapp-url') || {}).value || '').trim();
 
     try {
         const res = await fetch('/api/admin/settings', {
@@ -8654,23 +9539,328 @@ window.addEventListener('scroll', positionGlobalSearchResults, true);
 
 let intakeQueueItems = [];
 let intakeBatchIdentities = [];
+let currentIntakeDocType = '';
+let currentIntakeDocTypes = [];
 
-function getIntakeCategoryLabel(fname) {
-    const fn = (fname || '').toLowerCase();
-    if (fn.includes('passport') || fn.includes('cnic') || fn.includes('id') || fn.includes('license')) return 'Passport / ID';
-    if (fn.includes('statement') || fn.includes('bank')) return 'Bank Statement';
-    if (fn.includes('utility') || fn.includes('bill') || fn.includes('address')) return 'Proof of Address';
-    if (fn.includes('certificate') || fn.includes('company') || fn.includes('inc')) return 'Company Document';
-    return 'Document';
+const INTAKE_ALLOWED_EXTENSIONS = new Set([
+    'pdf', 'png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff',
+]);
+const INTAKE_DOC_TYPE_OPTIONS = [
+    { value: '', label: 'Auto-detect' },
+    { value: 'Passport', label: 'Passport' },
+    { value: 'Driving Licence', label: 'Driving licence' },
+    { value: 'Identity Card', label: 'Identity card' },
+    { value: 'Bank Statement', label: 'Bank statement' },
+    { value: 'Company Document', label: 'Company document' },
+    { value: 'Invoice', label: 'Invoice' },
+];
+const INTAKE_ID_KINDS = new Set(['Passport', 'Identity Card', 'Driving Licence']);
+const INTAKE_JUNK_BASENAMES = new Set([
+    '.ds_store', 'thumbs.db', 'desktop.ini', '.localized', 'icon\r', 'ehthumbs.db',
+]);
+const INTAKE_JUNK_PATH_PARTS = [
+    '__macosx', '/.git/', '/.svn/', '/node_modules/', '/.trash/', '/.tmp/',
+];
+const INTAKE_PASSPORT_RE = /passport/i;
+const INTAKE_ID_CARD_RE = /(?:\bid\b[\s_-]?card|identity\s*card|national\s*id|cnic|nicop|\bnid\b|\bnic\b|id[\s_-]?verif)/i;
+const INTAKE_LICENCE_RE = /driving\s*licen[cs]e|\bdvla\b|\blicen[cs]e\b/i;
+const INTAKE_STATEMENT_RE = /bank\s*statement|\bstatement\b|account\s*statement|balance\s*statement/i;
+const INTAKE_COMPANY_RE = /certificate\s*of\s*incorporat|incorporat|newinc|company[\s_-]?profile|confirmation\s*statement|psc0[0-9]|ap0[0-9]|tm0[0-9]|\baa_\b|memorandum|articles\s*of\s*association|companies\s*house|company\s*doc|share\s*cert|officer|director\s*list|subscriber/i;
+const INTAKE_COMPANY_NUM_RE = /(?:^|[^0-9A-Za-z])((?:SC|NI|OC|SO)\d{6}|\d{8})(?=[_\-\s.]|$)/i;
+const INTAKE_INVOICE_RE = /invoice|tax\s*invoice/i;
+const INTAKE_RECEIPT_ONLY_RE = /\breceipt\b/i;
+
+function intakeFileExtension(name) {
+    const base = String(name || '').split(/[\\/]/).pop() || '';
+    const parts = base.split('.');
+    if (parts.length < 2) return '';
+    return parts.pop().toLowerCase();
+}
+
+function intakeMimeExtension(file) {
+    const mime = String((file && file.type) || '').toLowerCase();
+    if (mime === 'image/jpeg' || mime === 'image/jpg') return 'jpg';
+    if (mime === 'image/png') return 'png';
+    if (mime === 'image/webp') return 'webp';
+    if (mime === 'image/tiff') return 'tiff';
+    if (mime === 'application/pdf') return 'pdf';
+    return '';
+}
+
+function normalizeIntakeDocumentType(raw) {
+    const text = String(raw || '').trim().toLowerCase();
+    if (!text || text === 'auto' || text === 'auto-detect') return '';
+    if (text === 'passport') return 'Passport';
+    if (text === 'identity card' || text === 'id card' || text === 'id') return 'Identity Card';
+    if (text === 'driving licence' || text === 'driving license' || text === 'licence' || text === 'license') {
+        return 'Driving Licence';
+    }
+    if (text === 'bank statement' || text === 'statement') return 'Bank Statement';
+    if (text === 'company document' || text === 'company documents' || text === 'company') {
+        return 'Company Document';
+    }
+    if (text === 'invoice' || text === 'invoices') return 'Invoice';
+    return '';
+}
+
+function classifyIntakeDocumentKind(pathLabel) {
+    const text = String(pathLabel || '');
+    const lower = text.toLowerCase().replace(/\\/g, '/');
+    // Folder names count too: .../Passports/scan.jpg
+    if (INTAKE_PASSPORT_RE.test(text) || /\/passports?\//.test(lower)) return 'Passport';
+    if (INTAKE_ID_CARD_RE.test(text) || /\/(?:id[_-]?cards?|identity|cnic|ids?)\//.test(lower)) return 'Identity Card';
+    if (INTAKE_LICENCE_RE.test(text) || /\/(?:licen[cs]es?|driving)\//.test(lower)) return 'Driving Licence';
+    if (INTAKE_STATEMENT_RE.test(text) || /\/(?:bank[_-]?statements?|statements?)\//.test(lower)) return 'Bank Statement';
+    if (INTAKE_COMPANY_RE.test(text) || INTAKE_COMPANY_NUM_RE.test(text) || /\/(?:company[_-]?docs?|companies[_-]?house|incorporation)\//.test(lower)) {
+        return 'Company Document';
+    }
+    if (INTAKE_INVOICE_RE.test(text) || /\/invoices?\//.test(lower)) return 'Invoice';
+    return null;
+}
+
+function getCheckedIntakeDocumentTypes() {
+    // Prefer the visible group so empty/ready panels stay consistent.
+    const groups = [
+        document.getElementById('intake-type-checkboxes'),
+        document.getElementById('intake-type-checkboxes-ready'),
+    ].filter(Boolean);
+    const source = groups.find((g) => g.offsetParent !== null) || groups[0];
+    const boxes = source
+        ? source.querySelectorAll('input[name="intake-doc-type"]:checked')
+        : document.querySelectorAll('input[name="intake-doc-type"]:checked');
+    const types = [];
+    boxes.forEach((box) => {
+        const normalized = normalizeIntakeDocumentType(box.value);
+        if (normalized && !types.includes(normalized)) types.push(normalized);
+    });
+    return types;
+}
+
+function syncIntakeTypeCheckboxes(selectedTypes) {
+    const wanted = new Set(
+        (Array.isArray(selectedTypes) ? selectedTypes : [selectedTypes])
+            .map((t) => normalizeIntakeDocumentType(t))
+            .filter(Boolean)
+    );
+    document.querySelectorAll('input[name="intake-doc-type"]').forEach((box) => {
+        const boxType = normalizeIntakeDocumentType(box.value);
+        box.checked = wanted.has(boxType);
+    });
+}
+
+function updateIntakeTypeHint() {
+    const hint = document.getElementById('intake-type-hint');
+    if (!hint) return;
+    const types = Array.isArray(currentIntakeDocTypes) ? currentIntakeDocTypes : [];
+    if (types.length) {
+        hint.textContent = `Only ${types.join(', ')} will be queued. Other files are skipped.`;
+    } else {
+        hint.textContent = 'Select multiple. Leave all unticked to auto-detect.';
+    }
+}
+
+function onIntakeTypeCheckboxChange() {
+    let types = getCheckedIntakeDocumentTypes();
+    if (currentIntakeSourceMode === 'ID_ONLY_DISCOVERY') {
+        types = types.filter((t) => INTAKE_ID_KINDS.has(t));
+    }
+    currentIntakeDocTypes = types;
+    currentIntakeDocType = types.length === 1 ? types[0] : '';
+    syncIntakeTypeCheckboxes(types);
+    updateIntakeTypeHint();
+}
+
+function setIntakeDocumentType(type) {
+    const normalized = normalizeIntakeDocumentType(type);
+    currentIntakeDocTypes = normalized ? [normalized] : [];
+    currentIntakeDocType = normalized || '';
+    syncIntakeTypeCheckboxes(currentIntakeDocTypes);
+    updateIntakeTypeHint();
+}
+
+function startIntakeBrowse(kind) {
+    if (kind === 'folder') {
+        const folderInput = document.getElementById('intake-folder-input');
+        if (folderInput) folderInput.click();
+        return;
+    }
+    const fileInput = document.getElementById('intake-files-input');
+    if (fileInput) fileInput.click();
+}
+
+function assessIntakeFileRelevance(file, relPath, mode, options) {
+    const opts = options || {};
+    const name = String((file && file.name) || '');
+    const path = String(relPath || name || '');
+    const lowerPath = path.toLowerCase().replace(/\\/g, '/');
+    const base = name.split(/[\\/]/).pop() || name;
+    const lowerBase = base.toLowerCase();
+    let ext = intakeFileExtension(base);
+    if (!ext || !INTAKE_ALLOWED_EXTENSIONS.has(ext)) {
+        const mimeExt = intakeMimeExtension(file);
+        if (mimeExt) ext = mimeExt;
+    }
+    const sourceMode = mode || currentIntakeSourceMode || 'CUSTOMER_UPLOADS';
+    const selectedTypes = (Array.isArray(opts.allowedTypes) ? opts.allowedTypes : getCheckedIntakeDocumentTypes())
+        .map((t) => normalizeIntakeDocumentType(t))
+        .filter(Boolean);
+    const fromFolder = Boolean(opts.fromFolder);
+    const size = Number((file && file.size) || 0);
+
+    if (!ext || !INTAKE_ALLOWED_EXTENSIONS.has(ext)) {
+        return { ok: false, reason: `Unsupported type (.${ext || 'unknown'}) — use PDF, JPEG, or PNG` };
+    }
+    if (INTAKE_JUNK_BASENAMES.has(lowerBase)) {
+        return { ok: false, reason: 'System/junk file' };
+    }
+    if (INTAKE_JUNK_PATH_PARTS.some((part) => lowerPath.includes(part))) {
+        return { ok: false, reason: 'Ignored folder path' };
+    }
+    if (size > 0 && size < 800) {
+        return { ok: false, reason: 'File too small / empty' };
+    }
+    if (size > 45 * 1024 * 1024) {
+        return { ok: false, reason: 'File too large (max 45MB)' };
+    }
+
+    const kind = classifyIntakeDocumentKind(`${lowerPath} ${lowerBase}`);
+
+    // Hard filter: when boxes are ticked, only those types enter the queue.
+    if (selectedTypes.length) {
+        if (kind && selectedTypes.includes(kind)) {
+            if (sourceMode === 'ID_ONLY_DISCOVERY' && !INTAKE_ID_KINDS.has(kind)) {
+                return { ok: false, reason: 'ID-Only mode: passport / ID card / driving licence only' };
+            }
+            return { ok: true, reason: kind, document_type: kind, allowed_types: selectedTypes.slice() };
+        }
+        // Browse Files (not folder): one type ticked + user picked the file → assign that type.
+        if (!fromFolder && selectedTypes.length === 1 && !kind) {
+            const only = selectedTypes[0];
+            if (sourceMode === 'ID_ONLY_DISCOVERY' && !INTAKE_ID_KINDS.has(only)) {
+                return { ok: false, reason: 'ID-Only mode: passport / ID card / driving licence only' };
+            }
+            return { ok: true, reason: only, document_type: only, allowed_types: selectedTypes.slice() };
+        }
+        if (kind) {
+            return { ok: false, reason: `Skipped (${kind}) — not in selected options` };
+        }
+        return {
+            ok: false,
+            reason: `Skipped — filename does not match selected: ${selectedTypes.join(', ')}`,
+        };
+    }
+
+    if (INTAKE_RECEIPT_ONLY_RE.test(`${lowerPath} ${lowerBase}`) && !INTAKE_INVOICE_RE.test(`${lowerPath} ${lowerBase}`)) {
+        return { ok: false, reason: 'Receipts skipped — tick Invoice to include them' };
+    }
+
+    if (kind) {
+        if (sourceMode === 'ID_ONLY_DISCOVERY' && !INTAKE_ID_KINDS.has(kind)) {
+            return { ok: false, reason: 'ID-Only mode: passport / ID card / driving licence only' };
+        }
+        return { ok: true, reason: kind, document_type: kind };
+    }
+
+    if (['pdf', 'png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff'].includes(ext)) {
+        return { ok: true, reason: 'Scan queued — high-quality OCR will confirm type', document_type: '' };
+    }
+    return {
+        ok: false,
+        reason: 'Only passports, licences, ID cards, bank statements, company docs, or invoices',
+    };
+}
+
+function getIntakeCategoryLabel(fname, forcedType) {
+    const forced = normalizeIntakeDocumentType(forcedType);
+    if (forced) return forced;
+    return classifyIntakeDocumentKind(fname || '') || 'Auto-detect';
+}
+
+function intakeTypeSelectHtml(selected, idx) {
+    const current = normalizeIntakeDocumentType(selected) || '';
+    const opts = INTAKE_DOC_TYPE_OPTIONS.map((opt) => {
+        const sel = (opt.value === current) ? ' selected' : '';
+        return `<option value="${escapeHtml(opt.value)}"${sel}>${escapeHtml(opt.label)}</option>`;
+    }).join('');
+    return `<select class="intake-type-select" onchange="updateIntakeFileType(${idx}, this.value)" title="Document type">${opts}</select>`;
+}
+
+function updateIntakeFileType(index, value) {
+    if (index < 0 || index >= intakeQueueItems.length) return;
+    const item = intakeQueueItems[index];
+    if (!item || item.upload_status === 'PROCESSING' || item.upload_status === 'PROCESSED') return;
+    const normalized = normalizeIntakeDocumentType(value);
+    item.document_type = normalized;
+    item.category = normalized || getIntakeCategoryLabel(item.name || item.relPath || '');
+    persistIntakeState();
+}
+
+function addFileToIntakeQueue(file, relPath, options) {
+    if (!file) return { added: false, reason: 'Missing file' };
+    const pathLabel = relPath || file.name;
+    const selectedTypes = getCheckedIntakeDocumentTypes();
+    currentIntakeDocTypes = selectedTypes.slice();
+    currentIntakeDocType = selectedTypes.length === 1 ? selectedTypes[0] : '';
+    const fromFolder = Boolean(options && options.fromFolder);
+    const verdict = assessIntakeFileRelevance(file, pathLabel, currentIntakeSourceMode, {
+        allowedTypes: selectedTypes,
+        fromFolder,
+    });
+    if (!verdict.ok) {
+        return { added: false, reason: verdict.reason, name: file.name };
+    }
+    const already = intakeQueueItems.some((item) => (
+        item.name === file.name
+        && Number(item.size) === Number(file.size)
+        && (item.relPath || item.name) === pathLabel
+    ));
+    if (already) {
+        return { added: false, reason: 'Duplicate in queue', name: file.name };
+    }
+    const docType = normalizeIntakeDocumentType(verdict.document_type) || '';
+    intakeQueueItems.push({
+        id: 'file_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+        file,
+        name: file.name,
+        relPath: pathLabel,
+        size: file.size,
+        document_type: docType,
+        allowed_types: Array.isArray(verdict.allowed_types) ? verdict.allowed_types : selectedTypes.slice(),
+        category: docType || getIntakeCategoryLabel(file.name),
+        upload_status: 'UPLOADED',
+        process_status: 'Ready for processing',
+        error: null,
+    });
+    return { added: true, name: file.name };
+}
+
+function enqueueIntakeFiles(fileList, getRelPath, options) {
+    const files = Array.from(fileList || []);
+    let added = 0;
+    const skipped = [];
+    const fromFolder = Boolean(options && options.fromFolder);
+    files.forEach((file) => {
+        const relPath = typeof getRelPath === 'function' ? getRelPath(file) : (file.webkitRelativePath || file.name);
+        const result = addFileToIntakeQueue(file, relPath, { fromFolder });
+        if (result.added) added += 1;
+        else if (result.reason && result.reason !== 'Duplicate in queue') {
+            skipped.push(`${result.name || file.name}: ${result.reason}`);
+        }
+    });
+    renderIntakeFilePreview();
+    showIntakeUploadSuccess(intakeQueueItems.length, skipped);
+    return { added, skipped };
 }
 
 function intakeDocPriority(item) {
     const name = String((item && item.name) || '').toLowerCase();
-    const cat = String((item && item.category) || '').toLowerCase();
-    if (cat.includes('passport') || cat.includes('id') || name.includes('passport') || name.includes('cnic')) return 0;
+    const cat = String((item && (item.document_type || item.category)) || '').toLowerCase();
+    if (cat.includes('passport') || cat.includes('identity') || cat.includes('licence') || cat.includes('license')
+        || name.includes('passport') || name.includes('cnic')) return 0;
     if (cat.includes('company') || name.includes('newinc') || name.includes('certificate')) return 1;
     if (cat.includes('bank') || name.includes('statement')) return 2;
-    return 3;
+    if (cat.includes('invoice')) return 3;
+    return 4;
 }
 
 function sortIntakeQueueForProcessing(items) {
@@ -8727,54 +9917,167 @@ function updateIntakeDropZoneState() {
     }
 }
 
-function showIntakeUploadSuccess(count) {
+function showIntakeUploadSuccess(count, skipped) {
     const succBanner = document.getElementById('adm-intake-success');
     const errBanner = document.getElementById('adm-intake-error');
-    if (errBanner) errBanner.style.display = 'none';
-    if (!succBanner) return;
     const n = Number(count) || 0;
+    const skippedList = Array.isArray(skipped) ? skipped : [];
+    if (errBanner) {
+        if (skippedList.length) {
+            errBanner.style.display = 'block';
+            const preview = skippedList.slice(0, 6).map((s) => escapeHtml(s)).join('<br>');
+            const more = skippedList.length > 6 ? `<br>…and ${skippedList.length - 6} more` : '';
+            errBanner.innerHTML = `Skipped ${skippedList.length} irrelevant/unsupported file(s):<br>${preview}${more}`;
+        } else {
+            errBanner.style.display = 'none';
+            errBanner.textContent = '';
+        }
+    }
+    if (!succBanner) return;
     if (n <= 0) {
-        succBanner.style.display = 'none';
+        succBanner.style.display = skippedList.length ? 'none' : 'none';
         succBanner.textContent = '';
         return;
     }
     const label = n === 1
-        ? '1 document queued in the browser and ready to process.'
-        : `${n} documents queued in the browser and ready to process.`;
+        ? '1 relevant document queued and ready to process.'
+        : `${n} relevant documents queued and ready to process.`;
     succBanner.style.display = 'block';
-    succBanner.innerHTML = `✓ ${label} Click Process — each file is scanned separately to avoid timeouts.`;
+    succBanner.innerHTML = `✓ ${label} Click Process — parallel fast upload (compressed images + binary transfer).`;
+}
+
+let currentIntakeSourceMode = 'CUSTOMER_UPLOADS';
+
+function switchIntakeSourceMode(mode) {
+    currentIntakeSourceMode = mode || 'CUSTOMER_UPLOADS';
+    ['customer-uploads', 'import-folder', 'id-discovery'].forEach(m => {
+        const btn = document.getElementById(`btn-source-${m}`);
+        if (btn) btn.classList.remove('is-active');
+    });
+    const key = mode.toLowerCase().replace(/_/g, '-');
+    const activeBtn = document.getElementById(`btn-source-${key}`);
+    if (activeBtn) activeBtn.classList.add('is-active');
+
+    const titleEl = document.getElementById('intake-zone-title');
+    const descEl = document.getElementById('intake-zone-desc');
+    if (mode === 'IMPORT_FOLDER') {
+        if (titleEl) titleEl.textContent = 'Drag & Drop Folder / Directory Tree Here';
+        if (descEl) descEl.textContent = 'Tick a document type below, then browse the folder. Images get high-quality OCR.';
+    } else if (mode === 'ID_ONLY_DISCOVERY') {
+        if (titleEl) titleEl.textContent = 'Drag & Drop Passport / ID / Driving Licence Here';
+        if (descEl) descEl.textContent = 'ID mode: tick Passport, ID card, and/or Licence, then browse.';
+        currentIntakeDocTypes = (currentIntakeDocTypes || []).filter((t) => INTAKE_ID_KINDS.has(t));
+        currentIntakeDocType = currentIntakeDocTypes.length === 1 ? currentIntakeDocTypes[0] : '';
+        syncIntakeTypeCheckboxes(currentIntakeDocTypes);
+    } else {
+        if (titleEl) titleEl.textContent = 'Drag & Drop Allowed Documents Here';
+        if (descEl) descEl.textContent = 'Tick types in one line (multiple OK), then browse. Images get high-quality OCR.';
+    }
+    updateIntakeTypeHint();
+}
+
+function triggerIntakeFileInput() {
+    startIntakeBrowse(currentIntakeSourceMode === 'IMPORT_FOLDER' ? 'folder' : 'files');
+}
+
+function onIntakeFolderSelected(event) {
+    enqueueIntakeFiles(event.target.files || [], (f) => f.webkitRelativePath || f.name, { fromFolder: true });
+    event.target.value = '';
+}
+
+async function compressIntakeFileForUpload(file) {
+    if (!file) return file;
+    const type = String(file.type || '').toLowerCase();
+    const name = String(file.name || 'document');
+    const isImage = type.startsWith('image/') || /\.(png|jpe?g|webp|tif|tiff)$/i.test(name);
+    if (!isImage) return file;
+    // Keep quality for OCR: only compress very large images; preserve resolution.
+    if (file.size && file.size < 2.5 * 1024 * 1024) return file;
+    try {
+        const bitmap = await createImageBitmap(file);
+        const maxEdge = 3200;
+        const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
+        // If already within OCR-friendly size, keep original bytes.
+        if (scale >= 0.98 && file.size < 6 * 1024 * 1024) {
+            if (typeof bitmap.close === 'function') bitmap.close();
+            return file;
+        }
+        const w = Math.max(1, Math.round(bitmap.width * scale));
+        const h = Math.max(1, Math.round(bitmap.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d', { alpha: false });
+        if (!ctx) return file;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, w, h);
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(bitmap, 0, 0, w, h);
+        if (typeof bitmap.close === 'function') bitmap.close();
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92));
+        if (!blob || blob.size >= file.size * 0.98) return file;
+        const outName = name.replace(/\.(png|webp|tif|tiff|jpe?g)$/i, '') + '.jpg';
+        return new File([blob], outName, { type: 'image/jpeg', lastModified: Date.now() });
+    } catch (_) {
+        return file;
+    }
 }
 
 async function processOneIntakeFile(item, batchIdentities) {
-    const b64 = await readFileAsBase64(item.file);
-    if (!b64) {
+    const sourceFile = item.file;
+    if (!sourceFile) {
         throw new Error(`Could not read ${item.name || 'document'}.`);
     }
+    const uploadFile = await compressIntakeFileForUpload(sourceFile);
+    const form = new FormData();
+    form.append('file', uploadFile, uploadFile.name || item.name || 'document.jpg');
+    form.append('file_name', item.name || uploadFile.name || 'document.jpg');
+    form.append('folder_path', item.relPath || item.name || uploadFile.name || '');
+    form.append('source_mode', currentIntakeSourceMode || 'CUSTOMER_UPLOADS');
+    form.append('document_type', normalizeIntakeDocumentType(item.document_type || item.category) || '');
+    form.append('hq_ocr', '1');
+    if (Array.isArray(item.allowed_types) && item.allowed_types.length) {
+        form.append('allowed_types', JSON.stringify(item.allowed_types));
+    }
+    form.append('batch_identities', JSON.stringify(Array.isArray(batchIdentities) ? batchIdentities : []));
+
     const res = await fetch('/api/admin/documents/intake/process', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
-        body: JSON.stringify({
-            files: [{ file_name: item.name, file_content_base64: b64 }],
-            batch_identities: Array.isArray(batchIdentities) ? batchIdentities : [],
-        }),
+        body: form,
     });
     const rawText = await res.text();
     let data = {};
     try {
         data = rawText ? JSON.parse(rawText) : {};
     } catch (_) {
-        const snippet = (rawText || '').replace(/\s+/g, ' ').trim().slice(0, 160);
-        throw new Error(
-            snippet
-                ? `Smart intake server error (${res.status}): ${snippet}`
-                : `Smart intake server error (${res.status}).`
-        );
+        const isHtml504 = rawText && (rawText.includes('504') || rawText.includes('Gateway Time-out') || rawText.includes('nginx'));
+        if (isHtml504) {
+            throw new Error(`Server gateway timeout (504). Please retry this document.`);
+        }
+        const snippet = (rawText || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
+        throw new Error(snippet ? `Server error (${res.status}): ${snippet}` : `Server error (${res.status}).`);
     }
     if (!res.ok || data.status !== 'success') {
         throw new Error(data.message || `Smart intake failed (${res.status}).`);
     }
     return data;
+}
+
+async function runIntakePool(items, concurrency, worker) {
+    const list = Array.isArray(items) ? items : [];
+    if (!list.length) return;
+    const limit = Math.max(1, Math.min(Number(concurrency) || 1, list.length));
+    let cursor = 0;
+    async function runner() {
+        while (cursor < list.length) {
+            const index = cursor;
+            cursor += 1;
+            await worker(list[index], index);
+        }
+    }
+    await Promise.all(Array.from({ length: limit }, () => runner()));
 }
 
 async function submitSmartIntakeForm(event) {
@@ -8818,58 +10121,77 @@ async function submitSmartIntakeForm(event) {
 
     try {
         const ordered = sortIntakeQueueForProcessing(intakeQueueItems.slice());
-        for (let i = 0; i < ordered.length; i++) {
-            const item = ordered[i];
+        // Count already-processed rows toward success.
+        ordered.forEach((item) => {
+            if (item && item.upload_status === 'PROCESSED') okCount += 1;
+        });
+        const pending = ordered.filter((item) => item && item.upload_status !== 'PROCESSED');
+        const idWave = pending.filter((item) => intakeDocPriority(item) === 0);
+        const otherWave = pending.filter((item) => intakeDocPriority(item) !== 0);
+        let completed = 0;
+
+        const processItem = async (item) => {
             if (!item.file) {
                 item.upload_status = 'FAILED';
                 item.process_status = 'Missing file data — re-upload this file.';
                 failCount += 1;
                 renderIntakeFilePreview();
-                continue;
+                return;
             }
-            if (item.upload_status === 'PROCESSED') {
-                okCount += 1;
-                continue;
-            }
-
             item.upload_status = 'PROCESSING';
-            item.process_status = `OCR & name-link (${i + 1}/${ordered.length})…`;
+            item.process_status = 'Compressing & uploading…';
             item.error = null;
             renderIntakeFilePreview();
             if (submitBtn) {
-                submitBtn.innerHTML = `<i data-lucide="loader" class="spin"></i> Processing ${i + 1} of ${ordered.length}…`;
+                submitBtn.innerHTML = `<i data-lucide="loader" class="spin"></i> Fast processing ${Math.min(completed + 1, pending.length)} / ${pending.length}…`;
                 if (window.lucide && typeof window.lucide.createIcons === 'function') {
                     window.lucide.createIcons();
                 }
             }
-
             try {
-                const data = await processOneIntakeFile(item, intakeBatchIdentities);
+                const identitiesSnapshot = Array.isArray(intakeBatchIdentities) ? intakeBatchIdentities.slice() : [];
+                const data = await processOneIntakeFile(item, identitiesSnapshot);
                 if (Array.isArray(data.batch_identities) && data.batch_identities.length) {
-                    intakeBatchIdentities = data.batch_identities;
+                    const merged = Array.isArray(intakeBatchIdentities) ? intakeBatchIdentities.slice() : [];
+                    data.batch_identities.forEach((ident) => {
+                        if (!ident || !(ident.full_name || ident.client_id)) return;
+                        const key = String(ident.client_id || ident.full_name || '').toLowerCase();
+                        const idx = merged.findIndex((m) => String(m.client_id || m.full_name || '').toLowerCase() === key);
+                        if (idx >= 0) merged[idx] = Object.assign({}, merged[idx], ident);
+                        else merged.push(ident);
+                    });
+                    intakeBatchIdentities = merged;
                 }
                 const fr = (data.file_results && data.file_results[0]) || {};
-                const ch = fr.companies_house_matching || {};
-                const linked = Boolean(
-                    ch.linked_from_passport
-                    || (fr.document_processing || {}).linked_passport_name
-                    || ((ch.reasons || []).join(' ').toLowerCase().includes('same person'))
-                );
-                item.upload_status = 'PROCESSED';
-                item.process_status = linked
-                    ? `Same person form · ${ch.company_name || ch.message || 'filed'}`
-                    : (ch.company_name
-                        ? `Filed · ${ch.company_name}${ch.confidence != null ? ` (${ch.confidence}%)` : ''}`
-                        : (ch.message || data.message || 'Filed under client profile'));
-                item.result = data;
-                okCount += 1;
-                if (Array.isArray(data.file_results)) aggregate.file_results.push(...data.file_results);
-                if (Array.isArray(data.filed_documents)) aggregate.filed_documents.push(...data.filed_documents);
-                if (data.client) aggregate.client = data.client;
-                if (data.company) aggregate.company = data.company;
-                if (data.scan && data.scan.ocr_used) aggregate.scan.ocr_used = true;
-                if (data.scan && Array.isArray(data.scan.methods)) {
-                    aggregate.scan.methods.push(...data.scan.methods);
+                const filingStatus = String((fr.filing_status || {}).status || '');
+                if (filingStatus === 'skipped') {
+                    item.upload_status = 'FAILED';
+                    item.process_status = (fr.filing_status || {}).message || 'Skipped — not a relevant document';
+                    item.error = item.process_status;
+                    failCount += 1;
+                } else {
+                    const ch = fr.companies_house_matching || {};
+                    const linked = Boolean(
+                        ch.linked_from_passport
+                        || (fr.document_processing || {}).linked_passport_name
+                        || ((ch.reasons || []).join(' ').toLowerCase().includes('same person'))
+                    );
+                    item.upload_status = 'PROCESSED';
+                    item.process_status = linked
+                        ? `Same person form · ${ch.company_name || ch.message || 'filed'}`
+                        : (ch.company_name
+                            ? `Filed · ${ch.company_name}${ch.confidence != null ? ` (${ch.confidence}%)` : ''}`
+                            : (ch.message || data.message || 'Filed under client profile'));
+                    item.result = data;
+                    okCount += 1;
+                    if (Array.isArray(data.file_results)) aggregate.file_results.push(...data.file_results);
+                    if (Array.isArray(data.filed_documents)) aggregate.filed_documents.push(...data.filed_documents);
+                    if (data.client) aggregate.client = data.client;
+                    if (data.company) aggregate.company = data.company;
+                    if (data.scan && data.scan.ocr_used) aggregate.scan.ocr_used = true;
+                    if (data.scan && Array.isArray(data.scan.methods)) {
+                        aggregate.scan.methods.push(...data.scan.methods);
+                    }
                 }
             } catch (fileErr) {
                 failCount += 1;
@@ -8877,12 +10199,17 @@ async function submitSmartIntakeForm(event) {
                 item.process_status = (fileErr && fileErr.message) || 'Processing failed';
                 item.error = item.process_status;
             }
+            completed += 1;
             renderIntakeFilePreview();
-        }
+        };
+
+        // IDs first (same-person linking), then remaining docs — both waves run in parallel.
+        await runIntakePool(idWave, 4, processItem);
+        await runIntakePool(otherWave, 6, processItem);
 
         aggregate.message = failCount
             ? `Processed ${okCount} of ${intakeQueueItems.length} document(s). ${failCount} failed — retry those rows or Reset and re-upload.`
-            : `Smart Intake successfully processed ${okCount} document(s).`;
+            : `Smart Intake stored ${okCount} document(s) in Customer Uploads.`;
 
         if (okCount > 0) {
             if (succBanner) {
@@ -8922,24 +10249,8 @@ async function submitSmartIntakeForm(event) {
 }
 
 function onIntakeFilesSelected(event) {
-    const files = event.target.files;
-    if (!files || files.length === 0) return;
-    for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        intakeQueueItems.push({
-            id: 'file_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
-            file: file,
-            name: file.name,
-            size: file.size,
-            category: getIntakeCategoryLabel(file.name),
-            upload_status: 'UPLOADED',
-            process_status: 'Ready for processing',
-            error: null
-        });
-    }
+    enqueueIntakeFiles(event.target.files || [], (f) => f.name, { fromFolder: false });
     event.target.value = '';
-    renderIntakeFilePreview();
-    showIntakeUploadSuccess(intakeQueueItems.length);
 }
 
 function onIntakeDragOver(event) {
@@ -8962,21 +10273,9 @@ function onIntakeDrop(event) {
     onIntakeDragLeave(event);
     const dt = event.dataTransfer;
     if (dt && dt.files && dt.files.length > 0) {
-        for (let i = 0; i < dt.files.length; i++) {
-            const file = dt.files[i];
-            intakeQueueItems.push({
-                id: 'file_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
-                file: file,
-                name: file.name,
-                size: file.size,
-                category: getIntakeCategoryLabel(file.name),
-                upload_status: 'UPLOADED',
-                process_status: 'Ready for processing',
-                error: null
-            });
-        }
-        renderIntakeFilePreview();
-        showIntakeUploadSuccess(intakeQueueItems.length);
+        const files = Array.from(dt.files);
+        const fromFolder = files.some((f) => String(f.webkitRelativePath || '').includes('/'));
+        enqueueIntakeFiles(files, (f) => f.webkitRelativePath || f.name, { fromFolder });
     }
 }
 
@@ -9027,7 +10326,9 @@ function renderIntakeFilePreview() {
             return `
             <tr>
                 <td><strong>${escapeHtml(item.name)}</strong></td>
-                <td><span class="badge-status-completed">${escapeHtml(item.category || 'Document')}</span></td>
+                <td>${(item.upload_status === 'PROCESSING' || item.upload_status === 'PROCESSED')
+                    ? `<span class="badge-status-completed">${escapeHtml(item.document_type || item.category || 'Document')}</span>`
+                    : intakeTypeSelectHtml(item.document_type || item.category, idx)}</td>
                 <td>${escapeHtml(formatDocumentSize(item.size))}</td>
                 <td>${statusBadge}</td>
                 <td><span style="font-size:0.85rem; color:#475569;">${escapeHtml(item.process_status || '')}</span></td>
@@ -9046,6 +10347,7 @@ function renderIntakeFilePreview() {
     if (window.lucide && typeof window.lucide.createIcons === 'function') {
         window.lucide.createIcons();
     }
+    persistIntakeState();
 }
 
 function removeIntakeFile(index) {
@@ -9056,11 +10358,56 @@ function removeIntakeFile(index) {
     }
 }
 
+function loadSmartIntakeView() {
+    if (intakeQueueItems && intakeQueueItems.length > 0) {
+        renderIntakeFilePreview();
+        return;
+    }
+    try {
+        const stored = sessionStorage.getItem('brixen_active_intake_queue');
+        if (stored) {
+            const parsed = JSON.parse(stored);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+                intakeQueueItems = parsed;
+                renderIntakeFilePreview();
+                return;
+            }
+        }
+    } catch (_) {}
+    renderIntakeFilePreview();
+}
+
+function persistIntakeState() {
+    try {
+        if (intakeQueueItems && intakeQueueItems.length > 0) {
+            const serializable = intakeQueueItems.map(i => ({
+                id: i.id,
+                name: i.name,
+                size: i.size,
+                category: i.category,
+                document_type: i.document_type || '',
+                upload_status: i.upload_status,
+                process_status: i.process_status,
+                error: i.error
+            }));
+            sessionStorage.setItem('brixen_active_intake_queue', JSON.stringify(serializable));
+        } else {
+            sessionStorage.removeItem('brixen_active_intake_queue');
+        }
+    } catch (_) {}
+}
+
 function resetSmartIntakeForm() {
     intakeQueueItems = [];
     intakeBatchIdentities = [];
-    const input = document.getElementById('intake-files-input');
-    if (input) input.value = '';
+    currentIntakeDocType = '';
+    currentIntakeDocTypes = [];
+    setIntakeDocumentType('');
+    sessionStorage.removeItem('brixen_active_intake_queue');
+    const inputFiles = document.getElementById('intake-files-input');
+    if (inputFiles) inputFiles.value = '';
+    const inputFolder = document.getElementById('intake-folder-input');
+    if (inputFolder) inputFolder.value = '';
     renderIntakeFilePreview();
     const resultsPanel = document.getElementById('intake-results-panel');
     if (resultsPanel) resultsPanel.style.display = 'none';
@@ -9085,17 +10432,19 @@ function renderIntakeResults(data) {
     const docProc = firstResult.document_processing || {};
     const chMatch = firstResult.companies_house_matching || {};
 
-    // Client Profile Card
+    // Client Profile Card — identity triad
     const extractedName = docProc.extracted_name || client.full_name || 'Unassigned / Anonymous';
+    const extractedDob = docProc.extracted_dob || (client.dob && client.dob !== 'Not detected' ? client.dob : null);
+    const extractedNat = docProc.nationality || (client.nationality && client.nationality !== 'Not detected' ? client.nationality : null);
     document.getElementById('res-client-name').textContent = extractedName;
-    document.getElementById('res-client-dob').textContent = client.dob ? `DOB: ${client.dob}` : 'DOB: Not detected';
+    document.getElementById('res-client-dob').textContent = extractedDob ? `DOB: ${extractedDob}` : 'DOB: Not detected';
+    const natEl = document.getElementById('res-client-nationality');
+    if (natEl) natEl.textContent = extractedNat ? `Nationality: ${extractedNat}` : 'Nationality: Not detected';
 
     const clientMeta = document.getElementById('res-client-meta');
     if (clientMeta) {
         const metaParts = [];
         if (docProc.doc_detected) metaParts.push(`Doc: ${docProc.doc_detected}`);
-        if (docProc.passport_number) metaParts.push(`Passport #: ${docProc.passport_number}`);
-        if (docProc.nationality) metaParts.push(`Nationality: ${docProc.nationality}`);
         clientMeta.textContent = metaParts.join(' | ');
     }
 
@@ -9108,35 +10457,41 @@ function renderIntakeResults(data) {
         clientAction.innerHTML = `<button type="button" class="btn-secondary" style="font-size:0.8rem;" onclick="openCrmClientModal(${client.id})"><i data-lucide="user"></i> View Customer File</button>`;
     }
 
-    // Document scan accuracy card
+    // Document scan accuracy card — name / DOB / nationality only
     const quality = docProc.extraction_quality || firstResult.extraction_quality || {};
     const accuracyScore = document.getElementById('res-accuracy-score');
     const accuracyFields = document.getElementById('res-accuracy-fields');
     const accuracyPreview = document.getElementById('res-accuracy-preview');
     const accuracyBadge = document.getElementById('res-accuracy-badge');
     const scoreVal = Number.isFinite(Number(quality.score)) ? Number(quality.score) : null;
-    const scoreLabel = quality.label || (scoreVal == null ? 'Unknown' : (scoreVal >= 75 ? 'High' : (scoreVal >= 50 ? 'Medium' : 'Low')));
+    const scoreLabel = quality.label || (scoreVal == null ? 'Unknown' : (scoreVal >= 67 ? 'High' : (scoreVal >= 34 ? 'Medium' : 'Low')));
     if (accuracyScore) {
         accuracyScore.textContent = scoreVal == null ? 'Accuracy unavailable' : `${scoreLabel} · ${scoreVal}%`;
     }
     if (accuracyFields) {
+        const idFields = quality.identity_fields || {};
+        const parts = [
+            (idFields.name || (extractedName && extractedName !== 'Unassigned / Anonymous')) ? 'Name ✓' : 'Name ✗',
+            (idFields.dob || extractedDob) ? 'DOB ✓' : 'DOB ✗',
+            (idFields.nationality || extractedNat) ? 'Nationality ✓' : 'Nationality ✗',
+        ];
         const found = quality.fields_found;
         const checked = quality.fields_checked;
         accuracyFields.textContent = (found != null && checked != null)
-            ? `Fields detected: ${found}/${checked} (name, DOB, ID details, document type)`
-            : 'Fields detected: —';
+            ? `Identity fields: ${found}/${checked} — ${parts.join(' · ')}`
+            : `Identity fields: ${parts.join(' · ')}`;
     }
     if (accuracyPreview) {
         const preview = (docProc.text_preview || firstResult.text_preview || '').trim();
         accuracyPreview.textContent = preview
             ? `OCR preview: ${preview.slice(0, 160)}${preview.length > 160 ? '…' : ''}`
-            : (quality.ocr_used ? 'OCR ran but little readable text was recovered.' : 'No OCR text available for this file.');
+            : (quality.ocr_used ? 'OCR ran but name / DOB / nationality were not recovered.' : 'No OCR text available for this file.');
     }
     if (accuracyBadge) {
         let badgeStyle = 'background:#ecfdf5; color:#047857; border:1px solid #a7f3d0;';
-        if (scoreVal != null && scoreVal < 50) badgeStyle = 'background:#fef2f2; color:#b91c1c; border:1px solid #fecaca;';
-        else if (scoreVal != null && scoreVal < 75) badgeStyle = 'background:#fffbeb; color:#b45309; border:1px solid #fde68a;';
-        accuracyBadge.innerHTML = `<span class="badge-status-pending" style="${badgeStyle}">${escapeHtml(scoreLabel)} extraction confidence</span>`;
+        if (scoreVal != null && scoreVal < 34) badgeStyle = 'background:#fef2f2; color:#b91c1c; border:1px solid #fecaca;';
+        else if (scoreVal != null && scoreVal < 67) badgeStyle = 'background:#fffbeb; color:#b45309; border:1px solid #fde68a;';
+        accuracyBadge.innerHTML = `<span class="badge-status-pending" style="${badgeStyle}">${escapeHtml(scoreLabel)} identity confidence</span>`;
     }
 
     // Companies House Auto-Match Card
@@ -9336,4 +10691,200 @@ async function linkIntakeCompaniesHouseCandidate(btn) {
         btn.innerHTML = original;
         delete btn.dataset.linking;
     }
+}
+
+// ----------------------------------------------------
+// STAFF DASHBOARD, TEAM INCENTIVES & TASK AUDIT LOGS
+// ----------------------------------------------------
+async function loadStaffDashboard() {
+    try {
+        const res = await fetch('/api/staff/my-dashboard');
+        const data = await res.json();
+        if (!res.ok || data.status !== 'success') {
+            return;
+        }
+        const m = data.metrics || {};
+        const pendingEl = document.getElementById('staff-metric-pending');
+        const inProgEl = document.getElementById('staff-metric-in-progress');
+        const completedEl = document.getElementById('staff-metric-completed');
+        if (pendingEl) pendingEl.textContent = m.pending_tasks || 0;
+        if (inProgEl) inProgEl.textContent = m.in_progress_tasks || 0;
+        if (completedEl) completedEl.textContent = m.completed_this_month || 0;
+        
+        const gradeEl = document.getElementById('staff-metric-grade');
+        if (gradeEl) {
+            gradeEl.textContent = `Grade ${m.grade || '--'}`;
+        }
+        
+        const statusEl = document.getElementById('staff-grade-status');
+        if (statusEl) {
+            statusEl.textContent = m.grade_label || 'Grade Performance Status';
+        }
+        
+        const badgeEl = document.getElementById('staff-bonus-badge');
+        if (badgeEl) {
+            badgeEl.textContent = `${m.bonus_badge || ''} • Monthly SLA: ${m.sla_rate || 100}% on-time completion`;
+        }
+        
+        const slaEl = document.getElementById('staff-sla-rate');
+        if (slaEl) {
+            slaEl.textContent = `${m.sla_rate || 100}% On-Time`;
+        }
+
+        const tbody = document.getElementById('staff-my-tasks-table');
+        if (tbody) {
+            const tasks = data.my_tasks || [];
+            if (tasks.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding:24px; color:#15803d; font-weight:600;">🎉 All caught up! Zero pending tasks.</td></tr>`;
+            } else {
+                tbody.innerHTML = tasks.map(t => {
+                    const isOverdue = t.due_date && new Date(t.due_date) < new Date() && t.status !== 'Completed';
+                    const priorityColor = t.priority === 'High' ? '#dc2626' : (t.priority === 'Medium' ? '#d97706' : '#64748b');
+                    return `
+                        <tr>
+                            <td style="font-weight:600; color:#0f172a;">
+                                <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                                    <span>${escapeHtml(t.title)}</span>
+                                    <button type="button" class="btn-secondary btn-table" style="padding:2px 6px; font-size:0.7rem;" onclick="openTaskAuditModal(${t.id}, '${escapeHtml(t.title)}')"><i data-lucide="history"></i> Audit Log</button>
+                                </div>
+                            </td>
+                            <td><span style="color:${priorityColor}; font-weight:700;">${t.priority}</span></td>
+                            <td><span class="badge-status-neutral">${escapeHtml(t.department || 'General')}</span></td>
+                            <td>${t.due_date ? (isOverdue ? `<span style="color:#dc2626; font-weight:700;">${t.due_date} (Overdue)</span>` : t.due_date) : '-'}</td>
+                            <td><span class="badge-status-${t.status === 'Completed' ? 'success' : (t.status === 'In Progress' ? 'progress' : 'pending')}">${t.status}</span></td>
+                            <td>
+                                ${t.status !== 'In Progress' ? `<button type="button" class="btn-secondary btn-table" onclick="updateStaffTaskStatus(${t.id}, 'In Progress')">Start</button>` : ''}
+                                ${t.status !== 'Completed' ? `<button type="button" class="btn-primary btn-table" onclick="updateStaffTaskStatus(${t.id}, 'Completed')">Complete</button>` : ''}
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+        }
+        if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
+    } catch (e) {
+        console.error('Staff dashboard load error:', e);
+    }
+}
+
+async function updateStaffTaskStatus(taskId, newStatus) {
+    try {
+        const res = await fetch(`/api/admin/tasks/${taskId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: newStatus })
+        });
+        const data = await res.json();
+        if (!res.ok || data.status !== 'success') {
+            alert(data.message || 'Could not update task status.');
+            return;
+        }
+        loadStaffDashboard();
+    } catch (e) {
+        console.error('Task status update error:', e);
+    }
+}
+
+async function loadTeamIncentivesReport() {
+    try {
+        const monthInput = document.getElementById('incentive-month-select');
+        let selectedMonth = '';
+        if (monthInput && monthInput.value) {
+            selectedMonth = monthInput.value;
+        } else {
+            const now = new Date();
+            selectedMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+            if (monthInput) monthInput.value = selectedMonth;
+        }
+
+        const res = await fetch(`/api/admin/tasks/incentives-report?month=${encodeURIComponent(selectedMonth)}`);
+        const data = await res.json();
+        if (!res.ok || data.status !== 'success') {
+            return;
+        }
+
+        const tbody = document.getElementById('admin-incentives-table');
+        if (tbody) {
+            const leaderboard = data.leaderboard || [];
+            if (leaderboard.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; padding:24px; color:#64748b;">No active team members found.</td></tr>`;
+            } else {
+                tbody.innerHTML = leaderboard.map((item, idx) => {
+                    const s = item.staff || {};
+                    const gradeBg = item.grade === 'A+' ? '#dcfce7; color:#15803d; border:1px solid #bbf7d0;' :
+                                    (item.grade === 'A' ? '#e0f2fe; color:#0369a1; border:1px solid #bae6fd;' :
+                                    (item.grade === 'B' ? '#fef3c7; color:#b45309; border:1px solid #fde68a;' :
+                                    (item.grade === 'C' ? '#ffedd5; color:#c2410c; border:1px solid #fed7aa;' : '#fee2e2; color:#b91c1c; border:1px solid #fca5a5;')));
+                    
+                    return `
+                        <tr>
+                            <td style="font-weight:700; color:#0f172a;">#${idx + 1}</td>
+                            <td style="font-weight:600; color:#0f172a;">${escapeHtml(s.full_name || 'Staff')} <div style="font-size:0.75rem; color:#64748b;">${escapeHtml(s.email || '')}</div></td>
+                            <td><span class="badge-status-neutral">${escapeHtml(s.department || 'General')}</span></td>
+                            <td style="font-weight:600;">${item.assigned_count}</td>
+                            <td style="font-weight:700; color:#15803d;">${item.completed_count}</td>
+                            <td style="font-weight:600; color:#0284c7;">${item.sla_rate}%</td>
+                            <td style="color:${item.overdue_count > 0 ? '#dc2626' : '#64748b'}; font-weight:${item.overdue_count > 0 ? '700' : '400'};">${item.overdue_count}</td>
+                            <td>
+                                <span style="display:inline-block; padding:4px 10px; border-radius:12px; font-weight:800; font-size:0.8rem; ${gradeBg}">
+                                    Grade ${item.grade}
+                                </span>
+                            </td>
+                            <td>
+                                <div style="font-weight:600; font-size:0.8rem; color:#0f172a;">${escapeHtml(item.grade_label)}</div>
+                                <div style="font-size:0.75rem; color:#64748b;">${escapeHtml(item.bonus_badge)}</div>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+        }
+        if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
+    } catch (e) {
+        console.error('Team incentives report load error:', e);
+    }
+}
+
+async function openTaskAuditModal(taskId, taskTitle) {
+    const modal = document.getElementById('modal-task-audit-logs');
+    const titleEl = document.getElementById('task-audit-title');
+    const bodyEl = document.getElementById('task-audit-logs-body');
+    if (!modal || !bodyEl) return;
+    
+    if (titleEl) titleEl.textContent = `Audit Trail for Task #${taskId}: ${taskTitle || ''}`;
+    bodyEl.innerHTML = `<div style="text-align:center; padding:20px; color:#64748b;"><i data-lucide="loader" class="spin"></i> Loading audit trail...</div>`;
+    modal.style.display = 'flex';
+    if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
+
+    try {
+        const res = await fetch(`/api/admin/tasks/${taskId}/audit-logs`);
+        const data = await res.json();
+        if (!res.ok || data.status !== 'success') {
+            bodyEl.innerHTML = `<div style="color:#dc2626; text-align:center; padding:20px;">Could not load audit logs.</div>`;
+            return;
+        }
+        const logs = data.audit_logs || [];
+        if (logs.length === 0) {
+            bodyEl.innerHTML = `<div style="text-align:center; padding:20px; color:#64748b;">No audit logs recorded for this task yet.</div>`;
+        } else {
+            bodyEl.innerHTML = logs.map(l => `
+                <div style="border-bottom:1px solid #e2e8f0; padding:10px 0; display:flex; justify-content:space-between; align-items:flex-start; gap:12px;">
+                    <div>
+                        <div style="font-weight:700; color:#0f172a;">${escapeHtml(l.action || '')}</div>
+                        <div style="color:#334155; margin-top:2px;">${escapeHtml(l.details || '')}</div>
+                        <div style="font-size:0.75rem; color:#64748b; margin-top:4px;">By: ${escapeHtml(l.actor_name || 'System')} (${l.actor_role || 'Staff'})</div>
+                    </div>
+                    <div style="font-size:0.75rem; color:#64748b; white-space:nowrap;">${l.created_at || ''}</div>
+                </div>
+            `).join('');
+        }
+    } catch (e) {
+        console.error('Task audit logs fetch error:', e);
+        bodyEl.innerHTML = `<div style="color:#dc2626; text-align:center; padding:20px;">Error loading audit trail.</div>`;
+    }
+}
+
+function closeTaskAuditModal() {
+    const modal = document.getElementById('modal-task-audit-logs');
+    if (modal) modal.style.display = 'none';
 }

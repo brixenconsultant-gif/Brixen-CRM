@@ -59,9 +59,8 @@
             if (app) app.setAttribute('hidden', '');
         });
     </script>
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-    <link rel="stylesheet" href="/static/css/styles.css?v=115.0">
+    <link rel="stylesheet" href="/static/css/styles.css?v=150.0">
+    <link rel="preload" href="/static/js/app.js?v=145.0" as="script">
 </head>
 <body>
     <div id="auth-loading-screen" role="status" aria-live="polite">
@@ -86,48 +85,48 @@
             <nav class="sidebar-nav">
                 <div class="nav-group">
                     <ul class="nav-list">
-                        <li class="nav-item" data-view="client-dashboard"><a href="#dashboard" onclick="switchView('client-dashboard')"><i data-lucide="layout-dashboard"></i> <span>Dashboard</span></a></li>
+                        <li class="nav-item" data-view="client-dashboard"><a href="#dashboard" onclick="event.preventDefault();switchView('client-dashboard')"><i data-lucide="layout-dashboard"></i> <span>Dashboard</span></a></li>
                     </ul>
                 </div>
 
                 <div class="nav-group">
                     <div class="nav-group-title">MY PORTFOLIO</div>
                     <ul class="nav-list">
-                        <li class="nav-item" data-view="client-companies" data-portfolio="Business Portfolio"><a href="#companies" onclick="switchView('client-companies')"><i data-lucide="building-2"></i> <span>Company Registered</span><span style="display:none">Business Portfolio</span></a></li>
-                        <li class="nav-item" data-view="client-accountancy"><a href="#accountancy" onclick="switchView('client-accountancy')"><i data-lucide="calculator"></i> <span>Accountancy</span></a></li>
-                        <li class="nav-item" data-view="client-addresses"><a href="#addresses" onclick="switchView('client-addresses')"><i data-lucide="map-pin"></i> <span>Addresses</span></a></li>
+                        <li class="nav-item" data-view="client-companies" data-portfolio="Business Portfolio"><a href="#companies" onclick="event.preventDefault();switchView('client-companies')"><i data-lucide="building-2"></i> <span>Company Registered</span><span style="display:none">Business Portfolio</span></a></li>
+                        <li class="nav-item" data-view="client-accountancy"><a href="#accountancy" onclick="event.preventDefault();switchView('client-accountancy')"><i data-lucide="calculator"></i> <span>Accountancy</span></a></li>
+                        <li class="nav-item" data-view="client-addresses"><a href="#addresses" onclick="event.preventDefault();switchView('client-addresses')"><i data-lucide="map-pin"></i> <span>Addresses</span></a></li>
                     </ul>
                 </div>
 
                 <div class="nav-group">
                     <div class="nav-group-title">FINANCIALS</div>
                     <ul class="nav-list">
-                        <li class="nav-item" data-view="client-orders"><a href="#orders" onclick="switchView('client-orders')"><i data-lucide="shopping-bag"></i> <span>Orders</span></a></li>
-                        <li class="nav-item" data-view="client-invoices"><a href="#invoices" onclick="switchView('client-invoices')"><i data-lucide="file-text"></i> <span>Invoices</span></a></li>
-                        <li class="nav-item" data-view="client-payments"><a href="#payments" onclick="switchView('client-payments')"><i data-lucide="credit-card"></i> <span>Payments</span></a></li>
+                        <li class="nav-item" data-view="client-orders"><a href="#orders" onclick="event.preventDefault();switchView('client-orders')"><i data-lucide="shopping-bag"></i> <span>Orders</span></a></li>
+                        <li class="nav-item" data-view="client-invoices"><a href="#invoices" onclick="event.preventDefault();switchView('client-invoices')"><i data-lucide="file-text"></i> <span>Invoices</span></a></li>
+                        <li class="nav-item" data-view="client-payments"><a href="#payments" onclick="event.preventDefault();switchView('client-payments')"><i data-lucide="credit-card"></i> <span>Payments</span></a></li>
                     </ul>
                 </div>
 
                 <div class="nav-group">
                     <div class="nav-group-title">SERVICES</div>
                     <ul class="nav-list">
-                        <li class="nav-item" data-view="client-documents"><a href="#documents" onclick="switchView('client-documents')"><i data-lucide="folder-lock"></i> <span>Documents</span></a></li>
-                        <li class="nav-item" data-view="client-services"><a href="#services" onclick="switchView('client-services')"><i data-lucide="layers"></i> <span>Services</span></a></li>
+                        <li class="nav-item" data-view="client-documents"><a href="#documents" onclick="event.preventDefault();switchView('client-documents')"><i data-lucide="folder-lock"></i> <span>Documents</span></a></li>
+                        <li class="nav-item" data-view="client-services"><a href="#services" onclick="event.preventDefault();switchView('client-services')"><i data-lucide="layers"></i> <span>Services</span></a></li>
                     </ul>
                 </div>
 
                 <div class="nav-group">
                     <div class="nav-group-title">SUPPORT</div>
                     <ul class="nav-list">
-                        <li class="nav-item" data-view="client-support"><a href="#support" onclick="switchView('client-support')"><i data-lucide="headphones"></i> <span>Order Support</span></a></li>
-                        <li class="nav-item" data-view="client-messages"><a href="#messages" onclick="switchView('client-messages')"><i data-lucide="message-square"></i> <span>Messages</span></a></li>
+                        <li class="nav-item" data-view="client-support"><a href="#support" onclick="event.preventDefault();switchView('client-support')"><i data-lucide="headphones"></i> <span>Order Support</span></a></li>
+                        <li class="nav-item" data-view="client-messages"><a href="#messages" onclick="event.preventDefault();switchView('client-messages')"><i data-lucide="message-square"></i> <span>Messages</span></a></li>
                     </ul>
                 </div>
 
                 <div class="nav-group">
                     <div class="nav-group-title">ACCOUNT</div>
                     <ul class="nav-list">
-                        <li class="nav-item" data-view="client-profile"><a href="#profile" onclick="switchView('client-profile')"><i data-lucide="user-check"></i> <span>Profile</span></a></li>
+                        <li class="nav-item" data-view="client-profile"><a href="#profile" onclick="event.preventDefault();switchView('client-profile')"><i data-lucide="user-check"></i> <span>Profile</span></a></li>
                     </ul>
                 </div>
             </nav>
@@ -135,7 +134,7 @@
             <div class="support-card">
                 <h4>Need Help?</h4>
                 <p>Speak to your dedicated corporate advisor.</p>
-                <button class="btn-support-card" onclick="switchView('client-support')">Contact Support</button>
+                <button class="btn-support-card" onclick="event.preventDefault();switchView('client-support')">Contact Support</button>
             </div>
         </aside>
 
@@ -156,14 +155,16 @@
                     <ul class="nav-list">
                         <li class="nav-item" data-view="admin-dashboard"><a href="#admin-dashboard"><i data-lucide="pie-chart"></i> <span>Overview</span></a></li>
                         <li class="nav-item" data-view="admin-customers"><a href="#admin-customers"><i data-lucide="users"></i> <span>Customers / Signups</span></a></li>
-                        <li class="nav-item" data-view="admin-companies"><a href="#admin-companies" onclick="switchView('admin-companies')"><i data-lucide="building-2"></i> <span>Company Registered</span></a></li>
-                        <li class="nav-item" data-view="admin-accountancy"><a href="#admin-accountancy" onclick="switchView('admin-accountancy')"><i data-lucide="calculator"></i> <span>Accountancy</span></a></li>
+                        <li class="nav-item" data-view="admin-companies"><a href="#admin-companies" onclick="event.preventDefault();switchView('admin-companies')"><i data-lucide="building-2"></i> <span>Company Registered</span></a></li>
+                        <li class="nav-item" data-view="admin-accountancy"><a href="#admin-accountancy" onclick="event.preventDefault();switchView('admin-accountancy')"><i data-lucide="calculator"></i> <span>Accountancy</span></a></li>
                         <li class="nav-item" data-view="admin-orders"><a href="#admin-orders"><i data-lucide="package-check"></i> <span>Orders Manager</span></a></li>
                         <li class="nav-item" data-view="admin-tasks"><a href="#admin-tasks"><i data-lucide="list-checks"></i> <span>Tasks &amp; Team</span></a></li>
                         <li class="nav-item" data-view="admin-services"><a href="#admin-services"><i data-lucide="layers"></i> <span>Services Catalog</span></a></li>
                         <li class="nav-item" data-view="admin-invoices"><a href="#admin-invoices"><i data-lucide="receipt"></i> <span>Invoices Manager</span></a></li>
-                        <li class="nav-item" data-view="admin-documents"><a href="#admin-documents" onclick="switchView('admin-documents')"><i data-lucide="file-check"></i> <span>Documents Review</span></a></li>
-                        <li class="nav-item" data-view="admin-intake"><a href="#admin-intake" onclick="switchView('admin-intake')"><i data-lucide="file-search"></i> <span>Smart Intake</span></a></li>
+                        <li class="nav-item" data-view="admin-documents"><a href="#admin-documents" onclick="event.preventDefault();switchView('admin-documents')"><i data-lucide="file-check"></i> <span>Documents Review</span></a></li>
+                        <li class="nav-item" data-view="admin-intake"><a href="#admin-intake" onclick="event.preventDefault();switchView('admin-intake')"><i data-lucide="file-search"></i> <span>Smart Intake</span></a></li>
+                        <li class="nav-item" data-view="admin-incentives"><a href="#admin-incentives" onclick="event.preventDefault();switchView('admin-incentives')"><i data-lucide="award"></i> <span>Team Incentives &amp; Grades</span></a></li>
+                        <li class="nav-item" data-view="staff-dashboard"><a href="#staff-dashboard" onclick="event.preventDefault();switchView('staff-dashboard')"><i data-lucide="layout-dashboard"></i> <span>My Performance Dashboard</span></a></li>
                         <li class="nav-item" data-view="admin-logs"><a href="#admin-logs"><i data-lucide="history"></i> <span>Audit Logs</span></a></li>
                         <li class="nav-item" data-view="admin-settings"><a href="#admin-settings"><i data-lucide="settings"></i> <span>System Settings</span></a></li>
                         <li class="nav-item" data-view="client-profile"><a href="#profile"><i data-lucide="user-cog"></i> <span>Profile &amp; Password</span></a></li>
@@ -209,64 +210,64 @@
                     <nav class="top-menu-nav" aria-label="Portal Navigation Section">
                         <ul class="top-menu-list" id="top-menu-list-client" style="display: none;">
                             <li class="top-menu-item" data-view="client-dashboard">
-                                <a href="#dashboard" onclick="switchView('client-dashboard')"><i data-lucide="layout-dashboard"></i> <span>Dashboard</span></a>
+                                <a href="#dashboard" onclick="event.preventDefault();switchView('client-dashboard')"><i data-lucide="layout-dashboard"></i> <span>Dashboard</span></a>
                             </li>
                             <li class="top-menu-item" data-view="client-orders">
-                                <a href="#orders" onclick="switchView('client-orders')"><i data-lucide="shopping-bag"></i> <span>Orders</span></a>
+                                <a href="#orders" onclick="event.preventDefault();switchView('client-orders')"><i data-lucide="shopping-bag"></i> <span>Orders</span></a>
                             </li>
                             <li class="top-menu-item" data-view="client-companies">
-                                <a href="#companies" onclick="switchView('client-companies')"><i data-lucide="building-2"></i> <span>Company Registered</span></a>
+                                <a href="#companies" onclick="event.preventDefault();switchView('client-companies')"><i data-lucide="building-2"></i> <span>Company Registered</span></a>
                             </li>
                             <li class="top-menu-item" data-view="client-accountancy">
-                                <a href="#accountancy" onclick="switchView('client-accountancy')"><i data-lucide="calculator"></i> <span>Accountancy</span></a>
+                                <a href="#accountancy" onclick="event.preventDefault();switchView('client-accountancy')"><i data-lucide="calculator"></i> <span>Accountancy</span></a>
                             </li>
                             <li class="top-menu-item" data-view="client-invoices">
-                                <a href="#invoices" onclick="switchView('client-invoices')"><i data-lucide="file-text"></i> <span>Invoices</span></a>
+                                <a href="#invoices" onclick="event.preventDefault();switchView('client-invoices')"><i data-lucide="file-text"></i> <span>Invoices</span></a>
                             </li>
                             <li class="top-menu-item" data-view="client-documents">
-                                <a href="#documents" onclick="switchView('client-documents')"><i data-lucide="folder-lock"></i> <span>Documents</span></a>
+                                <a href="#documents" onclick="event.preventDefault();switchView('client-documents')"><i data-lucide="folder-lock"></i> <span>Documents</span></a>
                             </li>
                             <li class="top-menu-item" data-view="client-support">
-                                <a href="#support" onclick="switchView('client-support')"><i data-lucide="headphones"></i> <span>Support</span></a>
+                                <a href="#support" onclick="event.preventDefault();switchView('client-support')"><i data-lucide="headphones"></i> <span>Support</span></a>
                             </li>
                             <li class="top-menu-item" data-view="client-profile">
-                                <a href="#profile" onclick="switchView('client-profile')"><i data-lucide="user"></i> <span>My Profile</span></a>
+                                <a href="#profile" onclick="event.preventDefault();switchView('client-profile')"><i data-lucide="user"></i> <span>My Profile</span></a>
                             </li>
                         </ul>
 
                         <ul class="top-menu-list" id="top-menu-list-admin" style="display: none;">
                             <li class="top-menu-item" data-view="admin-dashboard">
-                                <a href="#admin-dashboard" onclick="switchView('admin-dashboard')"><i data-lucide="layout-dashboard"></i> <span>Dashboard</span></a>
+                                <a href="#admin-dashboard" onclick="event.preventDefault();switchView('admin-dashboard')"><i data-lucide="layout-dashboard"></i> <span>Dashboard</span></a>
                             </li>
                             <li class="top-menu-item" data-view="admin-orders">
-                                <a href="#admin-orders" onclick="switchView('admin-orders')"><i data-lucide="shopping-bag"></i> <span>Orders</span></a>
+                                <a href="#admin-orders" onclick="event.preventDefault();switchView('admin-orders')"><i data-lucide="shopping-bag"></i> <span>Orders</span></a>
                             </li>
                             <li class="top-menu-item" data-view="admin-tasks">
-                                <a href="#admin-tasks" onclick="switchView('admin-tasks')"><i data-lucide="check-square"></i> <span>Tasks &amp; Team</span></a>
+                                <a href="#admin-tasks" onclick="event.preventDefault();switchView('admin-tasks')"><i data-lucide="check-square"></i> <span>Tasks &amp; Team</span></a>
                             </li>
                             <li class="top-menu-item" data-view="admin-customers">
-                                <a href="#admin-customers" onclick="switchView('admin-customers')"><i data-lucide="users"></i> <span>Customers / Signups</span></a>
+                                <a href="#admin-customers" onclick="event.preventDefault();switchView('admin-customers')"><i data-lucide="users"></i> <span>Customers / Signups</span></a>
                             </li>
                             <li class="top-menu-item" data-view="admin-companies">
-                                <a href="#admin-companies" onclick="switchView('admin-companies')"><i data-lucide="building-2"></i> <span>Company Registered</span></a>
+                                <a href="#admin-companies" onclick="event.preventDefault();switchView('admin-companies')"><i data-lucide="building-2"></i> <span>Company Registered</span></a>
                             </li>
                             <li class="top-menu-item" data-view="admin-accountancy">
-                                <a href="#admin-accountancy" onclick="switchView('admin-accountancy')"><i data-lucide="calculator"></i> <span>Accountancy</span></a>
+                                <a href="#admin-accountancy" onclick="event.preventDefault();switchView('admin-accountancy')"><i data-lucide="calculator"></i> <span>Accountancy</span></a>
                             </li>
                             <li class="top-menu-item" data-view="admin-documents">
-                                <a href="#admin-documents" onclick="switchView('admin-documents')"><i data-lucide="folder-lock"></i> <span>Documents</span></a>
+                                <a href="#admin-documents" onclick="event.preventDefault();switchView('admin-documents')"><i data-lucide="folder-lock"></i> <span>Documents</span></a>
                             </li>
                             <li class="top-menu-item" data-view="admin-intake">
-                                <a href="#admin-intake" onclick="switchView('admin-intake')"><i data-lucide="file-search"></i> <span>Smart Intake</span></a>
+                                <a href="#admin-intake" onclick="event.preventDefault();switchView('admin-intake')"><i data-lucide="file-search"></i> <span>Smart Intake</span></a>
                             </li>
                             <li class="top-menu-item" data-view="admin-logs">
-                                <a href="#admin-logs" onclick="switchView('admin-logs')"><i data-lucide="activity"></i> <span>Logs</span></a>
+                                <a href="#admin-logs" onclick="event.preventDefault();switchView('admin-logs')"><i data-lucide="activity"></i> <span>Logs</span></a>
                             </li>
                             <li class="top-menu-item" data-view="admin-settings">
-                                <a href="#admin-settings" onclick="switchView('admin-settings')"><i data-lucide="settings"></i> <span>Settings</span></a>
+                                <a href="#admin-settings" onclick="event.preventDefault();switchView('admin-settings')"><i data-lucide="settings"></i> <span>Settings</span></a>
                             </li>
                             <li class="top-menu-item" data-view="client-profile">
-                                <a href="#profile" onclick="switchView('client-profile')"><i data-lucide="user-cog"></i> <span>Profile</span></a>
+                                <a href="#profile" onclick="event.preventDefault();switchView('client-profile')"><i data-lucide="user-cog"></i> <span>Profile</span></a>
                             </li>
                         </ul>
                     </nav>
@@ -303,12 +304,21 @@
             <!-- Tab Contents -->
             <div id="crm-tab-content-overview" class="crm-tab-pane">
                 <div class="crm-overview-grid" style="display:grid; grid-template-columns:repeat(2, 1fr); gap:14px; font-size:0.85rem;">
-                    <div><strong>Email:</strong> <span id="crm-ov-email"></span></div>
+                    <div><strong>Login email:</strong> <span id="crm-ov-email"></span></div>
                     <div><strong>Phone:</strong> <span id="crm-ov-phone">+44 7700 900001</span></div>
                     <div><strong>Country:</strong> <span id="crm-ov-country">United Kingdom</span></div>
                     <div><strong>Status:</strong> <span id="crm-ov-status" class="status-badge completed">Active</span></div>
                     <div><strong>WordPress Sync:</strong> <span id="crm-ov-synced">Synced (12 Aug 2026)</span></div>
                     <div><strong>Address:</strong> <span id="crm-ov-address">15 Regent Street, London</span></div>
+                    <div style="grid-column:1 / -1; border-top:1px solid #e2e8f0; padding-top:12px; margin-top:4px;">
+                        <label for="crm-ov-notify-email" style="display:block; font-size:0.78rem; font-weight:700; color:#475569; margin-bottom:6px;">Send all client notifications to</label>
+                        <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+                            <input type="email" id="crm-ov-notify-email" class="select-filter" style="flex:1; min-width:220px;" placeholder="Leave blank to use login email" autocomplete="off">
+                            <button type="button" class="btn-primary" id="crm-ov-notify-save" onclick="saveCrmClientNotificationEmail()">Save</button>
+                        </div>
+                        <p id="crm-ov-notify-hint" style="margin:6px 0 0; font-size:0.75rem; color:#64748b;">Orders, documents, payments, and activity emails for this client all go here.</p>
+                        <p id="crm-ov-notify-status" style="margin:6px 0 0; font-size:0.75rem; color:#047857; display:none;" role="status"></p>
+                    </div>
                 </div>
             </div>
 
@@ -537,15 +547,15 @@
                         </section>
 
                         <section class="portal-home-overview" aria-label="Quick overview">
-                            <button type="button" class="portal-overview-card" onclick="switchView('client-companies')">
+                            <button type="button" class="portal-overview-card" onclick="event.preventDefault();switchView('client-companies')">
                                 <span class="portal-overview-label">My businesses</span>
                                 <span class="portal-overview-value" id="dash-card-businesses">—</span>
                             </button>
-                            <button type="button" class="portal-overview-card" onclick="switchView('client-orders')">
+                            <button type="button" class="portal-overview-card" onclick="event.preventDefault();switchView('client-orders')">
                                 <span class="portal-overview-label">Active orders</span>
                                 <span class="portal-overview-value" id="dash-card-orders">—</span>
                             </button>
-                            <button type="button" class="portal-overview-card" onclick="switchView('client-documents')">
+                            <button type="button" class="portal-overview-card" onclick="event.preventDefault();switchView('client-documents')">
                                 <span class="portal-overview-label">Documents</span>
                                 <span class="portal-overview-value" id="dash-card-documents">—</span>
                             </button>
@@ -561,14 +571,14 @@
                             <section id="portal-home-orders" class="portal-home-panel" hidden>
                                 <div class="portal-home-panel-head">
                                     <h2>Your Orders</h2>
-                                    <button type="button" class="portal-home-link" onclick="switchView('client-orders')">View all orders →</button>
+                                    <button type="button" class="portal-home-link" onclick="event.preventDefault();switchView('client-orders')">View all orders →</button>
                                 </div>
                                 <div id="dash-active-orders-grid" class="portal-home-list"></div>
                             </section>
                             <section id="portal-home-companies" class="portal-home-panel" hidden>
                                 <div class="portal-home-panel-head">
                                     <h2>Business Portfolio</h2>
-                                    <button type="button" class="portal-home-link" onclick="switchView('client-companies')">View Business Portfolio →</button>
+                                    <button type="button" class="portal-home-link" onclick="event.preventDefault();switchView('client-companies')">View Business Portfolio →</button>
                                 </div>
                                 <div id="dash-companies-grid" class="portal-home-list"></div>
                             </section>
@@ -577,7 +587,7 @@
                         <section id="portal-home-documents" class="portal-home-panel" hidden>
                             <div class="portal-home-panel-head">
                                 <h2>Recent Documents</h2>
-                                <button type="button" class="portal-home-link" onclick="switchView('client-documents')">View all documents →</button>
+                                <button type="button" class="portal-home-link" onclick="event.preventDefault();switchView('client-documents')">View all documents →</button>
                             </div>
                             <div id="dash-recent-documents" class="portal-home-list"></div>
                         </section>
@@ -587,8 +597,8 @@
                                 <h2>Quick Actions</h2>
                                 <div class="portal-home-actions">
                                     <button type="button" class="btn-secondary" onclick="openUploadDocumentModal()"><i data-lucide="upload"></i> Upload Document</button>
-                                    <button type="button" class="btn-secondary" onclick="switchView('client-orders')">View Orders</button>
-                                    <button type="button" class="btn-secondary" onclick="switchView('client-companies')">Business Portfolio</button>
+                                    <button type="button" class="btn-secondary" onclick="event.preventDefault();switchView('client-orders')">View Orders</button>
+                                    <button type="button" class="btn-secondary" onclick="event.preventDefault();switchView('client-companies')">Business Portfolio</button>
                                 </div>
                             </section>
                             <section class="portal-home-help">
@@ -596,7 +606,7 @@
                                     <h2>Need help?</h2>
                                     <p>Your Brixen team is here to help.</p>
                                 </div>
-                                <button type="button" class="btn-primary" onclick="switchView('client-support')">Contact Support</button>
+                                <button type="button" class="btn-primary" onclick="event.preventDefault();switchView('client-support')">Contact Support</button>
                             </section>
                         </div>
                     </div>
@@ -672,6 +682,14 @@
                         <button type="button" class="is-active" data-company-reg-scope="admin" data-company-reg-filter="all" onclick="setCompanyRegFilter('admin', 'all')">All <span data-count>0</span></button>
                         <button type="button" data-company-reg-scope="admin" data-company-reg-filter="ch" onclick="setCompanyRegFilter('admin', 'ch')">Companies House <span data-count>0</span></button>
                         <button type="button" data-company-reg-scope="admin" data-company-reg-filter="pending" onclick="setCompanyRegFilter('admin', 'pending')">Not registered <span data-count>0</span></button>
+                    </div>
+                    <div class="lifecycle-toolbar portfolio-bulk-toolbar" id="admin-companies-toolbar">
+                        <input type="search" id="admin-companies-search" class="select-filter" placeholder="Search name, number, director…" oninput="onAdminCompaniesSearchInput()" style="min-width:220px; flex:1 1 220px;">
+                        <label class="lifecycle-check-label"><input type="checkbox" id="admin-companies-select-page" onchange="toggleAdminCompaniesPageSelection(this.checked)"> Select visible</label>
+                        <button type="button" class="btn-secondary btn-table" onclick="clearAdminCompaniesSelection()">Clear</button>
+                        <button type="button" class="btn-secondary btn-table" onclick="openBulkEditCompaniesModal()">Edit selected</button>
+                        <button type="button" class="btn-secondary btn-table" onclick="bulkDeleteAdminCompanies()">Delete selected</button>
+                        <span id="admin-companies-selection-count" style="font-size:0.8rem;color:#64748b;"></span>
                     </div>
                     <div id="admin-attention-banner" class="portfolio-attention-banner" hidden></div>
                     <div id="admin-ch-banner" class="portfolio-ch-banner" hidden>
@@ -1443,6 +1461,8 @@
                 </div>
 
                 <!-- 15. ADMIN LOGS VIEW -->
+
+                <!-- 15. ADMIN LOGS VIEW -->
                 <div id="view-admin-logs" class="view-panel" style="display: none;">
                     <div class="page-title-row">
                         <div class="page-title-text">
@@ -1484,6 +1504,11 @@
                                     <label style="font-size:0.8rem; font-weight:700;">Support Email</label>
                                     <input type="text" id="set-support-email" class="select-filter" style="width:100%; margin-top:4px;" value="contact@brixenconsultants.com">
                                 </div>
+                                <div style="grid-column:1 / -1;">
+                                    <label style="font-size:0.8rem; font-weight:700;">Team notification emails</label>
+                                    <input type="text" id="set-team-notification-emails" class="select-filter" style="width:100%; margin-top:4px;" placeholder="orders@brixenconsultants.com, support@brixenconsultants.com" autocomplete="off">
+                                    <p style="margin:6px 0 0; font-size:0.78rem; color:#64748b;">Comma-separated. These team inboxes get email alerts for all new client orders and support tickets.</p>
+                                </div>
                                 <div>
                                     <label style="font-size:0.8rem; font-weight:700;">Currency Symbol</label>
                                     <input type="text" id="set-currency" class="select-filter" style="width:100%; margin-top:4px;" value="£">
@@ -1501,6 +1526,44 @@
                                     <label style="font-size:0.8rem; font-weight:700;">UK FormFill Pro URL</label>
                                     <input type="url" id="set-uk-formfill-url" class="select-filter" style="width:100%; margin-top:4px;" placeholder="https://portal.brixenconsultants.com/formfill" autocomplete="off">
                                     <p style="margin:6px 0 0; font-size:0.78rem; color:#64748b;">Quick Tasks → AD01 opens this UK FormFill Pro wizard on the server.</p>
+                                </div>
+                                <div style="grid-column:1 / -1; border-top:1px solid #e2e8f0; padding-top:16px; margin-top:4px;">
+                                    <label style="font-size:0.8rem; font-weight:700;">Compliance alerts (automated)</label>
+                                    <p style="margin:6px 0 12px; font-size:0.78rem; color:#64748b;">Daily 11:00 Asia/Karachi. Sends only for verified attention issues to verified business emails. Default OFF until enabled.</p>
+                                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                                        <label style="font-size:0.78rem; display:flex; gap:8px; align-items:center;"><input type="checkbox" id="set-compliance-enabled"> Enable automated compliance notifications</label>
+                                        <label style="font-size:0.78rem; display:flex; gap:8px; align-items:center;"><input type="checkbox" id="set-compliance-verified-only"> Send only to staff-verified emails</label>
+                                        <label style="font-size:0.78rem; display:flex; gap:8px; align-items:center;"><input type="checkbox" id="set-compliance-whatsapp" checked> Include WhatsApp contact option</label>
+                                        <label style="font-size:0.78rem; display:flex; gap:8px; align-items:center;"><input type="checkbox" id="set-compliance-test-mode"> Test mode (redirect all to test recipient)</label>
+                                        <div>
+                                            <label style="font-size:0.78rem; font-weight:700;">Send hour (Asia/Karachi)</label>
+                                            <input type="number" id="set-compliance-hour" class="select-filter" style="width:100%; margin-top:4px;" min="0" max="23" value="11">
+                                        </div>
+                                        <div>
+                                            <label style="font-size:0.78rem; font-weight:700;">Interval hours</label>
+                                            <input type="number" id="set-compliance-interval" class="select-filter" style="width:100%; margin-top:4px;" min="1" value="24">
+                                        </div>
+                                        <div>
+                                            <label style="font-size:0.78rem; font-weight:700;">Timezone</label>
+                                            <input type="text" id="set-compliance-timezone" class="select-filter" style="width:100%; margin-top:4px;" value="Asia/Karachi" readonly>
+                                        </div>
+                                        <div>
+                                            <label style="font-size:0.78rem; font-weight:700;">Test recipient</label>
+                                            <input type="email" id="set-compliance-test-recipient" class="select-filter" style="width:100%; margin-top:4px;" value="brixenconsultant@gmail.com">
+                                        </div>
+                                        <div>
+                                            <label style="font-size:0.78rem; font-weight:700;">Website</label>
+                                            <input type="url" id="set-compliance-website" class="select-filter" style="width:100%; margin-top:4px;" placeholder="https://brixenconsultants.com">
+                                        </div>
+                                        <div>
+                                            <label style="font-size:0.78rem; font-weight:700;">WhatsApp link</label>
+                                            <input type="url" id="set-compliance-whatsapp-url" class="select-filter" style="width:100%; margin-top:4px;" placeholder="https://wa.me/447360515317">
+                                        </div>
+                                    </div>
+                                    <div style="display:flex; flex-wrap:wrap; gap:10px; margin-top:14px;">
+                                        <button type="button" class="btn-secondary btn-tiny" onclick="sendRmkComplianceTestEmail()">[TEST] RMK TRADING compliance email</button>
+                                        <span id="set-compliance-test-status" style="font-size:0.78rem; color:#64748b; align-self:center;"></span>
+                                    </div>
                                 </div>
                                 <div style="grid-column:1 / -1; border-top:1px solid #e2e8f0; padding-top:16px; margin-top:4px;">
                                     <label style="font-size:0.8rem; font-weight:700;">Customer email (SMTP)</label>
@@ -1925,8 +1988,8 @@
         <div class="modal-card" style="max-width:640px;">
             <div class="modal-header">
                 <div>
-                    <h3>Create User</h3>
-                    <p style="font-size:0.8rem; color:#64748b;">Issue an account. The person signs in with this email and password. Role options are limited to what you are allowed to assign.</p>
+                    <h3 id="create-user-modal-title">Create Account</h3>
+                    <p id="create-user-modal-desc" style="font-size:0.8rem; color:#64748b;">Issue an account. The person signs in with this email and password.</p>
                 </div>
                 <button type="button" class="btn-close" onclick="closeCreateUserModal()"><i data-lucide="x"></i></button>
             </div>
@@ -1953,6 +2016,16 @@
                         <div>
                             <label style="font-size:0.8rem; font-weight:700;">Role *</label>
                             <select id="create-user-role" class="select-filter" style="width:100%; margin-top:4px;" required onchange="syncCreateUserDepartmentField()"></select>
+                        </div>
+                        <div id="create-user-client-type-wrap" style="display:none;">
+                            <label style="font-size:0.8rem; font-weight:700;">Client Account Type *</label>
+                            <select id="create-user-client-type" class="select-filter" style="width:100%; margin-top:4px;" onchange="syncCreateUserDepartmentField()">
+                                <option value="b2b" selected>B2B Customer (Portal Account)</option>
+                                <option value="b2c">Normal Customer (Official Website Client Panel)</option>
+                            </select>
+                        </div>
+                        <div id="create-user-b2b-notice" style="display:none; padding:10px 12px; border-radius:8px; background:#eff6ff; border:1px solid #bfdbfe; color:#1e40af; font-size:0.8rem; font-weight:600; grid-column:1 / -1;">
+                            <i data-lucide="shield-check" style="width:14px; height:14px; vertical-align:middle; margin-right:4px;"></i> Customer accounts created here are designated for Brixen Official Website Client Panel (B2B Clients Only).
                         </div>
                         <div id="create-user-department-wrap">
                             <label style="font-size:0.8rem; font-weight:700;">Access</label>
@@ -2314,6 +2387,128 @@
         </div>
     </div>
 
+    <div id="modal-bulk-edit-companies" class="modal-overlay" style="z-index:1100;" onclick="if(event.target===this)closeBulkEditCompaniesModal()">
+        <div class="modal-card" style="max-width:520px;" role="dialog" aria-modal="true" aria-labelledby="bulk-edit-companies-title">
+            <div class="modal-header">
+                <div>
+                    <h3 id="bulk-edit-companies-title">Edit selected companies</h3>
+                    <p style="font-size:0.8rem; color:#64748b;">Only filled fields are applied. Leave a field blank to keep existing values.</p>
+                </div>
+                <button type="button" class="btn-secondary btn-table" onclick="closeBulkEditCompaniesModal()">Close</button>
+            </div>
+            <form id="bulk-edit-companies-form" onsubmit="submitBulkEditCompanies(event)">
+                <div style="display:grid; gap:12px; padding:4px 0 16px;">
+                    <div id="bulk-edit-companies-count" style="font-size:0.85rem; color:#475569;"></div>
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Status</label>
+                        <select id="bulk-edit-company-status" class="select-filter" style="width:100%; margin-top:4px;">
+                            <option value="">— keep current —</option>
+                            <option value="Active">Active</option>
+                            <option value="Dissolved">Dissolved</option>
+                            <option value="Liquidation">Liquidation</option>
+                            <option value="Closed">Closed</option>
+                            <option value="Strike Off Proposed">Strike Off Proposed</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Assign client</label>
+                        <select id="bulk-edit-company-client" class="select-filter" style="width:100%; margin-top:4px;">
+                            <option value="">— keep current —</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Package</label>
+                        <input type="text" id="bulk-edit-company-package" class="select-filter" style="width:100%; margin-top:4px;" placeholder="— keep current —">
+                    </div>
+                    <div id="bulk-edit-companies-error" class="dash-banner-error" style="display:none;" role="alert"></div>
+                </div>
+                <div style="display:flex; justify-content:flex-end; gap:10px;">
+                    <button type="button" class="btn-secondary" onclick="closeBulkEditCompaniesModal()">Cancel</button>
+                    <button type="submit" class="btn-primary" id="bulk-edit-companies-submit">Save changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="modal-manual-order" class="modal-overlay" style="z-index:1100;">
+        <div class="modal-card" style="max-width:640px;">
+            <div class="modal-header">
+                <div>
+                    <h3>Create manual order</h3>
+                    <p style="font-size:0.8rem; color:#64748b;">For clients who did not sign up on the website. Portal login stays on the customer; company emails get the work notifications.</p>
+                </div>
+                <button type="button" class="btn-close" onclick="closeManualOrderModal()"><i data-lucide="x"></i></button>
+            </div>
+            <form id="manual-order-form" onsubmit="submitManualOrderForm(event)">
+                <div id="manual-order-error" style="display:none; padding:10px; border-radius:8px; background:#fef2f2; color:#dc2626; font-size:0.8rem; font-weight:600;" role="alert"></div>
+                <div style="display:flex; flex-direction:column; gap:12px; margin-top:10px;">
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Client</label>
+                        <div style="display:flex; gap:12px; margin-top:6px; flex-wrap:wrap;">
+                            <label style="font-size:0.8rem;"><input type="radio" name="manual-order-client-mode" value="existing" checked onchange="syncManualOrderClientMode()"> Existing client</label>
+                            <label style="font-size:0.8rem;"><input type="radio" name="manual-order-client-mode" value="new" onchange="syncManualOrderClientMode()"> New client</label>
+                        </div>
+                    </div>
+                    <div id="manual-order-existing-wrap">
+                        <label style="font-size:0.8rem; font-weight:700;">Select client</label>
+                        <select id="manual-order-client" class="select-filter" style="width:100%; margin-top:4px;" onchange="onManualOrderClientChange()"></select>
+                    </div>
+                    <div id="manual-order-new-wrap" hidden>
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                            <div>
+                                <label style="font-size:0.8rem; font-weight:700;">Client full name</label>
+                                <input type="text" id="manual-order-new-name" class="select-filter" style="width:100%; margin-top:4px;" autocomplete="off">
+                            </div>
+                            <div>
+                                <label style="font-size:0.8rem; font-weight:700;">Portal login email</label>
+                                <input type="email" id="manual-order-new-email" class="select-filter" style="width:100%; margin-top:4px;" autocomplete="off">
+                            </div>
+                        </div>
+                    </div>
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Company (optional)</label>
+                        <select id="manual-order-company" class="select-filter" style="width:100%; margin-top:4px;">
+                            <option value="">No company / create with name below</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">New company name (if needed)</label>
+                        <input type="text" id="manual-order-company-name" class="select-filter" style="width:100%; margin-top:4px;" placeholder="Leave blank if using an existing company" autocomplete="off">
+                    </div>
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Company notification email *</label>
+                        <input type="email" id="manual-order-company-email" class="select-filter" style="width:100%; margin-top:4px;" required placeholder="Where all work emails for this company go" autocomplete="off">
+                    </div>
+                    <div>
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <label style="font-size:0.8rem; font-weight:700;">Products / Services *</label>
+                            <button type="button" class="btn-secondary" style="padding:4px 8px; font-size:0.75rem;" onclick="addManualOrderProductLine()"><i data-lucide="plus" style="width:12px; height:12px; margin-right:4px;"></i>Add item</button>
+                        </div>
+                        <div id="manual-order-products-container" style="display:flex; flex-direction:column; gap:8px; margin-top:8px;">
+                            <!-- Products injected here via JS -->
+                        </div>
+                        <div style="text-align:right; margin-top:8px; font-weight:700; font-size:0.9rem; color:#0f172a;">
+                            Total: £<span id="manual-order-total-price">0.00</span>
+                        </div>
+                        <datalist id="manual-order-service-list"></datalist>
+                    </div>
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Owner / director name</label>
+                        <input type="text" id="manual-order-owner-name" class="select-filter" style="width:100%; margin-top:4px;" autocomplete="off">
+                    </div>
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700;">Notes</label>
+                        <textarea id="manual-order-notes" class="select-filter" style="width:100%; margin-top:4px; min-height:60px;" placeholder="Optional staff notes"></textarea>
+                    </div>
+                </div>
+                <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:16px;">
+                    <button type="button" class="btn-secondary" onclick="closeManualOrderModal()">Cancel</button>
+                    <button type="submit" class="btn-primary" id="manual-order-submit">Create order</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <div id="modal-create-company" class="modal-overlay" style="z-index:1100;">
         <div class="modal-card" style="max-width:640px;">
             <div class="modal-header">
@@ -2463,9 +2658,9 @@
     </div>
 
     <div id="modal-company-portfolio" class="modal-overlay">
-        <div class="modal-card portfolio-modal-card">
-            <div class="modal-header">
-                <div>
+        <div class="modal-card portfolio-modal-card apple-sheet-card">
+            <div class="modal-header portfolio-modal-header">
+                <div class="portfolio-modal-title-block">
                     <h3 id="portfolio-detail-name">Company</h3>
                     <p id="portfolio-detail-number"></p>
                     <p id="portfolio-detail-address" class="portfolio-detail-address"></p>
@@ -2474,9 +2669,9 @@
                         <span class="portfolio-badge-status" id="portfolio-detail-status-badge">active</span>
                     </div>
                 </div>
-                <button type="button" class="btn-close" onclick="closeCompanyPortfolioDetail()"><i data-lucide="x"></i></button>
+                <button type="button" class="btn-close" onclick="closeCompanyPortfolioDetail()" aria-label="Close"><i data-lucide="x"></i></button>
             </div>
-            <div class="portfolio-tabs" role="tablist" aria-label="Company details">
+            <div class="portfolio-tabs portfolio-segmented" role="tablist" aria-label="Company details">
                 <button type="button" class="portfolio-tab active" data-tab="overview" onclick="switchPortfolioDetailTab('overview')">Overview</button>
                 <button type="button" class="portfolio-tab" data-tab="office" onclick="switchPortfolioDetailTab('office')">Registered Office</button>
                 <button type="button" class="portfolio-tab" data-tab="activity" onclick="switchPortfolioDetailTab('activity')">Business Activity</button>
@@ -2486,54 +2681,73 @@
             </div>
             <div class="portfolio-tab-panel" data-panel="overview">
                 <div id="portfolio-detail-attention" class="portfolio-attention-banner" hidden></div>
-                <div class="portfolio-detail-grid">
-                    <div class="full" id="portfolio-detail-name-wrap">
-                        <span>Company name</span>
-                        <strong id="portfolio-detail-name-field">—</strong>
-                        <form id="portfolio-rename-form" class="portfolio-rename-form" hidden onsubmit="savePendingCompanyName(event)">
-                            <div class="portfolio-rename-search ch-search-wrap">
-                                <input type="text" id="portfolio-rename-input" name="name" required minlength="2" maxlength="160" autocomplete="off" placeholder="Desired company name" oninput="searchCompaniesHouseForRename(this)">
-                                <span id="portfolio-rename-ch-tick" class="portfolio-rename-ch-tick" hidden title="On record at Companies House" aria-label="On record at Companies House"><i data-lucide="check-circle-2"></i></span>
-                                <input type="hidden" id="portfolio-rename-ch-number" name="companies_house_number" value="">
-                                <input type="hidden" id="portfolio-rename-ch-status" name="companies_house_status" value="">
-                                <div class="ch-search-results portfolio-rename-ch-results" id="portfolio-rename-ch-results" hidden></div>
+                <div class="portfolio-apple-sheet">
+                    <div class="portfolio-detail-grid portfolio-apple-group">
+                        <div class="full" id="portfolio-detail-name-wrap">
+                            <span>Company name</span>
+                            <strong id="portfolio-detail-name-field">—</strong>
+                            <form id="portfolio-rename-form" class="portfolio-rename-form" hidden onsubmit="savePendingCompanyName(event)">
+                                <div class="portfolio-rename-search ch-search-wrap">
+                                    <input type="text" id="portfolio-rename-input" name="name" required minlength="2" maxlength="160" autocomplete="off" placeholder="Desired company name" oninput="searchCompaniesHouseForRename(this)">
+                                    <span id="portfolio-rename-ch-tick" class="portfolio-rename-ch-tick" hidden title="On record at Companies House" aria-label="On record at Companies House"><i data-lucide="check-circle-2"></i></span>
+                                    <input type="hidden" id="portfolio-rename-ch-number" name="companies_house_number" value="">
+                                    <input type="hidden" id="portfolio-rename-ch-status" name="companies_house_status" value="">
+                                    <div class="ch-search-results portfolio-rename-ch-results" id="portfolio-rename-ch-results" hidden></div>
+                                </div>
+                                <button type="submit" class="btn-primary btn-tiny" id="portfolio-rename-save">Save name</button>
+                                <span id="portfolio-rename-status" role="status"></span>
+                            </form>
+                            <p id="portfolio-rename-hint" class="portfolio-rename-hint" hidden>Type a name to check Companies House. Save once the green tick appears.</p>
+                        </div>
+                        <div><span>Company number</span><strong id="portfolio-detail-number-field">—</strong></div>
+                        <div><span>Status</span><strong id="portfolio-detail-status">—</strong></div>
+                        <div><span>Country</span><strong id="portfolio-detail-country">—</strong></div>
+                        <div><span>Incorporation date</span><strong id="portfolio-detail-inc">—</strong></div>
+                        <div class="full"><span id="portfolio-detail-owner-label">Director</span><strong id="portfolio-detail-director">—</strong></div>
+                        <div class="full">
+                            <span>Verified business email</span>
+                            <div id="portfolio-detail-email-wrap">
+                                <strong id="portfolio-detail-email">—</strong>
                             </div>
-                            <button type="submit" class="btn-primary" id="portfolio-rename-save">Save name</button>
-                            <span id="portfolio-rename-status" role="status"></span>
-                        </form>
-                        <p id="portfolio-rename-hint" class="portfolio-rename-hint" hidden>Type a name to check Companies House. Save once the green tick appears.</p>
+                            <p class="portfolio-field-hint">Automated alerts send only when a real email is on file (company domain, Gmail, Outlook, Hotmail, etc.). Placeholders never send.</p>
+                            <div id="portfolio-compliance-whatsapp-cta" class="portfolio-compliance-wa" hidden></div>
+                            <div id="portfolio-notification-history" class="portfolio-notification-history" hidden></div>
+                        </div>
+                        <div class="full">
+                            <span>WhatsApp number</span>
+                            <div id="portfolio-detail-whatsapp-wrap">
+                                <strong id="portfolio-detail-whatsapp">—</strong>
+                            </div>
+                            <p class="portfolio-field-hint">Saved once, then locked.</p>
+                        </div>
                     </div>
-                    <div><span>Company number</span><strong id="portfolio-detail-number-field">—</strong></div>
-                    <div><span>Status</span><strong id="portfolio-detail-status">—</strong></div>
-                    <div><span>Country</span><strong id="portfolio-detail-country">—</strong></div>
-                    <div><span>Incorporation date</span><strong id="portfolio-detail-inc">—</strong></div>
-                    <div><span id="portfolio-detail-owner-label">Director</span><strong id="portfolio-detail-director">—</strong></div>
-                    <div class="full"><span>Registered email</span><strong id="portfolio-detail-email">—</strong></div>
                 </div>
             </div>
             <div class="portfolio-tab-panel" data-panel="office" hidden>
-                <div class="portfolio-detail-grid">
-                    <div class="full"><span>Address</span><strong id="portfolio-detail-office">—</strong></div>
-                    <div><span>Postcode</span><strong id="portfolio-detail-postcode">—</strong></div>
+                <div class="portfolio-apple-sheet">
+                    <div class="portfolio-detail-grid portfolio-apple-group">
+                        <div class="full"><span>Address</span><strong id="portfolio-detail-office">—</strong></div>
+                        <div><span>Postcode</span><strong id="portfolio-detail-postcode">—</strong></div>
+                    </div>
                 </div>
             </div>
             <div class="portfolio-tab-panel" data-panel="activity" hidden>
-                <div id="portfolio-detail-activity" class="portfolio-activity">
+                <div id="portfolio-detail-activity" class="portfolio-activity portfolio-apple-sheet">
                     <p class="portfolio-empty-copy">No SIC or business activity details on file.</p>
                 </div>
             </div>
             <div class="portfolio-tab-panel" data-panel="compliance" hidden>
-                <div id="portfolio-detail-compliance"></div>
+                <div id="portfolio-detail-compliance" class="portfolio-apple-sheet"></div>
             </div>
             <div class="portfolio-tab-panel" data-panel="orders" hidden>
-                <div id="portfolio-detail-orders"></div>
+                <div id="portfolio-detail-orders" class="portfolio-apple-sheet"></div>
             </div>
             <div class="portfolio-tab-panel" data-panel="documents" hidden>
-                <div id="portfolio-detail-documents"></div>
+                <div id="portfolio-detail-documents" class="portfolio-apple-sheet"></div>
             </div>
             <div class="portfolio-modal-actions">
                 <button type="button" class="portfolio-delete-btn" id="portfolio-delete-company-btn" style="display:none;" onclick="deleteCompanyFromDetail()" title="Delete company" aria-label="Delete company"><i data-lucide="trash-2"></i></button>
-                <button type="button" class="btn-secondary" onclick="closeCompanyPortfolioDetail()">Close</button>
+                <button type="button" class="btn-secondary btn-tiny" onclick="closeCompanyPortfolioDetail()">Close</button>
             </div>
         </div>
     </div>
@@ -2760,7 +2974,23 @@
         </div>
     </div>
 
+    <!-- TASK AUDIT LOGS MODAL -->
+    <div id="modal-task-audit-logs" class="modal-overlay" style="z-index:1100; display:none;">
+        <div class="modal-card" style="max-width:650px; width:90%; padding:24px;">
+            <div class="modal-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+                <div>
+                    <h3 style="margin:0; font-size:1.15rem; font-weight:700; color:#0f172a;" id="task-audit-title">Task Activity Audit Trail</h3>
+                    <p style="margin:4px 0 0 0; font-size:0.8rem; color:#64748b;">Complete history of edits, status updates, assignees, and actions for this task.</p>
+                </div>
+                <button type="button" class="btn-close" onclick="closeTaskAuditModal()"><i data-lucide="x"></i></button>
+            </div>
+            <div id="task-audit-logs-body" style="max-height:420px; overflow-y:auto; font-size:0.875rem;">
+                <div style="text-align:center; padding:20px; color:#64748b;">Loading audit logs...</div>
+            </div>
+        </div>
+    </div>
+
     <div id="global-search-results" class="global-search-results" hidden></div>
-    <script src="/static/js/app.js?v=185.0"></script>
+    <script src="/static/js/app.js?v=145.0" defer></script>
 </body>
 </html>

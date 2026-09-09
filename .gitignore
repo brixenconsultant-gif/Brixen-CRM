@@ -33,3 +33,28 @@ venv/
 *.tmp
 crm.log
 tmp-inv/
+
+# One-off fix / helper scripts
+fix_*.py
+recover_dash.py
+restore_dash.py
+bust_cache*.py
+enforce_hover.py
+remove_shadows.py
+size_buttons.py
+sm_btns.py
+stripe_theme.py
+tweak_buttons.py
+update_final.py
+update_styles.py
+rewrite_*.py
+
+# Build artifacts & archives
+*.zip
+*.patch
+css_diff.txt
+css_history.patch
+deploy_to_portal.sh
+
+# Restored CSS backup
+static/css/styles_restored.css

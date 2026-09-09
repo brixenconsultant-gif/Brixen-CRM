@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS users (
     country TEXT DEFAULT 'United Kingdom',
     address TEXT,
     avatar_url TEXT,
+    notification_email TEXT,
     role TEXT NOT NULL DEFAULT 'CLIENT' CHECK(role IN ('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF', 'CLIENT')),
     department TEXT,
     status TEXT NOT NULL DEFAULT 'Active' CHECK(status IN ('Active', 'Suspended', 'Pending')),
@@ -96,6 +97,8 @@ CREATE TABLE IF NOT EXISTS companies (
     registration_notified_at TIMESTAMP,
     sic_codes TEXT,
     registered_email TEXT,
+    registered_email_locked INTEGER NOT NULL DEFAULT 0,
+    whatsapp_number TEXT,
     accounts_next_due DATE,
     accounts_overdue INTEGER NOT NULL DEFAULT 0,
     confirmation_next_due DATE,
@@ -103,6 +106,13 @@ CREATE TABLE IF NOT EXISTS companies (
     ch_attention_json TEXT,
     ch_alert_fingerprint TEXT,
     ch_alert_sent_at TIMESTAMP,
+    business_email_verified INTEGER NOT NULL DEFAULT 0,
+    business_email_verified_by INTEGER,
+    business_email_verified_at TIMESTAMP,
+    business_email_source TEXT,
+    business_email_updated_at TIMESTAMP,
+    compliance_last_notification_at TIMESTAMP,
+    compliance_last_notification_id TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
@@ -515,3 +525,50 @@ CREATE TABLE IF NOT EXISTS email_outbox (
 );
 CREATE INDEX IF NOT EXISTS idx_email_outbox_status
     ON email_outbox(status, created_at);
+
+-- 19. Verified business email history
+CREATE TABLE IF NOT EXISTS company_email_verification_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL,
+    email TEXT,
+    action TEXT NOT NULL,
+    source TEXT,
+    note TEXT,
+    actor_user_id INTEGER,
+    actor_name TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_company_email_hist_company
+    ON company_email_verification_history(company_id, created_at DESC);
+
+-- 20. Compliance notification audit log
+CREATE TABLE IF NOT EXISTS compliance_notification_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL,
+    notification_id TEXT NOT NULL,
+    notification_type TEXT NOT NULL,
+    issue_fingerprint TEXT,
+    issue_summary TEXT,
+    recipient TEXT,
+    status TEXT NOT NULL,
+    blocked_reason TEXT,
+    message_id TEXT,
+    trigger_source TEXT,
+    attempt INTEGER NOT NULL DEFAULT 1,
+    sent_by_user_id INTEGER,
+    error_category TEXT,
+    payload_json TEXT,
+    track_token TEXT,
+    first_clicked_at TIMESTAMP,
+    click_count INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_compliance_log_company
+    ON compliance_notification_log(company_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_compliance_log_fp
+    ON compliance_notification_log(company_id, issue_fingerprint, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_compliance_log_token
+    ON compliance_notification_log(track_token);
+

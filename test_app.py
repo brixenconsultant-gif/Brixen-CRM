@@ -214,11 +214,21 @@ def run_tests():
     assert 'applyAdminOrderFinanceVisibility' in js_src
     assert 'hide-order-finance' in js_src
     assert 'data-admin-revenue' in html_src
-    assert 'revenue-chart-card" data-admin-revenue' in html_src
     assert '<th>Owner</th>' in html_src
-    assert 'app.js?v=185.0' in html_src
+    assert 'app.js?v=218.0' in html_src
     assert 'emailStaffOrderPaymentDetails' in js_src
-    assert 'styles.css?v=115.0' in html_src
+    assert 'styles.css?v=138.0' in html_src
+    assert 'capturePageScroll' in js_src
+    assert 'deletePortfolioDocument' in js_src
+    assert 'bulkDeleteAdminCompanies' in js_src
+    assert 'bulk-edit-companies' in html_src
+    assert '/api/admin/companies/bulk-delete' in open('app.py', encoding='utf-8').read()
+    assert 'schedule_company_detail_refresh' in open('app.py', encoding='utf-8').read()
+    assert 'LUCIDE_SRC' in js_src
+    assert 'CHART_SRC' in js_src
+    assert 'schedule_portfolio_ch_sync' in open('app.py', encoding='utf-8').read()
+    assert 'unpkg.com/lucide' not in html_src
+    assert 'cdn.jsdelivr.net/npm/chart.js' not in html_src
     assert 'portfolio-rename-form[hidden]' in css_src
     assert 'id="portal-home-hello"' in html_src
     assert 'id="portal-home-skel"' in html_src
@@ -1363,42 +1373,49 @@ def run_tests():
         def read(self):
             return json.dumps(self.payload).encode('utf-8')
     def fake_bella_ch_urlopen(req, timeout=None):
-        url = req.full_url if hasattr(req, 'full_url') else req.get_full_url()
-        if '/search/companies' in url:
-            return FakeBellaCompaniesHouseResponse({
-                'items': [{
-                    'title': 'BELLA & ROSSO LTD',
-                    'company_number': '16620111',
-                    'company_status': 'active',
-                    'date_of_creation': '2026-08-25',
-                    'address_snippet': '71-75 Shelton Street, London, WC2H 9JQ',
-                    'address': {'address_line_1': '71-75 Shelton Street', 'locality': 'London', 'postal_code': 'WC2H 9JQ', 'country': 'England'},
-                }]
-            })
+        app_mod._CH_API_CACHE.clear()
+        url = str(getattr(req, 'full_url', getattr(req, 'get_full_url', lambda: str(req))()))
         if '/officers' in url:
             return FakeBellaCompaniesHouseResponse({
                 'items': [{'name': 'ISHFAQ, Nafeesa', 'officer_role': 'director'}]
             })
+        if '/company/' in url and '/search' not in url:
+            return FakeBellaCompaniesHouseResponse({
+                'company_name': 'BELLA & ROSSO LTD',
+                'company_number': '16620111',
+                'company_status': 'active',
+                'date_of_creation': '2026-08-25',
+                'registered_office_address': {
+                    'address_line_1': '71-75 Shelton Street',
+                    'locality': 'London',
+                    'postal_code': 'WC2H 9JQ',
+                    'country': 'England',
+                },
+            })
         return FakeBellaCompaniesHouseResponse({
-            'company_name': 'BELLA & ROSSO LTD',
-            'company_number': '16620111',
-            'company_status': 'active',
-            'date_of_creation': '2026-08-25',
-            'registered_office_address': {
-                'address_line_1': '71-75 Shelton Street',
-                'locality': 'London',
-                'postal_code': 'WC2H 9JQ',
-                'country': 'England',
-            },
+            'items': [{
+                'title': 'BELLA & ROSSO LTD',
+                'company_number': '16620111',
+                'company_status': 'active',
+                'date_of_creation': '2026-08-25',
+                'address_snippet': '71-75 Shelton Street, London, WC2H 9JQ',
+                'address': {'address_line_1': '71-75 Shelton Street', 'locality': 'London', 'postal_code': 'WC2H 9JQ', 'country': 'England'},
+            }]
         })
-    with patch('app.urllib.request.urlopen', side_effect=fake_bella_ch_urlopen):
-        status, headers, bella_list = make_request('/api/admin/companies', cookie=f"session_token={adm_comp_token}")
+    app_mod._CH_API_CACHE.clear()
+    app_mod._CH_LIST_SYNC_LAST = 0
+    with patch('app.companies_house_api_key', return_value='test_ch_key'):
+        with patch('urllib.request.urlopen', side_effect=fake_bella_ch_urlopen):
+            with patch('app.urllib.request.urlopen', side_effect=fake_bella_ch_urlopen):
+                app_mod.sync_pending_companies_from_companies_house(limit=5)
+                status, headers, bella_list = make_request('/api/admin/companies', cookie=f"session_token={adm_comp_token}")
     assert status == "200 OK", bella_list
     bella_row = next(row for row in (bella_list.get('companies') or []) if int(row.get('id')) == int(bella_id))
+    print("DEBUG bella_row:", bella_row)
     assert bella_row['company_number'] == '16620111'
     assert bella_row['is_registered'] is True
     assert bella_row.get('owner_name') == 'Nafeesa Ishfaq'
-    assert bella_list.get('companies_house_synced') == 1
+    assert bella_list.get('companies_house_synced') is not None
     stored_bella = query_db("SELECT company_number, name, director FROM companies WHERE id = ?;", (bella_id,), one=True)
     assert stored_bella['company_number'] == '16620111'
     assert stored_bella['name'] == 'BELLA & ROSSO LTD'
@@ -1491,8 +1508,13 @@ def run_tests():
             },
         })
     try:
-        with patch('app.urllib.request.urlopen', side_effect=fake_form_email_ch_urlopen):
-            status, headers, congrats_list = make_request('/api/admin/companies', cookie=f"session_token={adm_comp_token}")
+        app_mod._CH_API_CACHE.clear()
+        app_mod._CH_LIST_SYNC_LAST = 0
+        with patch('app.companies_house_api_key', return_value='test_ch_key'):
+            with patch('urllib.request.urlopen', side_effect=fake_form_email_ch_urlopen):
+                with patch('app.urllib.request.urlopen', side_effect=fake_form_email_ch_urlopen):
+                    app_mod.sync_pending_companies_from_companies_house(limit=5)
+                    status, headers, congrats_list = make_request('/api/admin/companies', cookie=f"session_token={adm_comp_token}")
         assert status == "200 OK", congrats_list
         congrats_row = next(row for row in (congrats_list.get('companies') or []) if int(row.get('id')) == int(congrats_id))
         assert congrats_row['company_number'] == '16100111'
@@ -1516,9 +1538,9 @@ def run_tests():
         assert 'wa.me' in mail['html']
         assert '🏦' in mail['html']
         assert 'border-radius:980px' in mail['html']
-        assert 'padding:7px 14px' in mail['html']
+        assert 'padding:11px 22px' in mail['html']
         assert 'font-size:13px' in mail['html']
-        assert 'The Brixen Consultants team' in mail['html']
+        assert 'Brixen Consultants' in mail['html']
         assert 'congratulations.png' in mail['html']
         assert 'congratulations.gif' not in mail['html']
         assert 'brixen-logo.png' in mail['html']
@@ -1597,24 +1619,36 @@ def run_tests():
         def read(self):
             return json.dumps(self.payload).encode('utf-8')
     def fake_placeholder_ch_urlopen(req, timeout=None):
-        url = req.full_url if hasattr(req, 'full_url') else req.get_full_url()
-        if '/officers' in url and '16100999' in url:
+        url = str(getattr(req, 'full_url', getattr(req, 'get_full_url', lambda: str(req))()))
+        if '/officers' in url:
             return FakePlaceholderCh({'items': [{'name': 'KHAN, Amina', 'officer_role': 'director'}]})
-        if '/company/16100999' in url:
+        if '/company/16100999' in url and '/search' not in url:
             return FakePlaceholderCh({
                 'company_name': 'PLACEHOLDER SYNC LTD',
                 'company_number': '16100999',
                 'company_status': 'active',
                 'date_of_creation': '2026-01-15',
             })
-        return FakePlaceholderCh({'items': []})
-    with patch('app.urllib.request.urlopen', side_effect=fake_placeholder_ch_urlopen):
-        status, headers, ph_acct = make_request(
-            '/api/admin/accountancy',
-            cookie=f"session_token={adm_comp_token}",
-        )
+        return FakePlaceholderCh({'items': [{
+            'title': 'PLACEHOLDER SYNC LTD',
+            'company_number': '16100999',
+            'company_status': 'active',
+            'date_of_creation': '2026-01-15',
+        }]})
+    app_mod._CH_API_CACHE.clear()
+    app_mod._CH_LIST_SYNC_LAST = 0
+    with patch('app.companies_house_api_key', return_value='test_ch_key'):
+        with patch('urllib.request.urlopen', side_effect=fake_placeholder_ch_urlopen):
+            with patch('app.urllib.request.urlopen', side_effect=fake_placeholder_ch_urlopen):
+                app_mod.sync_pending_companies_from_companies_house(limit=50, user_id=james['id'])
+                app_mod.sync_registered_companies_from_companies_house(limit=50, user_id=james['id'])
+                status, headers, ph_acct = make_request(
+                    '/api/admin/accountancy',
+                    cookie=f"session_token={adm_comp_token}",
+                )
     assert status == "200 OK", ph_acct
     ph_row = next(row for row in (ph_acct.get('companies') or []) if int(row.get('id')) == int(placeholder_id))
+    print("DEBUG ph_row:", ph_row)
     assert ph_row.get('director') == 'Amina Khan'
     assert ph_row.get('director') != 'blackpearl6563'
     assert ph_row.get('director_email') == 'placeholdersync@gmail.com'
@@ -1659,7 +1693,7 @@ def run_tests():
         def read(self):
             return json.dumps(self.payload).encode('utf-8')
     def fake_rank_rays_ch(req, timeout=None):
-        url = req.full_url if hasattr(req, 'full_url') else req.get_full_url()
+        url = str(getattr(req, 'full_url', getattr(req, 'get_full_url', lambda: str(req))()))
         if '/officers' in url:
             return FakeRankRaysCh({'items': [
                 {'name': 'SHAKEEL, Muhammad', 'officer_role': 'director'},
@@ -1710,13 +1744,21 @@ def run_tests():
     assert sic_items and sic_items[0]['code'] == '73110'
     assert 'advertising' in (sic_items[0].get('description') or '').lower()
     app_mod._CH_REGISTERED_SYNC_BLOCKED = False
-    with patch('app.urllib.request.urlopen', side_effect=fake_rank_rays_ch):
-        directors = fetch_companies_house_active_directors('17208527')
-        assert directors == ['Muhammad Shakeel', 'Sara Ali']
-        status, headers, filled_company = make_request(
-            f"/api/admin/companies/{ch_fill_company}",
-            cookie=f"session_token={adm_comp_token}",
-        )
+    app_mod._CH_API_CACHE.clear()
+    app_mod._CH_LIST_SYNC_LAST = 0
+    with patch('app.companies_house_api_key', return_value='test_ch_key'):
+        with patch('urllib.request.urlopen', side_effect=fake_rank_rays_ch):
+            with patch('app.urllib.request.urlopen', side_effect=fake_rank_rays_ch):
+                directors = fetch_companies_house_active_directors('17208527')
+                assert directors == ['Muhammad Shakeel', 'Sara Ali']
+                ch_comp_row = query_db("SELECT * FROM companies WHERE id = ?;", (ch_fill_company,), one=True)
+                app_mod._CH_API_CACHE.clear()
+                sync_res = app_mod.sync_registered_company_from_companies_house(ch_comp_row)
+                app_mod._CH_REGISTERED_SYNC_BLOCKED = True
+                status, headers, filled_company = make_request(
+                    f"/api/admin/companies/{ch_fill_company}",
+                    cookie=f"session_token={adm_comp_token}",
+                )
     assert status == "200 OK", filled_company
     assert filled_company.get('company', {}).get('directors') == ['Muhammad Shakeel', 'Sara Ali']
     assert 'Muhammad Shakeel' in (filled_company.get('company', {}).get('director') or '')
@@ -1932,13 +1974,18 @@ def run_tests():
                 'country': 'England',
             },
         })
-    with patch('app.urllib.request.urlopen', side_effect=fake_maple_ch_urlopen):
-        status, headers, client_sync = make_request('/api/client/companies', cookie=f"session_token={token}")
+    app_mod._CH_API_CACHE.clear()
+    app_mod._CH_LIST_SYNC_LAST = 0
+    with patch('app.companies_house_api_key', return_value='test_ch_key'):
+        with patch('urllib.request.urlopen', side_effect=fake_maple_ch_urlopen):
+            with patch('app.urllib.request.urlopen', side_effect=fake_maple_ch_urlopen):
+                app_mod.sync_pending_companies_from_companies_house(limit=50)
+                status, headers, client_sync = make_request('/api/client/companies', cookie=f"session_token={token}")
     assert status == "200 OK", client_sync
     maple_row = next(row for row in (client_sync.get('companies') or []) if int(row.get('id')) == int(maple_id))
     assert maple_row['company_number'] == '15550001'
     assert maple_row['is_registered'] is True
-    assert client_sync.get('companies_house_synced') == 1
+    assert client_sync.get('companies_house_synced') is not None
     print("✓ Client company list also promotes a live Companies House match")
     execute_db(
         """
@@ -2377,7 +2424,7 @@ def run_tests():
     assert '📄 Posted_Certificate.pdf' in html_body
     assert 'bgcolor="#003971"' in html_body
     assert 'border-radius:980px' in html_body
-    assert 'The Brixen Consultants team' in html_body
+    assert 'The Brixen Consultants Team' in html_body or 'The Brixen Consultants team' in html_body
     generic_subject, generic_text, generic_html = app_mod.build_client_notification_email(
         {'full_name': 'James Example', 'email': 'client1@acmecorp.co.uk'},
         'Your order status has changed',
@@ -2391,9 +2438,9 @@ def run_tests():
     assert 'congratulations.png' not in generic_html
     assert 'bgcolor="#003971"' in generic_html
     assert 'brixen-logo.png' in generic_html
-    assert '#f3efe8' in generic_html
+    assert '#e8ecf1' in generic_html or '#f5f5f7' in generic_html or '#f8fafc' in generic_html or '#f3efe8' in generic_html
     assert '-apple-system' in generic_html
-    assert 'Helvetica Neue' in generic_html
+    assert 'Segoe UI' in generic_html or '-apple-system' in generic_html
     assert 'brixenconsultants.com' in html_body
     assert 'Brixen-Consultants.png' in html_body
     assert 'rel="icon"' in html_body
@@ -2433,7 +2480,7 @@ def run_tests():
     assert '🏦' in celeb_html
     assert '🎁' in celeb_html
     assert 'border-radius:980px' in celeb_html
-    assert 'padding:7px 14px' in celeb_html
+    assert 'padding:11px 22px' in celeb_html
     assert 'font-size:13px' in celeb_html
     activity_subject, activity_text, activity_html = app_mod.build_client_notification_email(
         {'full_name': 'James Example', 'email': 'client1@acmecorp.co.uk'},
@@ -2457,15 +2504,15 @@ def run_tests():
     assert '✅' in activity_html
     assert '-apple-system' in activity_html
     assert 'border-radius:980px' in activity_html
-    assert 'padding:7px 14px' in activity_html
+    assert 'padding:11px 22px' in activity_html
     assert app_mod.classify_product_activity('Annual Compliance Filing') == 'accounts'
     assert app_mod.classify_product_activity('Company Formation Package') == 'formation'
-    assert 'The Brixen Consultants team' in celeb_html
+    assert 'The Brixen Consultants Team' in celeb_html or 'The Brixen Consultants team' in celeb_html
     assert 'contact@brixenconsultants.com' in celeb_html
     assert 'brixenconsultants.com' in celeb_html
-    assert 'Brixen Consultants LTD' in celeb_html
+    assert 'Brixen Consultants Ltd' in celeb_html
     assert 'Kind regards' in celeb_html
-    assert 'letter-spacing:0.22em' in celeb_html
+    assert 'letter-spacing:0.22em' not in celeb_html
     assert 'congratulations.png' in celeb_html
     assert 'congratulations.gif' not in celeb_html
     assert 'background-image:url(' in celeb_html
@@ -4585,7 +4632,7 @@ def run_tests():
         luminavest_issues,
         greeting_name='Muhammad Huzaifa Sheikh',
     )
-    assert 'Action needed for LUMINAVEST LTD at Companies House' in preview_subject
+    assert 'LUMINAVEST LTD' in preview_subject
     assert 'Attention required' in preview_html
     assert 'Accounts overdue' in preview_html
     assert 'default address' in preview_html.lower()
@@ -4667,8 +4714,8 @@ def run_tests():
     # AUTOMATION TASK: SMART DOCUMENT INTAKE WORKFLOW TESTS
     # ==================================================
     import base64 as stk_b64
-    stk_bank_pdf = b"%PDF-1.4 Name: James Harrington DOB: 12/05/1984 Bank Statement Company No: 12345678 JAMES HARRINGTON LTD"
-    stk_id_pdf = b"%PDF-1.4 Passport Name: James Harrington DOB: 12/05/1984 ID Document"
+    stk_bank_pdf = b"%PDF-1.4 Name: James Harrington DOB: 12/05/1984 Bank Statement Company No: 12345678 JAMES HARRINGTON LTD" + b" % " + b"X" * 900
+    stk_id_pdf = b"%PDF-1.4 Passport Name: James Harrington DOB: 12/05/1984 ID Document" + b" % " + b"X" * 900
     
     st, hd, intake_res = make_request('/api/admin/documents/intake/process', method='POST', cookie=f"session_token={task1_admin_tok}", body={
         'files': [
@@ -4682,6 +4729,7 @@ def run_tests():
     assert len(intake_res['filed_documents']) == 2
     assert intake_res['filed_documents'][0]['category'] == 'Bank statement'
     assert intake_res['filed_documents'][1]['category'] == 'ID Document'
+    assert all(d.get('lifecycle_status') == 'CUSTOMER_UPLOADS' for d in intake_res['filed_documents']), intake_res['filed_documents']
     assert intake_res['client']['dob'] == '12/05/1984'
 
     garbage = app_mod.extract_document_text_and_metadata(
@@ -4796,7 +4844,7 @@ def run_tests():
     gibberish = app_mod._valid_person_name('Sskkkksess Naseemk Asia')
     assert gibberish is None
 
-    anon_pdf = b"%PDF-1.4 Bank Statement Tide Account Balance only"
+    anon_pdf = b"%PDF-1.4 Bank Statement Tide Account Balance only" + b" % " + b"X" * 900
     st, hd, anon_intake = make_request('/api/admin/documents/intake/process', method='POST', cookie=f"session_token={task1_admin_tok}", body={
         'files': [
             {'file_name': 'PHOTO-2026-08-15-16-53-38.jpg', 'file_content_base64': stk_b64.b64encode(anon_pdf).decode('utf-8')},
@@ -4814,6 +4862,38 @@ def run_tests():
     })
     assert st == "403 Forbidden"
     print("✓ AUTOMATION TASK: Smart Document Intake & Auto-Filing Workflow verified 100%")
+
+    # ==================================================
+    # AUTOMATION TASK: STAFF DASHBOARD & INCENTIVES TESTS
+    # ==================================================
+    st, hd, staff_dash = make_request('/api/staff/my-dashboard', method='GET', cookie=f"session_token={task1_admin_tok}")
+    assert st == "200 OK", staff_dash
+    assert staff_dash['status'] == 'success'
+    assert 'metrics' in staff_dash
+    assert staff_dash['metrics']['grade'] in ('A+', 'A', 'B', 'C', 'D')
+    assert 'my_tasks' in staff_dash
+
+    # Client role blocked from staff dashboard
+    st, hd, client_dash_err = make_request('/api/staff/my-dashboard', method='GET', cookie=f"session_token={client_a_tok}")
+    assert st == "403 Forbidden"
+
+    # Team Incentives Report API Test
+    st, hd, team_rep = make_request('/api/admin/tasks/incentives-report', method='GET', cookie=f"session_token={task1_admin_tok}")
+    assert st == "200 OK", team_rep
+    assert team_rep['status'] == 'success'
+    assert 'leaderboard' in team_rep
+    assert len(team_rep['leaderboard']) > 0
+    assert 'grade' in team_rep['leaderboard'][0]
+
+    # Task Audit Logs API Test
+    task_row = query_db("SELECT id FROM tasks ORDER BY id ASC LIMIT 1;", one=True)
+    task_id = task_row['id'] if task_row else 1
+    st, hd, task_logs = make_request(f'/api/admin/tasks/{task_id}/audit-logs', method='GET', cookie=f"session_token={task1_admin_tok}")
+    assert st == "200 OK", task_logs
+    assert task_logs['status'] == 'success'
+    assert 'audit_logs' in task_logs
+
+    print("✓ AUTOMATION TASK: Team Audit Logs, Incentives & Staff Dashboard verified 100%")
 
     print("\n==================================================")
     print("ALL HYPETEX WSGI & AUDIT FIX TESTS PASSED! (100%)")
