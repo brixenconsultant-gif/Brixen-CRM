@@ -4279,18 +4279,19 @@ async function loadClientServices() {
         const grid = document.getElementById('services-cards-grid');
         if (grid && data.status === 'success') {
             grid.innerHTML = data.services.map(s => `
-                <div class="modal-card" style="margin:0; display:flex; flex-direction:column; justify-space-between;">
+                <div class="modal-card" style="margin:0; display:flex; flex-direction:column; justify-content:space-between;">
                     <div>
                         <div style="display:flex; justify-content:space-between; align-items:center;">
-                            <span class="badge" style="background:#e0f2fe; color:#0369a1; font-weight:700; font-size:0.75rem;">${s.category}</span>
+                            <span class="badge" style="background:#e0f2fe; color:#0369a1; font-weight:700; font-size:0.75rem;">${escapeHtml(s.category)}</span>
                             <span style="font-size:1.25rem; font-weight:800; color:#003971;">£${parseFloat(s.price).toFixed(2)}</span>
                         </div>
-                        <h3 style="font-size:1.1rem; font-weight:700; margin:12px 0 6px 0; color:#0f172a;">${s.name}</h3>
-                        <p style="font-size:0.85rem; color:#64748b; margin-bottom:16px;">${s.description}</p>
+                        <h3 style="font-size:1.1rem; font-weight:700; margin:12px 0 6px 0; color:#0f172a;">${escapeHtml(s.name)}</h3>
+                        <p style="font-size:0.85rem; color:#64748b; margin-bottom:16px;">${escapeHtml(s.description || '')}</p>
                     </div>
-                    <button class="btn-primary" style="width:100%; justify-content:center;">Order Service</button>
+                    <button type="button" class="btn-primary" style="width:100%; justify-content:center;" onclick="openManualOrderModal({ service_name: '${escapeJsString(s.name)}', price: ${s.price || 0} })"><i data-lucide="shopping-cart"></i> Order Service</button>
                 </div>
             `).join('');
+            safeCreateIcons();
         }
     } catch (err) { console.error(err); }
 }
@@ -10887,4 +10888,326 @@ async function openTaskAuditModal(taskId, taskTitle) {
 function closeTaskAuditModal() {
     const modal = document.getElementById('modal-task-audit-logs');
     if (modal) modal.style.display = 'none';
+}
+
+function escapeJsString(value) {
+    return String(value == null ? '' : value)
+        .replace(/\\/g, '\\\\')
+        .replace(/'/g, "\\'")
+        .replace(/"/g, '\\"')
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '\\r');
+}
+
+/* ====================================================
+   MANUAL ORDER CREATION (B2B CLIENT & STAFF)
+   ==================================================== */
+
+let manualOrderLineItems = [];
+
+async function openManualOrderModal(prefillData) {
+    const modal = document.getElementById('modal-manual-order');
+    const form = document.getElementById('manual-order-form');
+    const err = document.getElementById('manual-order-error');
+    if (!modal) return;
+
+    if (form) form.reset();
+    if (err) {
+        err.style.display = 'none';
+        err.textContent = '';
+    }
+
+    const clientSection = document.getElementById('manual-order-client-section');
+    const existingWrap = document.getElementById('manual-order-existing-wrap');
+    const newWrap = document.getElementById('manual-order-new-wrap');
+    const companyEmail = document.getElementById('manual-order-company-email');
+    const ownerName = document.getElementById('manual-order-owner-name');
+
+    manualOrderLineItems = [];
+
+    // Populate service datalist for autocompletion
+    populateManualOrderServiceList();
+
+    const isClient = currentUser && currentUser.role === 'CLIENT';
+
+    if (isClient) {
+        if (clientSection) clientSection.style.display = 'none';
+        if (existingWrap) existingWrap.hidden = true;
+        if (newWrap) newWrap.hidden = true;
+
+        if (companyEmail) {
+            companyEmail.value = currentUser.email || '';
+        }
+        if (ownerName) {
+            ownerName.value = currentUser.full_name || '';
+        }
+
+        // Load client's own companies into company select
+        await loadClientCompaniesForManualOrderSelect();
+    } else {
+        if (clientSection) clientSection.style.display = 'block';
+        const radio = document.querySelector('input[name="manual-order-client-mode"][value="existing"]');
+        if (radio) radio.checked = true;
+        syncManualOrderClientMode();
+        await loadAdminClientsForManualOrderSelect();
+    }
+
+    // Handle prefilled service data (e.g. from Order Service button)
+    if (prefillData && prefillData.service_name) {
+        addManualOrderProductLine(prefillData.service_name, prefillData.price || 0);
+    } else {
+        addManualOrderProductLine();
+    }
+
+    modal.classList.add('active');
+    safeCreateIcons();
+}
+
+function closeManualOrderModal() {
+    const modal = document.getElementById('modal-manual-order');
+    if (modal) modal.classList.remove('active');
+}
+
+function syncManualOrderClientMode() {
+    const checked = document.querySelector('input[name="manual-order-client-mode"]:checked');
+    const mode = checked ? checked.value : 'existing';
+    const existingWrap = document.getElementById('manual-order-existing-wrap');
+    const newWrap = document.getElementById('manual-order-new-wrap');
+    if (existingWrap) existingWrap.hidden = (mode !== 'existing');
+    if (newWrap) newWrap.hidden = (mode !== 'new');
+}
+
+async function loadClientCompaniesForManualOrderSelect() {
+    const select = document.getElementById('manual-order-company');
+    if (!select) return;
+    select.innerHTML = '<option value="">No company / create with name below</option>';
+    try {
+        const res = await fetch('/api/client/companies', { credentials: 'same-origin' });
+        const data = await res.json().catch(() => ({}));
+        if (data.status === 'success' && Array.isArray(data.companies)) {
+            data.companies.forEach(c => {
+                const opt = document.createElement('option');
+                opt.value = c.id;
+                opt.textContent = c.name;
+                select.appendChild(opt);
+            });
+        }
+    } catch (err) { console.error(err); }
+}
+
+async function loadAdminClientsForManualOrderSelect() {
+    const select = document.getElementById('manual-order-client');
+    if (!select) return;
+    select.innerHTML = '<option value="">-- Select Client --</option>';
+    try {
+        const res = await fetch('/api/admin/customers?limit=500', { credentials: 'same-origin' });
+        const data = await res.json().catch(() => ({}));
+        const customers = data.customers || data.users || [];
+        if (Array.isArray(customers)) {
+            customers.forEach(c => {
+                const opt = document.createElement('option');
+                opt.value = c.id;
+                opt.textContent = `${c.full_name || 'Client'} (${c.email})`;
+                select.appendChild(opt);
+            });
+        }
+    } catch (err) { console.error(err); }
+}
+
+async function onManualOrderClientChange() {
+    const clientSelect = document.getElementById('manual-order-client');
+    const companySelect = document.getElementById('manual-order-company');
+    if (!clientSelect || !companySelect) return;
+
+    const clientId = clientSelect.value;
+    companySelect.innerHTML = '<option value="">No company / create with name below</option>';
+    if (!clientId) return;
+
+    try {
+        const res = await fetch(`/api/admin/companies?client_id=${clientId}`, { credentials: 'same-origin' });
+        const data = await res.json().catch(() => ({}));
+        const comps = data.companies || [];
+        if (Array.isArray(comps)) {
+            comps.forEach(c => {
+                const opt = document.createElement('option');
+                opt.value = c.id;
+                opt.textContent = c.name;
+                companySelect.appendChild(opt);
+            });
+        }
+    } catch (err) { console.error(err); }
+}
+
+async function populateManualOrderServiceList() {
+    const datalist = document.getElementById('manual-order-service-list');
+    if (!datalist) return;
+    datalist.innerHTML = '';
+    try {
+        const endpoint = (currentUser && currentUser.role === 'CLIENT') ? '/api/client/services' : '/api/admin/services';
+        const res = await fetch(endpoint, { credentials: 'same-origin' });
+        const data = await res.json().catch(() => ({}));
+        const services = data.services || [];
+        if (Array.isArray(services)) {
+            services.forEach(s => {
+                const opt = document.createElement('option');
+                opt.value = s.name;
+                opt.setAttribute('data-price', s.price || 0);
+                datalist.appendChild(opt);
+            });
+        }
+    } catch (err) { console.error(err); }
+}
+
+function addManualOrderProductLine(name = '', price = '') {
+    manualOrderLineItems.push({
+        id: 'line_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
+        product_name: name,
+        price: price
+    });
+    renderManualOrderProductLines();
+}
+
+function removeManualOrderProductLine(id) {
+    manualOrderLineItems = manualOrderLineItems.filter(item => item.id !== id);
+    if (manualOrderLineItems.length === 0) {
+        addManualOrderProductLine();
+        return;
+    }
+    renderManualOrderProductLines();
+}
+
+function updateManualOrderLineItem(id, field, value) {
+    const item = manualOrderLineItems.find(i => i.id === id);
+    if (!item) return;
+    item[field] = value;
+
+    if (field === 'product_name') {
+        const datalist = document.getElementById('manual-order-service-list');
+        if (datalist) {
+            const match = Array.from(datalist.options).find(opt => opt.value === value);
+            if (match && match.getAttribute('data-price')) {
+                item.price = match.getAttribute('data-price');
+                const priceInput = document.getElementById(`line-price-${id}`);
+                if (priceInput) priceInput.value = item.price;
+            }
+        }
+    }
+
+    recalculateManualOrderTotal();
+}
+
+function renderManualOrderProductLines() {
+    const container = document.getElementById('manual-order-products-container');
+    if (!container) return;
+    container.innerHTML = manualOrderLineItems.map((item) => `
+        <div style="display:grid; grid-template-columns:1fr 110px 32px; gap:8px; align-items:center;">
+            <input type="text" list="manual-order-service-list" class="select-filter" style="width:100%; font-size:0.85rem;" placeholder="Service / Product name" value="${escapeHtml(item.product_name || '')}" oninput="updateManualOrderLineItem('${item.id}', 'product_name', this.value)">
+            <input type="number" id="line-price-${item.id}" step="0.01" min="0" class="select-filter" style="width:100%; font-size:0.85rem;" placeholder="Price (£)" value="${item.price !== '' ? item.price : ''}" oninput="updateManualOrderLineItem('${item.id}', 'price', this.value)">
+            <button type="button" class="btn-secondary" style="padding:4px; text-align:center; color:#ef4444; border-color:#fca5a5;" title="Remove item" onclick="removeManualOrderProductLine('${item.id}')"><i data-lucide="trash-2" style="width:14px; height:14px;"></i></button>
+        </div>
+    `).join('');
+    recalculateManualOrderTotal();
+    safeCreateIcons();
+}
+
+function recalculateManualOrderTotal() {
+    let total = 0;
+    manualOrderLineItems.forEach(item => {
+        const p = parseFloat(item.price);
+        if (!isNaN(p) && p > 0) total += p;
+    });
+    const totalEl = document.getElementById('manual-order-total-price');
+    if (totalEl) totalEl.textContent = total.toFixed(2);
+}
+
+async function submitManualOrderForm(event) {
+    if (event) event.preventDefault();
+    const err = document.getElementById('manual-order-error');
+    const submitBtn = document.getElementById('manual-order-submit');
+    if (err) { err.style.display = 'none'; err.textContent = ''; }
+
+    const isClient = currentUser && currentUser.role === 'CLIENT';
+
+    const line_items = manualOrderLineItems.map(item => ({
+        product_name: (item.product_name || '').trim(),
+        price: parseFloat(item.price) || 0
+    })).filter(item => item.product_name !== '');
+
+    if (line_items.length === 0) {
+        if (err) { err.style.display = 'block'; err.textContent = 'Please add at least one product or service.'; }
+        return;
+    }
+
+    const payload = {
+        company_id: document.getElementById('manual-order-company')?.value || '',
+        company_name: document.getElementById('manual-order-company-name')?.value || '',
+        company_email: document.getElementById('manual-order-company-email')?.value || '',
+        owner_name: document.getElementById('manual-order-owner-name')?.value || '',
+        notes: document.getElementById('manual-order-notes')?.value || '',
+        line_items: line_items
+    };
+
+    if (!isClient) {
+        const checkedMode = document.querySelector('input[name="manual-order-client-mode"]:checked');
+        const mode = checkedMode ? checkedMode.value : 'existing';
+        payload.client_mode = mode;
+
+        if (mode === 'existing') {
+            payload.client_id = document.getElementById('manual-order-client')?.value || '';
+            if (!payload.client_id) {
+                if (err) { err.style.display = 'block'; err.textContent = 'Please select a client.'; }
+                return;
+            }
+        } else {
+            payload.new_client_full_name = document.getElementById('manual-order-new-name')?.value || '';
+            payload.new_client_email = document.getElementById('manual-order-new-email')?.value || '';
+            if (!payload.new_client_full_name || !payload.new_client_email) {
+                if (err) { err.style.display = 'block'; err.textContent = 'Please enter the new client name and email.'; }
+                return;
+            }
+        }
+    } else {
+        payload.client_mode = 'existing';
+        payload.client_id = currentUser.id;
+    }
+
+    if (!payload.company_email) {
+        if (err) { err.style.display = 'block'; err.textContent = 'Please enter the company notification email.'; }
+        return;
+    }
+
+    if (submitBtn) submitBtn.disabled = true;
+
+    try {
+        const endpoint = isClient ? '/api/client/orders' : '/api/admin/orders';
+        const res = await fetch(endpoint, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Could not create order.');
+        }
+
+        closeManualOrderModal();
+
+        // Refresh appropriate view
+        if (isClient || activeView === 'client-orders') {
+            if (typeof loadClientOrders === 'function') loadClientOrders();
+        }
+        if (!isClient || activeView === 'admin-orders') {
+            if (typeof loadAdminOrders === 'function') loadAdminOrders();
+        }
+
+        alert(data.message || 'Order created successfully!');
+    } catch (ex) {
+        if (err) {
+            err.style.display = 'block';
+            err.textContent = ex.message || 'Could not create order.';
+        }
+    } finally {
+        if (submitBtn) submitBtn.disabled = false;
+    }
 }

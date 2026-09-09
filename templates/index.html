@@ -431,9 +431,14 @@
                             <div class="page-kicker">Client Portal</div>
                             <p>Track your orders and view purchase history.</p>
                         </div>
-                        <button class="btn-secondary" onclick="loadClientOrders()">
-                            <i data-lucide="rotate-cw"></i> Refresh Orders
-                        </button>
+                        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                            <button class="btn-primary" onclick="openManualOrderModal()">
+                                <i data-lucide="plus-circle"></i> Create New Order
+                            </button>
+                            <button class="btn-secondary" onclick="loadClientOrders()">
+                                <i data-lucide="rotate-cw"></i> Refresh Orders
+                            </button>
+                        </div>
                     </div>
 
                     <div id="client-orders-error" class="dash-banner-error" style="display:none;" role="alert"></div>
@@ -1021,6 +1026,9 @@
                             <h1>Admin Orders Manager</h1>
                             <p>Every website and CRM order is here. After a customer asks for a change, open that order and update company name, email, director, address, package, or price.</p>
                         </div>
+                        <button class="btn-primary" onclick="openManualOrderModal()">
+                            <i data-lucide="plus-circle"></i> Create manual order
+                        </button>
                     </div>
 
                     <div class="stats-grid orders-stats" id="adm-orders-stats">
@@ -2443,7 +2451,7 @@
             <form id="manual-order-form" onsubmit="submitManualOrderForm(event)">
                 <div id="manual-order-error" style="display:none; padding:10px; border-radius:8px; background:#fef2f2; color:#dc2626; font-size:0.8rem; font-weight:600;" role="alert"></div>
                 <div style="display:flex; flex-direction:column; gap:12px; margin-top:10px;">
-                    <div>
+                    <div id="manual-order-client-section">
                         <label style="font-size:0.8rem; font-weight:700;">Client</label>
                         <div style="display:flex; gap:12px; margin-top:6px; flex-wrap:wrap;">
                             <label style="font-size:0.8rem;"><input type="radio" name="manual-order-client-mode" value="existing" checked onchange="syncManualOrderClientMode()"> Existing client</label>

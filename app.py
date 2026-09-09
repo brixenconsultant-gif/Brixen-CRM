@@ -1354,7 +1354,10 @@ def next_manual_order_number():
 
 def create_manual_crm_order(data, actor=None):
     """Create an order in the CRM without a website signup. Emails use company/owner addresses."""
-    extras = data if isinstance(data, dict) else {}
+    extras = dict(data) if isinstance(data, dict) else {}
+    if actor and actor.get('role') == 'CLIENT':
+        extras['client_mode'] = 'existing'
+        extras['client_id'] = actor['id']
     client_id, client, client_err = ensure_client_for_manual_company(extras, actor)
     if client_err:
         return None, client_err
@@ -10985,6 +10988,12 @@ def import_webfiling_companies(data, actor=None):
 
 def ensure_client_for_manual_company(data, actor=None):
     extras = data if isinstance(data, dict) else {}
+    if actor and actor.get('role') == 'CLIENT':
+        client_id = actor['id']
+        client = query_db("SELECT id, full_name, email, role FROM users WHERE id = ?;", (client_id,), one=True)
+        if not client:
+            return None, None, 'Client account not found'
+        return client_id, client, None
     client_id = optional_record_id(extras.get('client_id') or extras.get('user_id'))
     if client_id:
         client = query_db("SELECT id, full_name, email, role FROM users WHERE id = ?;", (client_id,), one=True)
@@ -16878,16 +16887,22 @@ def application(environ, start_response):
             'portal_login_ready': True,
         })
 
-    if path == '/api/admin/orders' and method == 'POST':
-        if not user or not check_permission(user, 'orders.edit'):
+    if path in ('/api/admin/orders', '/api/client/orders') and method == 'POST':
+        if not user:
+            return json_response(start_response, {'status': 'error', 'message': 'Authentication required'}, "401 Unauthorized")
+        if user.get('role') != 'CLIENT' and not check_permission(user, 'orders.edit'):
             return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
         data = parse_body(environ)
+        data = dict(data if isinstance(data, dict) else {})
+        if user.get('role') == 'CLIENT':
+            data['client_mode'] = 'existing'
+            data['client_id'] = user['id']
         created, err = create_manual_crm_order(data, actor=user)
         if err:
             return json_response(start_response, {'status': 'error', 'message': err}, "400 Bad Request")
         return json_response(start_response, {
             'status': 'success',
-            'message': f"Manual order {created.get('order_number')} created. Notifications will use the company email.",
+            'message': f"Order {created.get('order_number')} created successfully.",
             'order': apply_connector_display(dict(created)) if created else created,
         })
 
