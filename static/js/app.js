@@ -4885,6 +4885,53 @@ function renderAdminChart(monthlyData) {
     requestAnimationFrame(() => requestAnimationFrame(draw));
 }
 
+function drawRevenueFallback(canvas, labels, values) {
+    if (!canvas) return;
+    const wrap = canvas.parentElement;
+    const width = Math.max(wrap ? wrap.clientWidth : 0, 260);
+    const height = Math.max(wrap ? wrap.clientHeight : 0, 200);
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.floor(width * dpr);
+    canvas.height = Math.floor(height * dpr);
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    const pad = { top: 16, right: 12, bottom: 36, left: 48 };
+    const plotW = Math.max(width - pad.left - pad.right, 10);
+    const plotH = Math.max(height - pad.top - pad.bottom, 10);
+    const max = Math.max(...(values || [1]), 1);
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(pad.left, pad.top);
+    ctx.lineTo(pad.left, pad.top + plotH);
+    ctx.lineTo(pad.left + plotW, pad.top + plotH);
+    ctx.stroke();
+
+    ctx.strokeStyle = '#8b5cf6';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    (values || []).forEach((v, i) => {
+        const x = pad.left + (i * plotW) / Math.max(values.length - 1, 1);
+        const y = pad.top + plotH - (v / max) * plotH;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    ctx.fillStyle = '#8b5cf6';
+    (values || []).forEach((v, i) => {
+        const x = pad.left + (i * plotW) / Math.max(values.length - 1, 1);
+        const y = pad.top + plotH - (v / max) * plotH;
+        ctx.beginPath();
+        ctx.arc(x, y, 4, 0, Math.PI * 2);
+        ctx.fill();
+    });
+}
+
 let adminOrdersPage = 1;
 let adminOrdersTimer = null;
 
