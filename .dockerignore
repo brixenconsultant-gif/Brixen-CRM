@@ -17,11 +17,9 @@ __pycache__/
 .venv/
 venv/
 
-# ── Database (lives on a Docker volume, not baked in) ──────
-*.db
+# ── Database — allow hypetex.db through for seeding ────────
 *.sqlite
 *.sqlite3
-hypetex.db
 
 # ── Environment / secrets ─────────────────────────────────
 .env

@@ -1,18 +1,15 @@
 # ============================================================
-# Brixen CRM — Production Docker Image
+# Brixen CRM — Production Docker Image (with seed data)
 # ============================================================
-# Multi-stage build: slim Python base + only runtime deps.
-# SQLite database and client uploads are stored on a named
-# volume mounted at /app/data.
+# Includes the SQLite database and client uploads baked into
+# the image as seed data. On first run, the entrypoint copies
+# them into the persistent Docker volumes so your data survives
+# container rebuilds.
 # ============================================================
 
-FROM python:3.12-slim AS base
+FROM python:3.12-slim
 
 # ── System dependencies ────────────────────────────────────
-# tesseract-ocr  → pytesseract OCR
-# libpdfium      → pypdfium2 rendering (wheels ship their own, but
-#                   we keep ldd deps satisfied)
-# curl           → healthcheck
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         tesseract-ocr \
@@ -24,12 +21,13 @@ RUN apt-get update && \
         libjpeg62-turbo \
         libpng16-16 \
         curl \
+        sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
 # ── App directory ──────────────────────────────────────────
 WORKDIR /app
 
-# ── Python dependencies ───────────────────────────────────
+# ── Python dependencies (cached layer) ────────────────────
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -40,8 +38,15 @@ COPY templates/ templates/
 COPY static/ static/
 COPY scripts/ scripts/
 
-# ── Data directory (will be a Docker volume) ───────────────
-RUN mkdir -p /app/data /app/storage/clients
+# ── Seed data (database + client uploads) ──────────────────
+# These are copied into volumes on first run by the entrypoint
+RUN mkdir -p /app/seed /app/data /app/storage/clients
+COPY hypetex.db /app/seed/hypetex.db
+COPY storage/clients/ /app/seed/clients/
+
+# ── Entrypoint ─────────────────────────────────────────────
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
 
 # ── Runtime configuration ─────────────────────────────────
 ENV HOST=0.0.0.0
@@ -54,5 +59,4 @@ EXPOSE 5050
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:5050/ || exit 1
 
-# ── Entrypoint ─────────────────────────────────────────────
-CMD ["python", "app.py"]
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
