@@ -5899,3 +5899,160 @@ div.portal-overview-card {
     font-weight: 700;
     color: var(--text-primary);
 }
+
+/* Dashboard SVG Ring & Gauge Component Fixes */
+svg circle,
+.dash-ring-track,
+.dash-ring-value,
+.dash-gauge-track,
+.dash-gauge-value {
+    fill: none !important;
+}
+.dash-gauge {
+    position: relative;
+    width: 120px;
+    height: 120px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.dash-gauge-svg {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    transform: rotate(-90deg);
+}
+.dash-gauge-track {
+    fill: none !important;
+    stroke: var(--apple-line, #e5e7eb);
+    stroke-width: 8;
+}
+.dash-gauge-value {
+    fill: none !important;
+    stroke: var(--brand-primary, #6366f1);
+    stroke-width: 8;
+    stroke-linecap: round;
+    transition: stroke-dashoffset 0.6s ease;
+}
+.dash-gauge-center {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+}
+#adm-dash-gauge-num {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text-primary, #111827);
+    line-height: 1.2;
+}
+#adm-dash-gauge-label {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--text-secondary, #6b7280);
+}
+.dash-ops-body {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+}
+.dash-ops-list {
+    flex: 1;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.dash-ops-list li {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+.dash-ops-list li strong {
+    font-size: 0.95rem;
+    color: var(--text-primary);
+}
+
+.dash-ring {
+    position: relative;
+    width: 80px;
+    height: 80px;
+    margin: 8px auto;
+}
+.dash-ring svg {
+    width: 100%;
+    height: 100%;
+    transform: rotate(-90deg);
+}
+.dash-ring-track {
+    fill: none !important;
+    stroke: var(--apple-line, #e5e7eb);
+    stroke-width: 8;
+}
+.dash-ring-value {
+    fill: none !important;
+    stroke-width: 8;
+    stroke-linecap: round;
+    transition: stroke-dashoffset 0.6s ease;
+}
+.dash-ring-value.tone-purple { stroke: #8b5cf6; }
+.dash-ring-value.tone-orange { stroke: #f59e0b; }
+.dash-ring-value.tone-red { stroke: #ef4444; }
+.dash-ring-value.tone-green { stroke: #10b981; }
+.dash-ring-value.tone-blue { stroke: #0284c7; }
+
+.dash-ring-card {
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+.dash-ring-label {
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+.dash-ring-chart {
+    position: relative;
+    width: 80px;
+    height: 80px;
+    margin: 8px auto;
+}
+.dash-ring-svg {
+    width: 100%;
+    height: 100%;
+    transform: rotate(-90deg);
+}
+.dash-ring-pct {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+.dash-ring-num {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+.dash-ring-link {
+    font-size: 0.75rem;
+    color: var(--brand-primary);
+    cursor: pointer;
+}
+
