@@ -8,6 +8,7 @@ import hmac
 import hashlib
 import datetime
 import urllib.parse
+import uuid
 from unittest.mock import patch
 from app import application, checkout_form_fields_from_payload, coalesce_checkout_address_fields, extract_order_company_name
 import app as app_mod
@@ -1752,12 +1753,11 @@ def run_tests():
                 assert directors == ['Muhammad Shakeel', 'Sara Ali']
                 ch_comp_row = query_db("SELECT * FROM companies WHERE id = ?;", (ch_fill_company,), one=True)
                 app_mod._CH_API_CACHE.clear()
-                sync_res = app_mod.sync_registered_company_from_companies_house(ch_comp_row)
-                app_mod._CH_REGISTERED_SYNC_BLOCKED = True
                 status, headers, filled_company = make_request(
                     f"/api/admin/companies/{ch_fill_company}",
                     cookie=f"session_token={adm_comp_token}",
                 )
+                app_mod._CH_REGISTERED_SYNC_BLOCKED = True
     assert status == "200 OK", filled_company
     assert filled_company.get('company', {}).get('directors') == ['Muhammad Shakeel', 'Sara Ali']
     assert 'Muhammad Shakeel' in (filled_company.get('company', {}).get('director') or '')
@@ -4971,6 +4971,50 @@ def run_tests():
     created_order = order_sub_res['order']
     assert created_order['price'] == first_prod['price'], f"Authoritative price mismatch: expected {first_prod['price']}, got {created_order['price']}"
     print(f"✓ Authoritative Price Protection -> Client price override rejected; set to catalog price £{created_order['price']}")
+
+    # 8. Test Customer Classification: Normal Customer (No B2B ID)
+    st, hd, normal_cust_res = make_request('/api/admin/staff', method='POST', body={
+        'full_name': 'Normal Customer John',
+        'email': f"john.normal.{uuid.uuid4().hex[:6]}@example.com",
+        'password': 'NormalPass123!',
+        'role': 'CLIENT',
+        'client_type': 'Normal'
+    }, cookie=f"session_token={task1_admin_tok}")
+    assert st == "200 OK", normal_cust_res
+    assert normal_cust_res['status'] == 'success'
+    normal_user = normal_cust_res['user']
+    assert normal_user['client_type'] == 'Normal'
+    assert normal_user['b2b_id'] is None, f"Expected b2b_id None for Normal Customer, got {normal_user['b2b_id']}"
+    print(f"✓ Customer Classification -> Normal Customer created cleanly with NO B2B ID.")
+
+    # 9. Test Customer Classification: B2B Customer (Unique B2B ID)
+    st, hd, b2b_cust_res = make_request('/api/admin/staff', method='POST', body={
+        'full_name': 'Corporate B2B Account',
+        'email': f"admin.b2bcorp.{uuid.uuid4().hex[:6]}@b2bcorp.co.uk",
+        'password': 'B2BPass123!',
+        'role': 'CLIENT',
+        'client_type': 'B2B'
+    }, cookie=f"session_token={task1_admin_tok}")
+    assert st == "200 OK", b2b_cust_res
+    assert b2b_cust_res['status'] == 'success'
+    b2b_user = b2b_cust_res['user']
+    assert b2b_user['client_type'] == 'B2B'
+    assert b2b_user['b2b_id'] and b2b_user['b2b_id'].startswith('B2B-'), f"Expected B2B-XXXXXX ID, got {b2b_user['b2b_id']}"
+    print(f"✓ Customer Classification -> B2B Customer created with unique B2B Client ID {b2b_user['b2b_id']}")
+
+    # 10. Test Normal Customer ordering Company Formation (Remains Normal Customer!)
+    st, hd, normal_order_res = make_request('/api/admin/orders', method='POST', body={
+        'service_id': first_prod['id'],
+        'client_id': normal_user['id'],
+        'form_values': {'proposed_company_name': 'JOHN RETAIL ENTERPRISES LTD'}
+    }, cookie=f"session_token={task1_admin_tok}")
+    assert st == "200 OK", normal_order_res
+    assert normal_order_res['status'] == 'success'
+    # Verify user is still Normal Customer!
+    normal_check = query_db("SELECT client_type, is_b2b, b2b_id FROM users WHERE id = ?;", (normal_user['id'],), one=True)
+    assert normal_check['client_type'] == 'Normal'
+    assert normal_check['b2b_id'] is None
+    print(f"✓ Product Selection Independence -> Normal customer ordered Company Formation and REMAINED a Normal Customer with no B2B ID!")
 
     print("\n==================================================")
     print("ALL HYPETEX WSGI & AUDIT FIX TESTS PASSED! (100%)")

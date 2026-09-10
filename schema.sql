@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS users (
     status TEXT NOT NULL DEFAULT 'Active' CHECK(status IN ('Active', 'Suspended', 'Pending')),
     two_factor_enabled INTEGER DEFAULT 0,
     b2b_id TEXT UNIQUE,
-    client_type TEXT DEFAULT 'B2B',
+    client_type TEXT DEFAULT 'Normal',
     theme_preference TEXT DEFAULT 'system',
     last_synced_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP

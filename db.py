@@ -239,14 +239,20 @@ def ensure_schema():
     if 'notification_email' not in user_cols:
         conn.execute("ALTER TABLE users ADD COLUMN notification_email TEXT")
     if 'is_b2b' not in user_cols:
-        conn.execute("ALTER TABLE users ADD COLUMN is_b2b INTEGER NOT NULL DEFAULT 1")
+        conn.execute("ALTER TABLE users ADD COLUMN is_b2b INTEGER NOT NULL DEFAULT 0")
     if 'account_type' not in user_cols:
-        conn.execute("ALTER TABLE users ADD COLUMN account_type TEXT DEFAULT 'B2B Client (Brixen Website Panel)'")
-        conn.execute("UPDATE users SET account_type = 'B2B Client (Brixen Website Panel)', is_b2b = 1 WHERE role = 'CLIENT'")
+        conn.execute("ALTER TABLE users ADD COLUMN account_type TEXT DEFAULT 'Normal Client'")
     if 'b2b_id' not in user_cols:
         conn.execute("ALTER TABLE users ADD COLUMN b2b_id TEXT")
     if 'client_type' not in user_cols:
-        conn.execute("ALTER TABLE users ADD COLUMN client_type TEXT DEFAULT 'B2B'")
+        conn.execute("ALTER TABLE users ADD COLUMN client_type TEXT DEFAULT 'Normal'")
+
+    # Safe Audit: Ensure standard retail/individual clients default to Normal Customer (is_b2b = 0, b2b_id = NULL)
+    conn.execute("""
+        UPDATE users 
+        SET b2b_id = NULL, client_type = 'Normal', is_b2b = 0 
+        WHERE role = 'CLIENT' AND (is_b2b = 0 OR client_type = 'Normal' OR (account_type IS NOT NULL AND account_type NOT LIKE '%B2B%'));
+    """)
     if 'theme_preference' not in user_cols:
         conn.execute("ALTER TABLE users ADD COLUMN theme_preference TEXT DEFAULT 'system'")
     if 'checkout_phone' not in order_cols:

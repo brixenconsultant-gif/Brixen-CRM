@@ -11386,12 +11386,15 @@ async function submitManualOrderForm(event) {
 }
 
 /* ====================================================
-   UNIVERSAL B2B ORDER CREATION ENGINE & WIZARD
+   UNIVERSAL CUSTOMER-CENTRIC ORDER CREATION ENGINE (5-STEP WIZARD)
    ==================================================== */
 let universalOrderWizardState = {
     currentStep: 1,
+    selectedCustomer: null,
     selectedProduct: null,
+    customersList: [],
     catalogProducts: [],
+    activeCustomerTypeFilter: 'All',
     activeCategory: 'All',
     formValues: {},
     repeatableData: {},
@@ -11409,8 +11412,11 @@ async function openUniversalOrderWizard(prefillData = null) {
 
     universalOrderWizardState = {
         currentStep: 1,
+        selectedCustomer: null,
         selectedProduct: null,
+        customersList: [],
         catalogProducts: [],
+        activeCustomerTypeFilter: 'All',
         activeCategory: 'All',
         formValues: {},
         repeatableData: {},
@@ -11424,22 +11430,35 @@ async function openUniversalOrderWizard(prefillData = null) {
     modal.classList.add('active');
 
     const isClient = currentUser && currentUser.role === 'CLIENT';
-    const adminClientWrap = document.getElementById('wizard-admin-client-wrap');
-    const clientProfileWrap = document.getElementById('wizard-client-profile-wrap');
+    const adminCustomerPane = document.getElementById('wizard-admin-customer-select-pane');
+    const clientCustomerPane = document.getElementById('wizard-client-customer-summary-pane');
 
     if (isClient) {
-        if (adminClientWrap) adminClientWrap.style.display = 'none';
-        if (clientProfileWrap) {
-            clientProfileWrap.style.display = 'block';
-            document.getElementById('wizard-client-display-name').textContent = currentUser.full_name || 'B2B Client';
-            document.getElementById('wizard-client-display-email').textContent = currentUser.email || '';
-            document.getElementById('wizard-client-display-b2b').textContent = currentUser.b2b_id || 'B2B-CLIENT';
+        if (adminCustomerPane) adminCustomerPane.style.display = 'none';
+        if (clientCustomerPane) {
+            clientCustomerPane.style.display = 'block';
+            document.getElementById('wizard-client-self-name').textContent = currentUser.full_name || 'Customer';
+            document.getElementById('wizard-client-self-email').textContent = currentUser.email || '';
+
+            const isB2B = (currentUser.is_b2b === 1 || currentUser.client_type === 'B2B');
+            const b2bWrap = document.getElementById('wizard-client-self-b2b-wrap');
+            const b2bBadge = document.getElementById('wizard-client-self-b2b-badge');
+            const typeLabel = document.getElementById('wizard-client-self-type-label');
+
+            if (isB2B && currentUser.b2b_id) {
+                if (typeLabel) typeLabel.textContent = 'B2B CORPORATE ACCOUNT';
+                if (b2bBadge) b2bBadge.textContent = currentUser.b2b_id;
+                if (b2bWrap) b2bWrap.style.display = 'block';
+            } else {
+                if (typeLabel) typeLabel.textContent = 'NORMAL CUSTOMER ACCOUNT';
+                if (b2bWrap) b2bWrap.style.display = 'none';
+            }
         }
-        document.getElementById('wizard-owner-email').value = currentUser.email || '';
+        universalOrderWizardState.selectedCustomer = currentUser;
     } else {
-        if (adminClientWrap) adminClientWrap.style.display = 'block';
-        if (clientProfileWrap) clientProfileWrap.style.display = 'none';
-        await loadWizardAdminClientsSelect();
+        if (adminCustomerPane) adminCustomerPane.style.display = 'block';
+        if (clientCustomerPane) clientCustomerPane.style.display = 'none';
+        await fetchWizardCustomersList();
     }
 
     await fetchWizardCatalogProducts();
@@ -11450,9 +11469,11 @@ async function openUniversalOrderWizard(prefillData = null) {
             (p.name && prefillData.service_name && p.name.toLowerCase() === prefillData.service_name.toLowerCase())
         );
         if (match) {
-            selectWizardProduct(match.id);
-        } else if (prefillData.service_name) {
-            selectWizardProductByName(prefillData.service_name, prefillData.price || 0);
+            universalOrderWizardState.selectedProduct = match;
+            if (isClient) jumpToWizardStep(3);
+            else jumpToWizardStep(1);
+        } else {
+            jumpToWizardStep(1);
         }
     } else {
         jumpToWizardStep(1);
@@ -11467,6 +11488,107 @@ function closeUniversalOrderWizard() {
         modal.style.display = 'none';
         modal.classList.remove('active');
     }
+}
+
+async function fetchWizardCustomersList() {
+    const grid = document.getElementById('wizard-customers-grid');
+    if (grid) grid.innerHTML = '<div style="text-align:center; padding:40px; color:var(--color-text-muted); grid-column:1/-1;">Loading Customers...</div>';
+
+    try {
+        const res = await fetch('/api/admin/customers?limit=500', { credentials: 'same-origin' });
+        const data = await res.json().catch(() => ({}));
+        universalOrderWizardState.customersList = data.customers || data.users || [];
+    } catch (err) {
+        console.error('Customer fetch error:', err);
+    }
+
+    renderWizardCustomersGrid();
+}
+
+function setWizardCustomerTypeFilter(type) {
+    universalOrderWizardState.activeCustomerTypeFilter = type;
+    
+    ['all', 'normal', 'b2b'].forEach(t => {
+        const pill = document.getElementById(`pill-cust-${t}`);
+        if (pill) {
+            if ((t === 'all' && type === 'All') || (t === 'normal' && type === 'Normal') || (t === 'b2b' && type === 'B2B')) {
+                pill.classList.add('active');
+            } else {
+                pill.classList.remove('active');
+            }
+        }
+    });
+
+    renderWizardCustomersGrid();
+}
+
+function filterWizardCustomers() {
+    renderWizardCustomersGrid();
+}
+
+function renderWizardCustomersGrid() {
+    const grid = document.getElementById('wizard-customers-grid');
+    if (!grid) return;
+
+    const search = (document.getElementById('wizard-customer-search')?.value || '').toLowerCase().trim();
+    const typeFilter = universalOrderWizardState.activeCustomerTypeFilter;
+
+    const filtered = universalOrderWizardState.customersList.filter(c => {
+        const isB2B = (c.is_b2b === 1 || c.client_type === 'B2B');
+        const matchesType = (typeFilter === 'All') ||
+            (typeFilter === 'B2B' && isB2B) ||
+            (typeFilter === 'Normal' && !isB2B);
+
+        const nameMatch = (c.full_name || '').toLowerCase().includes(search);
+        const emailMatch = (c.email || '').toLowerCase().includes(search);
+        const phoneMatch = (c.phone || '').toLowerCase().includes(search);
+        const b2bMatch = isB2B && (c.b2b_id || '').toLowerCase().includes(search);
+
+        return matchesType && (!search || nameMatch || emailMatch || phoneMatch || b2bMatch);
+    });
+
+    if (filtered.length === 0) {
+        grid.innerHTML = '<div style="text-align:center; padding:30px; color:var(--color-text-muted); grid-column:1/-1;">No matching customers found.</div>';
+        return;
+    }
+
+    grid.innerHTML = filtered.map(c => {
+        const isB2B = (c.is_b2b === 1 || c.client_type === 'B2B');
+        const isSelected = (universalOrderWizardState.selectedCustomer && universalOrderWizardState.selectedCustomer.id === c.id);
+
+        return `
+            <div style="background:var(--color-surface); border:2px solid ${isSelected ? 'var(--color-primary)' : 'var(--color-border)'}; border-radius:12px; padding:16px; display:flex; flex-direction:column; justify-content:space-between; cursor:pointer; transition:all 0.15s ease;"
+                 class="card-hover-effect" onclick="selectWizardCustomer(${c.id})">
+                <div>
+                    <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px;">
+                        <span class="status-badge ${isB2B ? 'active' : 'info'}" style="font-size:0.72rem;">
+                            ${isB2B ? 'B2B Account' : 'Normal Customer'}
+                        </span>
+                        ${isB2B && c.b2b_id ? `<span style="font-weight:700; font-size:0.75rem; color:var(--color-success);">${escapeHtml(c.b2b_id)}</span>` : ''}
+                    </div>
+                    <h4 style="font-size:1.02rem; font-weight:700; color:var(--color-text-primary); margin:4px 0 2px 0;">${escapeHtml(c.full_name || 'Client')}</h4>
+                    <div style="font-size:0.8rem; color:var(--color-text-secondary);">${escapeHtml(c.email)}</div>
+                    ${c.phone ? `<div style="font-size:0.78rem; color:var(--color-text-muted); margin-top:2px;">📞 ${escapeHtml(c.phone)}</div>` : ''}
+                </div>
+                <div style="margin-top:12px; text-align:right;">
+                    <button type="button" class="btn-${isSelected ? 'primary' : 'secondary'}" style="padding:4px 12px; font-size:0.78rem;">
+                        ${isSelected ? 'Selected ✓' : 'Select Customer'}
+                    </button>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    safeCreateIcons();
+}
+
+function selectWizardCustomer(customerId) {
+    const cust = universalOrderWizardState.customersList.find(c => c.id == customerId);
+    if (!cust) return;
+
+    universalOrderWizardState.selectedCustomer = cust;
+    renderWizardCustomersGrid();
+    jumpToWizardStep(2);
 }
 
 async function fetchWizardCatalogProducts() {
@@ -11585,45 +11707,30 @@ function selectWizardProduct(productId) {
         });
     }
 
-    if (currentUser) {
-        universalOrderWizardState.formValues['full_name'] = currentUser.full_name || '';
-        universalOrderWizardState.formValues['email'] = currentUser.email || '';
-        universalOrderWizardState.formValues['phone'] = currentUser.phone || '';
-        universalOrderWizardState.formValues['company_name'] = currentUser.company_name || '';
+    const cust = universalOrderWizardState.selectedCustomer;
+    if (cust) {
+        universalOrderWizardState.formValues['full_name'] = cust.full_name || '';
+        universalOrderWizardState.formValues['email'] = cust.email || '';
+        universalOrderWizardState.formValues['phone'] = cust.phone || '';
     }
 
-    jumpToWizardStep(2);
-}
-
-function selectWizardProductByName(name, price = 0) {
-    const mockProduct = {
-        id: 9999,
-        name: name,
-        category: 'Custom Service',
-        description: `Order specifications for ${name}`,
-        price: price,
-        estimated_delivery_time: '24-48 Hours',
-        form_config: [
-            { id: 'service_spec', name: 'service_spec', label: `Specifications for ${name}`, type: 'textarea', required: true, placeholder: 'Enter your project or order requirements...' }
-        ],
-        document_requirements: [
-            { id: 'supporting_file', name: 'Supporting Specification File', required: false, description: 'Optional project upload' }
-        ]
-    };
-    universalOrderWizardState.selectedProduct = mockProduct;
-    jumpToWizardStep(2);
+    jumpToWizardStep(3);
 }
 
 function jumpToWizardStep(stepNum) {
     hideWizardError();
 
-    if (stepNum > 1 && !universalOrderWizardState.selectedProduct) {
-        showWizardError('Please select a product or service first.');
+    // Guard Step Navigation
+    if (stepNum > 1 && !universalOrderWizardState.selectedCustomer) {
+        showWizardError('Please select a customer first.');
         return;
     }
-
-    if (stepNum === 3) {
-        const valErr = validateWizardStep2Fields();
+    if (stepNum > 2 && !universalOrderWizardState.selectedProduct) {
+        showWizardError('Please select a service/product first.');
+        return;
+    }
+    if (stepNum === 4) {
+        const valErr = validateWizardStep3Fields();
         if (valErr) {
             showWizardError(valErr);
             return;
@@ -11632,7 +11739,7 @@ function jumpToWizardStep(stepNum) {
 
     universalOrderWizardState.currentStep = stepNum;
 
-    for (let i = 1; i <= 4; i++) {
+    for (let i = 1; i <= 5; i++) {
         const pill = document.getElementById(`wizard-step-pill-${i}`);
         const pane = document.getElementById(`wizard-step-${i}`);
         if (pill) {
@@ -11650,15 +11757,15 @@ function jumpToWizardStep(stepNum) {
     const btnSubmit = document.getElementById('wizard-btn-submit');
 
     if (btnBack) btnBack.style.display = (stepNum > 1) ? 'inline-flex' : 'none';
-    if (btnNext) btnNext.style.display = (stepNum < 4) ? 'inline-flex' : 'none';
-    if (btnSubmit) btnSubmit.style.display = (stepNum === 4) ? 'inline-flex' : 'none';
+    if (btnNext) btnNext.style.display = (stepNum < 5) ? 'inline-flex' : 'none';
+    if (btnSubmit) btnSubmit.style.display = (stepNum === 5) ? 'inline-flex' : 'none';
 
-    if (stepNum === 2) {
-        renderWizardStep2Form();
-    } else if (stepNum === 3) {
-        renderWizardStep3Documents();
+    if (stepNum === 3) {
+        renderWizardStep3Form();
     } else if (stepNum === 4) {
-        renderWizardStep4Review();
+        renderWizardStep4Documents();
+    } else if (stepNum === 5) {
+        renderWizardStep5Review();
     }
 
     safeCreateIcons();
@@ -11666,20 +11773,30 @@ function jumpToWizardStep(stepNum) {
 
 function navigateWizardStep(delta) {
     const target = universalOrderWizardState.currentStep + delta;
-    if (target >= 1 && target <= 4) {
+    if (target >= 1 && target <= 5) {
         jumpToWizardStep(target);
     }
 }
 
-function renderWizardStep2Form() {
+function renderWizardStep3Form() {
     const p = universalOrderWizardState.selectedProduct;
+    const cust = universalOrderWizardState.selectedCustomer;
     if (!p) return;
 
     document.getElementById('wizard-selected-cat').textContent = p.category || 'Service';
     document.getElementById('wizard-selected-title').textContent = p.name;
-    document.getElementById('wizard-selected-desc').textContent = p.description || '';
     document.getElementById('wizard-selected-price').textContent = `£${parseFloat(p.price || 0).toFixed(2)}`;
     document.getElementById('wizard-selected-est').textContent = `Est: ${p.estimated_delivery_time || '24-48 Hours'}`;
+
+    const isB2B = (cust && (cust.is_b2b === 1 || cust.client_type === 'B2B'));
+    const custSummary = document.getElementById('wizard-selected-customer-summary');
+    if (custSummary) {
+        if (isB2B && cust.b2b_id) {
+            custSummary.innerHTML = `Customer: <strong>${escapeHtml(cust.full_name || 'Client')}</strong> (${escapeHtml(cust.email)}) • <span style="color:var(--color-success); font-weight:700;">${escapeHtml(cust.b2b_id)}</span>`;
+        } else {
+            custSummary.innerHTML = `Customer: <strong>${escapeHtml((cust || {}).full_name || 'Client')}</strong> (${escapeHtml((cust || {}).email || '')})`;
+        }
+    }
 
     const fieldsContainer = document.getElementById('wizard-dynamic-fields-container');
     if (fieldsContainer) {
@@ -11833,7 +11950,7 @@ function updateWizardRepeatableFieldValue(sectionId, idx, fieldId, value) {
     }
 }
 
-function validateWizardStep2Fields() {
+function validateWizardStep3Fields() {
     const p = universalOrderWizardState.selectedProduct;
     if (!p || !p.form_config) return null;
 
@@ -11848,7 +11965,7 @@ function validateWizardStep2Fields() {
     return null;
 }
 
-function renderWizardStep3Documents() {
+function renderWizardStep4Documents() {
     const container = document.getElementById('wizard-documents-checklist');
     if (!container) return;
 
@@ -11913,7 +12030,7 @@ async function handleWizardFileUpload(docReqId, fileInput) {
                 file_path: data.file_path || '',
                 status: 'Uploaded'
             };
-            renderWizardStep3Documents();
+            renderWizardStep4Documents();
         } else {
             showWizardError(data.message || 'File upload failed. Please try again.');
         }
@@ -11922,8 +12039,9 @@ async function handleWizardFileUpload(docReqId, fileInput) {
     }
 }
 
-function renderWizardStep4Review() {
+function renderWizardStep5Review() {
     const p = universalOrderWizardState.selectedProduct;
+    const cust = universalOrderWizardState.selectedCustomer;
     if (!p) return;
 
     const price = parseFloat(p.price || 0);
@@ -11935,10 +12053,17 @@ function renderWizardStep4Review() {
     document.getElementById('review-total-price').textContent = `£${total.toFixed(2)}`;
     document.getElementById('review-vat-breakdown').textContent = `Subtotal £${price.toFixed(2)} + VAT (20%) £${vat.toFixed(2)}`;
 
-    const ownerEmail = document.getElementById('wizard-owner-email')?.value || (currentUser ? currentUser.email : '');
-    document.getElementById('review-b2b-routing-info').textContent = `Order work notifications routed directly to B2B Account Owner (${ownerEmail})`;
+    const isB2B = (cust && (cust.is_b2b === 1 || cust.client_type === 'B2B'));
+    const custIdentity = document.getElementById('review-customer-identity');
+    if (custIdentity) {
+        if (isB2B && cust.b2b_id) {
+            custIdentity.innerHTML = `Customer: <strong>${escapeHtml(cust.full_name || 'Client')}</strong> (${escapeHtml(cust.email)}) • <span class="status-badge active">${escapeHtml(cust.b2b_id)}</span>`;
+        } else {
+            custIdentity.innerHTML = `Customer: <strong>${escapeHtml((cust || {}).full_name || 'Client')}</strong> (${escapeHtml((cust || {}).email || '')})`;
+        }
+    }
 
-    const fieldsErr = validateWizardStep2Fields();
+    const fieldsErr = validateWizardStep3Fields();
     const fieldsIcon = document.getElementById('review-fields-check-icon');
     const fieldsTitle = document.getElementById('review-fields-check-title');
 
@@ -11967,6 +12092,7 @@ function renderWizardStep4Review() {
 
 async function saveUniversalOrderDraft() {
     const p = universalOrderWizardState.selectedProduct;
+    const cust = universalOrderWizardState.selectedCustomer;
     if (!p) {
         showWizardError('Please select a product first.');
         return;
@@ -11975,6 +12101,7 @@ async function saveUniversalOrderDraft() {
     const payload = {
         service_id: p.id,
         service_name: p.name,
+        client_id: (cust || {}).id,
         current_step: universalOrderWizardState.currentStep,
         form_values: universalOrderWizardState.formValues,
         repeatable_data: universalOrderWizardState.repeatableData,
@@ -12004,15 +12131,23 @@ async function saveUniversalOrderDraft() {
 
 async function submitUniversalOrder() {
     const p = universalOrderWizardState.selectedProduct;
+    const cust = universalOrderWizardState.selectedCustomer;
+
+    if (!cust) {
+        showWizardError('Please select a customer.');
+        jumpToWizardStep(1);
+        return;
+    }
     if (!p) {
         showWizardError('Please select a product.');
+        jumpToWizardStep(2);
         return;
     }
 
-    const fieldsErr = validateWizardStep2Fields();
+    const fieldsErr = validateWizardStep3Fields();
     if (fieldsErr) {
         showWizardError(fieldsErr);
-        jumpToWizardStep(2);
+        jumpToWizardStep(3);
         return;
     }
 
@@ -12020,15 +12155,13 @@ async function submitUniversalOrder() {
     if (submitBtn) submitBtn.disabled = true;
 
     const isClient = currentUser && currentUser.role === 'CLIENT';
-    const clientSelect = document.getElementById('wizard-client-id');
-    const clientId = !isClient ? (clientSelect ? clientSelect.value : '') : currentUser.id;
-    const ownerEmail = document.getElementById('wizard-owner-email')?.value || (currentUser ? currentUser.email : '');
+    const clientId = cust.id;
 
     const payload = {
         service_id: p.id,
         service_name: p.name,
         client_id: clientId,
-        company_email: ownerEmail,
+        company_email: cust.email,
         form_values: universalOrderWizardState.formValues,
         repeatable_data: universalOrderWizardState.repeatableData,
         uploaded_docs: universalOrderWizardState.uploadedDocs,

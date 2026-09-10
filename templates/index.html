@@ -66,7 +66,7 @@
             if (app) app.setAttribute('hidden', '');
         });
     </script>
-    <link rel="stylesheet" href="/static/css/styles.css?v=280.0">
+    <link rel="stylesheet" href="/static/css/styles.css?v=290.0">
     <script src="/static/js/vendor/lucide.min.js"></script>
     <script src="/static/js/vendor/chart.umd.min.js"></script>
 </head>
@@ -2475,28 +2475,32 @@
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <div>
                         <h3 style="font-size:1.3rem; font-weight:800; color:var(--color-text-primary); margin:0;" id="wizard-header-title">Create New Order</h3>
-                        <p style="font-size:0.82rem; color:var(--color-text-muted); margin:4px 0 0 0;" id="wizard-header-subtitle">Browse catalog products or configure your order specifications.</p>
+                        <p style="font-size:0.82rem; color:var(--color-text-muted); margin:4px 0 0 0;" id="wizard-header-subtitle">Select customer, choose product, and configure order specifications.</p>
                     </div>
                     <button type="button" class="btn-close" onclick="closeUniversalOrderWizard()"><i data-lucide="x"></i></button>
                 </div>
 
-                <!-- 4-STEP WIZARD PROGRESS BAR -->
-                <div class="order-wizard-stepper" style="display:grid; grid-template-columns:repeat(4, 1fr); gap:10px; margin-top:16px;">
+                <!-- 5-STEP WIZARD PROGRESS BAR -->
+                <div class="order-wizard-stepper" style="display:grid; grid-template-columns:repeat(5, 1fr); gap:8px; margin-top:16px;">
                     <div class="wizard-step-pill active" id="wizard-step-pill-1" onclick="jumpToWizardStep(1)">
                         <span class="step-num">1</span>
-                        <span class="step-text">Select Service</span>
+                        <span class="step-text">Customer</span>
                     </div>
                     <div class="wizard-step-pill" id="wizard-step-pill-2" onclick="jumpToWizardStep(2)">
                         <span class="step-num">2</span>
-                        <span class="step-text">Order Details</span>
+                        <span class="step-text">Service</span>
                     </div>
                     <div class="wizard-step-pill" id="wizard-step-pill-3" onclick="jumpToWizardStep(3)">
                         <span class="step-num">3</span>
-                        <span class="step-text">Documents</span>
+                        <span class="step-text">Details</span>
                     </div>
                     <div class="wizard-step-pill" id="wizard-step-pill-4" onclick="jumpToWizardStep(4)">
                         <span class="step-num">4</span>
-                        <span class="step-text">Review &amp; Submit</span>
+                        <span class="step-text">Documents</span>
+                    </div>
+                    <div class="wizard-step-pill" id="wizard-step-pill-5" onclick="jumpToWizardStep(5)">
+                        <span class="step-num">5</span>
+                        <span class="step-text">Review</span>
                     </div>
                 </div>
             </div>
@@ -2507,8 +2511,47 @@
             <!-- WIZARD STEP CONTAINER -->
             <div style="flex:1; overflow-y:auto; padding-right:4px;" id="wizard-steps-body">
                 
-                <!-- STEP 1: BROWSE / SELECT PRODUCT FROM SERVICES CATALOG -->
+                <!-- STEP 1: SELECT CUSTOMER -->
                 <div id="wizard-step-1" class="wizard-step-pane">
+                    <div style="margin-bottom:14px;">
+                        <h4 style="font-size:1.05rem; font-weight:700; color:var(--color-text-primary); margin:0;">Select Customer</h4>
+                        <p style="font-size:0.82rem; color:var(--color-text-muted); margin:4px 0 0 0;">Search or select the customer placing this order.</p>
+                    </div>
+
+                    <div id="wizard-admin-customer-select-pane">
+                        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
+                            <div style="position:relative; flex:1; min-width:240px;">
+                                <input type="text" id="wizard-customer-search" class="select-filter" style="width:100%; padding-left:36px;" placeholder="Search customer by name, email, phone..." oninput="filterWizardCustomers()">
+                                <i data-lucide="search" style="position:absolute; left:12px; top:50%; transform:translateY(-50%); width:16px; height:16px; color:var(--color-placeholder);"></i>
+                            </div>
+                            <div id="wizard-customer-type-pills" style="display:flex; gap:6px;">
+                                <button type="button" class="badge active" id="pill-cust-all" onclick="setWizardCustomerTypeFilter('All')">All Customers</button>
+                                <button type="button" class="badge" id="pill-cust-normal" onclick="setWizardCustomerTypeFilter('Normal')">Normal Customers</button>
+                                <button type="button" class="badge" id="pill-cust-b2b" onclick="setWizardCustomerTypeFilter('B2B')">B2B Accounts</button>
+                            </div>
+                        </div>
+
+                        <div id="wizard-customers-grid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(270px, 1fr)); gap:14px; max-height:420px; overflow-y:auto; padding-right:4px;">
+                            <div style="text-align:center; padding:40px; color:var(--color-text-muted); grid-column:1/-1;">Loading Customers...</div>
+                        </div>
+                    </div>
+
+                    <div id="wizard-client-customer-summary-pane" style="display:none;">
+                        <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:14px; padding:20px; display:flex; align-items:center; justify-content:space-between;">
+                            <div>
+                                <span style="font-size:0.75rem; font-weight:700; text-transform:uppercase; color:var(--color-text-muted);" id="wizard-client-self-type-label">AUTHENTICATED CUSTOMER</span>
+                                <h4 style="font-size:1.15rem; font-weight:800; color:var(--color-text-primary); margin:4px 0 2px 0;" id="wizard-client-self-name">John Smith</h4>
+                                <div style="font-size:0.85rem; color:var(--color-text-secondary);" id="wizard-client-self-email">john@example.com</div>
+                            </div>
+                            <div id="wizard-client-self-b2b-wrap" style="display:none;">
+                                <span class="status-badge active" id="wizard-client-self-b2b-badge">B2B-000123</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- STEP 2: SELECT PRODUCT / SERVICE FROM CATALOG -->
+                <div id="wizard-step-2" class="wizard-step-pane" style="display:none;">
                     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
                         <div style="position:relative; flex:1; min-width:240px;">
                             <input type="text" id="wizard-product-search" class="select-filter" style="width:100%; padding-left:36px;" placeholder="Search products or services..." oninput="filterWizardCatalogProducts()">
@@ -2524,42 +2567,20 @@
                     </div>
                 </div>
 
-                <!-- STEP 2: DYNAMIC PRODUCT ORDER FORM -->
-                <div id="wizard-step-2" class="wizard-step-pane" style="display:none;">
+                <!-- STEP 3: DYNAMIC PRODUCT ORDER FORM -->
+                <div id="wizard-step-3" class="wizard-step-pane" style="display:none;">
                     
-                    <!-- Selected Product Header Card -->
+                    <!-- Selected Product & Customer Header Card -->
                     <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:14px; padding:16px 20px; margin-bottom:20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
                         <div>
                             <span class="status-badge info" id="wizard-selected-cat">Incorporation</span>
                             <h4 style="font-size:1.1rem; font-weight:800; color:var(--color-text-primary); margin:6px 0 2px 0;" id="wizard-selected-title">Company Formation Package</h4>
-                            <p style="font-size:0.82rem; color:var(--color-text-muted); margin:0;" id="wizard-selected-desc">Complete UK Limited Company formation including digital documents.</p>
+                            <div style="font-size:0.82rem; color:var(--color-text-muted); margin:2px 0 0 0;" id="wizard-selected-customer-summary">Customer: John Smith (john@example.com)</div>
                         </div>
                         <div style="text-align:right;">
                             <div style="font-size:1.35rem; font-weight:800; color:var(--color-primary);" id="wizard-selected-price">£45.00</div>
                             <div style="font-size:0.75rem; color:var(--color-text-muted);" id="wizard-selected-est">Est: 24-48 Hours</div>
-                            <button type="button" class="btn-ghost" style="padding:2px 8px; font-size:0.75rem; margin-top:4px;" onclick="jumpToWizardStep(1)">Change Product</button>
-                        </div>
-                    </div>
-
-                    <!-- Client Account Selection (Admin only) or Pre-filled Client Profile (Client Mode) -->
-                    <div id="wizard-client-selector-card" style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:14px; padding:16px 20px; margin-bottom:20px;">
-                        <h5 style="font-size:0.88rem; font-weight:700; color:var(--color-text-primary); margin:0 0 10px 0; display:flex; align-items:center; gap:6px;">
-                            <i data-lucide="user-check" style="width:16px; height:16px; color:var(--color-primary);"></i> Client &amp; B2B Account Routing
-                        </h5>
-                        <div id="wizard-admin-client-wrap">
-                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
-                                <div>
-                                    <label style="font-size:0.8rem; font-weight:700;">Select Client Account *</label>
-                                    <select id="wizard-client-id" class="select-filter" style="width:100%; margin-top:4px;" onchange="onWizardClientChange()"></select>
-                                </div>
-                                <div>
-                                    <label style="font-size:0.8rem; font-weight:700;">Notification Routing Email</label>
-                                    <input type="email" id="wizard-owner-email" class="select-filter" style="width:100%; margin-top:4px;" placeholder="b2b-owner@company.co.uk">
-                                </div>
-                            </div>
-                        </div>
-                        <div id="wizard-client-profile-wrap" style="display:none; font-size:0.84rem; color:var(--color-text-secondary);">
-                            Ordering under account: <strong id="wizard-client-display-name">Alex Vance</strong> (<span id="wizard-client-display-email">client@example.com</span>) • <span id="wizard-client-display-b2b" class="status-badge active">B2B-000385</span>
+                            <button type="button" class="btn-ghost" style="padding:2px 8px; font-size:0.75rem; margin-top:4px;" onclick="jumpToWizardStep(2)">Change Product</button>
                         </div>
                     </div>
 
@@ -2568,15 +2589,15 @@
                         <!-- Dynamic fields rendered here -->
                     </div>
 
-                    <!-- Repeatable Sections Container (Directors, Shareholders, etc.) -->
+                    <!-- Repeatable Sections Container (Directors, Shareholders, etc. - ONLY if product config specifies it) -->
                     <div id="wizard-repeatable-sections-container" style="display:flex; flex-direction:column; gap:20px; margin-top:20px;">
                         <!-- Repeatable section cards rendered here -->
                     </div>
 
                 </div>
 
-                <!-- STEP 3: DOCUMENT REQUIREMENTS & UPLOADS -->
-                <div id="wizard-step-3" class="wizard-step-pane" style="display:none;">
+                <!-- STEP 4: DOCUMENT REQUIREMENTS & UPLOADS -->
+                <div id="wizard-step-4" class="wizard-step-pane" style="display:none;">
                     <div style="margin-bottom:16px;">
                         <h4 style="font-size:1.05rem; font-weight:700; color:var(--color-text-primary); margin:0;">Upload Required &amp; Supporting Documents</h4>
                         <p style="font-size:0.82rem; color:var(--color-text-muted); margin:4px 0 0 0;">Upload identity, address, or specification files required for this service.</p>
@@ -2587,14 +2608,14 @@
                     </div>
                 </div>
 
-                <!-- STEP 4: ORDER REVIEW & AUTHORITATIVE SUMMARY -->
-                <div id="wizard-step-4" class="wizard-step-pane" style="display:none;">
+                <!-- STEP 5: ORDER REVIEW & AUTHORITATIVE SUMMARY -->
+                <div id="wizard-step-5" class="wizard-step-pane" style="display:none;">
                     <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:16px; padding:24px; margin-bottom:20px;">
                         <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:16px; border-bottom:1px solid var(--color-border); padding-bottom:16px; margin-bottom:16px;">
                             <div>
                                 <span style="font-size:0.75rem; font-weight:700; text-transform:uppercase; color:var(--color-primary);" id="review-service-category">INCORPORATION</span>
                                 <h3 style="font-size:1.4rem; font-weight:800; color:var(--color-text-primary); margin:4px 0 2px 0;" id="review-service-name">UK Company Formation Package</h3>
-                                <p style="font-size:0.85rem; color:var(--color-text-muted); margin:0;" id="review-b2b-routing-info">Routing notifications to B2B Account Owner (alexander@brixenconsultants.com)</p>
+                                <p style="font-size:0.85rem; color:var(--color-text-muted); margin:0;" id="review-customer-identity">Customer: John Smith (john@example.com)</p>
                             </div>
                             <div style="text-align:right;">
                                 <div style="font-size:0.8rem; color:var(--color-text-muted); font-weight:600;">AUTHORITATIVE TOTAL</div>

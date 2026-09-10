@@ -566,9 +566,9 @@ def public_me_user(user, impersonated=False):
         'status': src.get('status'),
         'role': src.get('role'),
         'department': (departments_from_user(src) or [None])[0],
-        'departments': departments_from_user(src),
-        'b2b_id': src.get('b2b_id'),
-        'client_type': src.get('client_type') or 'B2B',
+        'b2b_id': src.get('b2b_id') if (src.get('is_b2b') == 1 or src.get('client_type') == 'B2B') else None,
+        'client_type': src.get('client_type') or ('B2B' if src.get('is_b2b') == 1 else 'Normal'),
+        'is_b2b': 1 if (src.get('is_b2b') == 1 or src.get('client_type') == 'B2B') else 0,
         'theme_preference': src.get('theme_preference') or 'system',
         'impersonated': bool(impersonated)
     }
@@ -1068,9 +1068,11 @@ def public_staff_user(row):
     public['department'] = depts[0] if depts else None
     if public.get('role') == 'CLIENT':
         if public.get('is_b2b') is None:
-            public['is_b2b'] = 1
+            public['is_b2b'] = 0
+        public['client_type'] = src.get('client_type') or ('B2B' if public.get('is_b2b') == 1 else 'Normal')
+        public['b2b_id'] = src.get('b2b_id') if (public.get('is_b2b') == 1 or public['client_type'] == 'B2B') else None
         if not public.get('account_type'):
-            public['account_type'] = 'B2B Client (Brixen Website Panel)'
+            public['account_type'] = 'B2B Client (Brixen Website Panel)' if public.get('is_b2b') == 1 else 'Normal Client'
     return public
 
 
@@ -18638,25 +18640,31 @@ def application(environ, start_response):
         local_id = f"local_user_{uuid.uuid4().hex[:16]}"
         client_type = (data.get('client_type') or '').strip().lower()
         if role == 'CLIENT':
-            if client_type == 'b2c' or data.get('is_b2b') == 0 or data.get('is_b2b') == '0':
-                is_b2b_val = 0
-                acct_type_val = 'Normal Client (Standard Website Account)'
-                success_msg = 'Normal Client account created for Brixen Official Website. They can sign in with this email and password.'
-            else:
+            if client_type in ('b2b', 'b2b customer') or data.get('is_b2b') in (1, '1', True):
                 is_b2b_val = 1
+                client_type_val = 'B2B'
                 acct_type_val = 'B2B Client (Brixen Website Panel)'
-                success_msg = 'B2B Client account created for Brixen Official Website Client Panel. They can sign in with this email and password.'
+                b2b_id_val = generate_next_b2b_id()
+                success_msg = f'B2B Client account created ({b2b_id_val}). They can sign in with this email and password.'
+            else:
+                is_b2b_val = 0
+                client_type_val = 'Normal'
+                acct_type_val = 'Normal Client (Standard Website Account)'
+                b2b_id_val = None
+                success_msg = 'Normal Client account created. They can sign in with this email and password.'
         else:
             is_b2b_val = 0
+            client_type_val = 'Normal'
             acct_type_val = 'Internal Staff'
+            b2b_id_val = None
             success_msg = 'User created. They can sign in with this email and password.'
 
         user_id = execute_db("""
-            INSERT INTO users (wordpress_user_id, email, password_hash, full_name, phone, country, role, status, department, is_b2b, account_type)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-        """, (local_id, email, hash_password(password), full_name, phone, country, role, status_val, department, is_b2b_val, acct_type_val))
+            INSERT INTO users (wordpress_user_id, email, password_hash, full_name, phone, country, role, status, department, is_b2b, client_type, b2b_id, account_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """, (local_id, email, hash_password(password), full_name, phone, country, role, status_val, department, is_b2b_val, client_type_val, b2b_id_val, acct_type_val))
         created = query_db("""
-            SELECT id, wordpress_user_id, email, full_name, phone, country, role, department, status, avatar_url, created_at, is_b2b, account_type
+            SELECT id, wordpress_user_id, email, full_name, phone, country, role, department, status, avatar_url, created_at, is_b2b, client_type, b2b_id, account_type
             FROM users WHERE id = ?;
         """, (user_id,), one=True)
         log_activity(user, 'USER_CREATED', 'users', str(user_id), f"Created user {email} ({role} - {acct_type_val})")
