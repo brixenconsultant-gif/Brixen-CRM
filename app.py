@@ -1470,13 +1470,32 @@ def create_manual_crm_order(data, actor=None):
     if query_db("SELECT id FROM orders WHERE order_number = ?;", (order_number,), one=True):
         order_number = next_manual_order_number()
 
+    checkout_form_data = {
+        'company_name': (company or {}).get('name') or extras.get('company_name') or '',
+        'company_type': extras.get('company_type') or 'Private Limited Company by Shares (LTD)',
+        'sic_code': extras.get('sic_code') or '62020 - Information technology consultancy activities',
+        'company_email': owner_email,
+        'company_phone': extras.get('company_phone') or '',
+        'registered_address_line1': extras.get('registered_address_line1') or extras.get('reg_office') or '',
+        'registered_city': extras.get('registered_city') or '',
+        'registered_postcode': extras.get('registered_postcode') or '',
+        'registered_country': extras.get('registered_country') or 'United Kingdom',
+        'director_name': owner_name,
+        'director_email': owner_email,
+        'director_phone': extras.get('director_phone') or '',
+        'director_nationality': extras.get('director_nationality') or 'British',
+        'director_residence': extras.get('director_residence') or 'United Kingdom',
+        'payment_mode': payment_mode,
+        'order_notes': notes
+    }
+
     order_id = execute_db(
         """
         INSERT INTO orders (
             order_number, user_id, company_id, service_id, service_name,
             price, vat, total, status, progress_percent, notes, payment_mode,
-            owner_name, owner_form_email, assigned_staff_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            owner_name, owner_form_email, assigned_staff_id, checkout_form_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """,
         (
             order_number,
@@ -1494,6 +1513,7 @@ def create_manual_crm_order(data, actor=None):
             owner_name or None,
             owner_email,
             (actor or {}).get('id'),
+            json.dumps(checkout_form_data),
         ),
     )
 

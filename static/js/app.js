@@ -11288,8 +11288,24 @@ async function submitManualOrderForm(event) {
     const payload = {
         company_id: document.getElementById('manual-order-company')?.value || '',
         company_name: document.getElementById('manual-order-company-name')?.value || '',
+        company_type: document.getElementById('manual-order-company-type')?.value || 'Private Limited Company by Shares (LTD)',
+        sic_code: document.getElementById('manual-order-sic-code')?.value || '',
         company_email: document.getElementById('manual-order-company-email')?.value || '',
+        company_phone: document.getElementById('manual-order-company-phone')?.value || '',
+        reg_office: [
+            document.getElementById('manual-order-reg-address')?.value || '',
+            document.getElementById('manual-order-reg-city')?.value || '',
+            document.getElementById('manual-order-reg-postcode')?.value || ''
+        ].filter(Boolean).join(', '),
+        registered_address_line1: document.getElementById('manual-order-reg-address')?.value || '',
+        registered_city: document.getElementById('manual-order-reg-city')?.value || '',
+        registered_postcode: document.getElementById('manual-order-reg-postcode')?.value || '',
         owner_name: document.getElementById('manual-order-owner-name')?.value || '',
+        director_phone: document.getElementById('manual-order-director-phone')?.value || '',
+        director_nationality: document.getElementById('manual-order-director-nationality')?.value || 'British',
+        director_residence: document.getElementById('manual-order-director-residence')?.value || 'United Kingdom',
+        payment_mode: document.getElementById('manual-order-payment-mode')?.value || 'Manual CRM',
+        status: document.getElementById('manual-order-initial-status')?.value || 'Processing',
         notes: document.getElementById('manual-order-notes')?.value || '',
         line_items: line_items
     };

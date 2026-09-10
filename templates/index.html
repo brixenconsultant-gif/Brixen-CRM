@@ -66,7 +66,7 @@
             if (app) app.setAttribute('hidden', '');
         });
     </script>
-    <link rel="stylesheet" href="/static/css/styles.css?v=240.0">
+    <link rel="stylesheet" href="/static/css/styles.css?v=250.0">
     <script src="/static/js/vendor/lucide.min.js"></script>
     <script src="/static/js/vendor/chart.umd.min.js"></script>
 </head>
@@ -2467,79 +2467,205 @@
     </div>
 
     <div id="modal-manual-order" class="modal-overlay" style="z-index:1100;">
-        <div class="modal-card" style="max-width:640px;">
-            <div class="modal-header">
+        <div class="modal-card" style="max-width:920px; width:94%; max-height:92vh; padding:32px 36px; border-radius:20px;">
+            <div class="modal-header" style="border-bottom:1px solid var(--color-border); padding-bottom:16px; margin-bottom:20px;">
                 <div>
-                    <h3>Create manual order</h3>
-                    <p style="font-size:0.8rem; color:#64748b;">For clients who did not sign up on the website. Portal login stays on the customer; company emails get the work notifications.</p>
+                    <h3 style="font-size:1.35rem; font-weight:800; color:var(--color-text-primary);">Create Manual Order &amp; Company Registration</h3>
+                    <p style="font-size:0.85rem; color:var(--color-text-muted); margin-top:4px;">Complete official company formation and registration details. Portal login stays on the client; work notifications go to the company email.</p>
                 </div>
                 <button type="button" class="btn-close" onclick="closeManualOrderModal()"><i data-lucide="x"></i></button>
             </div>
-            <form id="manual-order-form" onsubmit="submitManualOrderForm(event)">
-                <div id="manual-order-error" style="display:none; padding:10px; border-radius:8px; background:#fef2f2; color:#dc2626; font-size:0.8rem; font-weight:600;" role="alert"></div>
-                <div style="display:flex; flex-direction:column; gap:12px; margin-top:10px;">
-                    <div id="manual-order-client-section">
-                        <label style="font-size:0.8rem; font-weight:700;">Client</label>
-                        <div style="display:flex; gap:12px; margin-top:6px; flex-wrap:wrap;">
-                            <label style="font-size:0.8rem;"><input type="radio" name="manual-order-client-mode" value="existing" checked onchange="syncManualOrderClientMode()"> Existing client</label>
-                            <label style="font-size:0.8rem;"><input type="radio" name="manual-order-client-mode" value="new" onchange="syncManualOrderClientMode()"> New client</label>
-                        </div>
-                    </div>
-                    <div id="manual-order-existing-wrap">
-                        <label style="font-size:0.8rem; font-weight:700;">Select client</label>
-                        <select id="manual-order-client" class="select-filter" style="width:100%; margin-top:4px;" onchange="onManualOrderClientChange()"></select>
-                    </div>
-                    <div id="manual-order-new-wrap" hidden>
-                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
-                            <div>
-                                <label style="font-size:0.8rem; font-weight:700;">Client full name</label>
-                                <input type="text" id="manual-order-new-name" class="select-filter" style="width:100%; margin-top:4px;" autocomplete="off">
-                            </div>
-                            <div>
-                                <label style="font-size:0.8rem; font-weight:700;">Portal login email</label>
-                                <input type="email" id="manual-order-new-email" class="select-filter" style="width:100%; margin-top:4px;" autocomplete="off">
+            <form id="manual-order-form" onsubmit="submitManualOrderForm(event)" style="overflow-y:auto; max-height:calc(92vh - 140px); padding-right:6px;">
+                <div id="manual-order-error" style="display:none; padding:12px 16px; border-radius:10px; background:var(--color-danger-soft); color:var(--color-danger); border:1px solid var(--color-danger-border); font-size:0.85rem; font-weight:600; margin-bottom:16px;" role="alert"></div>
+
+                <div style="display:flex; flex-direction:column; gap:22px;">
+                    
+                    <!-- SECTION 1: CLIENT ACCOUNT & CONTACT DETAILS -->
+                    <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:14px; padding:20px;">
+                        <h4 style="font-size:0.95rem; font-weight:700; color:var(--color-text-primary); margin-bottom:12px; display:flex; align-items:center; gap:8px;">
+                            <i data-lucide="user-check" style="width:18px; height:18px; color:var(--color-primary);"></i> 1. Client Account &amp; Contact Details
+                        </h4>
+                        
+                        <div id="manual-order-client-section" style="margin-bottom:14px;">
+                            <label style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Client Type</label>
+                            <div style="display:flex; gap:18px; margin-top:8px;">
+                                <label style="font-size:0.85rem; font-weight:600; cursor:pointer; color:var(--color-text-primary);">
+                                    <input type="radio" name="manual-order-client-mode" value="existing" checked onchange="syncManualOrderClientMode()" style="accent-color:var(--color-primary);"> Existing client
+                                </label>
+                                <label style="font-size:0.85rem; font-weight:600; cursor:pointer; color:var(--color-text-primary);">
+                                    <input type="radio" name="manual-order-client-mode" value="new" onchange="syncManualOrderClientMode()" style="accent-color:var(--color-primary);"> New client signup
+                                </label>
                             </div>
                         </div>
-                    </div>
-                    <div>
-                        <label style="font-size:0.8rem; font-weight:700;">Company (optional)</label>
-                        <select id="manual-order-company" class="select-filter" style="width:100%; margin-top:4px;">
-                            <option value="">No company / create with name below</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label style="font-size:0.8rem; font-weight:700;">New company name (if needed)</label>
-                        <input type="text" id="manual-order-company-name" class="select-filter" style="width:100%; margin-top:4px;" placeholder="Leave blank if using an existing company" autocomplete="off">
-                    </div>
-                    <div>
-                        <label style="font-size:0.8rem; font-weight:700;">Company notification email *</label>
-                        <input type="email" id="manual-order-company-email" class="select-filter" style="width:100%; margin-top:4px;" required placeholder="Where all work emails for this company go" autocomplete="off">
-                    </div>
-                    <div>
-                        <div style="display:flex; justify-content:space-between; align-items:center;">
-                            <label style="font-size:0.8rem; font-weight:700;">Products / Services *</label>
-                            <button type="button" class="btn-secondary" style="padding:4px 8px; font-size:0.75rem;" onclick="addManualOrderProductLine()"><i data-lucide="plus" style="width:12px; height:12px; margin-right:4px;"></i>Add item</button>
+
+                        <div id="manual-order-existing-wrap">
+                            <label for="manual-order-client" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Select Client Account *</label>
+                            <select id="manual-order-client" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;" onchange="onManualOrderClientChange()"></select>
                         </div>
-                        <div id="manual-order-products-container" style="display:flex; flex-direction:column; gap:8px; margin-top:8px;">
+
+                        <div id="manual-order-new-wrap" hidden>
+                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+                                <div>
+                                    <label for="manual-order-new-name" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Client Full Name *</label>
+                                    <input type="text" id="manual-order-new-name" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;" placeholder="e.g. Alexander Vance" autocomplete="off">
+                                </div>
+                                <div>
+                                    <label for="manual-order-new-email" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Portal Login Email *</label>
+                                    <input type="email" id="manual-order-new-email" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;" placeholder="client@example.com" autocomplete="off">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- SECTION 2: COMPANY FORMATION & REGISTRATION DETAILS -->
+                    <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:14px; padding:20px;">
+                        <h4 style="font-size:0.95rem; font-weight:700; color:var(--color-text-primary); margin-bottom:14px; display:flex; align-items:center; gap:8px;">
+                            <i data-lucide="building-2" style="width:18px; height:18px; color:var(--color-primary);"></i> 2. Company Formation &amp; Registration Details
+                        </h4>
+
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:14px;">
+                            <div>
+                                <label for="manual-order-company" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Existing Company (Optional)</label>
+                                <select id="manual-order-company" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;">
+                                    <option value="">No company / create with details below</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="manual-order-company-name" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Company Registered Name</label>
+                                <input type="text" id="manual-order-company-name" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;" placeholder="e.g. BRIXEN CONSULTANTS LTD" autocomplete="off">
+                            </div>
+                        </div>
+
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:14px;">
+                            <div>
+                                <label for="manual-order-company-type" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Company Entity Type</label>
+                                <select id="manual-order-company-type" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;">
+                                    <option value="Private Limited Company by Shares (LTD)">Private Limited Company by Shares (LTD)</option>
+                                    <option value="Limited Liability Partnership (LLP)">Limited Liability Partnership (LLP)</option>
+                                    <option value="Public Limited Company (PLC)">Public Limited Company (PLC)</option>
+                                    <option value="Company Limited by Guarantee">Company Limited by Guarantee</option>
+                                    <option value="Sole Trader / Business Partnership">Sole Trader / Business Partnership</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="manual-order-sic-code" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">SIC Code / Business Activity</label>
+                                <select id="manual-order-sic-code" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;">
+                                    <option value="62020 - Information technology consultancy activities">62020 - Information technology consultancy activities</option>
+                                    <option value="70229 - Management consultancy activities other than financial management">70229 - Management consultancy activities</option>
+                                    <option value="68209 - Letting and operating of own or leased real estate">68209 - Real estate &amp; property letting</option>
+                                    <option value="47910 - Retail sale via mail order houses or via Internet">47910 - E-Commerce / Online Retail</option>
+                                    <option value="82990 - Other business support service activities n.e.c.">82990 - General Business Support Services</option>
+                                    <option value="Other">Other Business Activity</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:14px;">
+                            <div>
+                                <label for="manual-order-company-email" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Company Work Notification Email *</label>
+                                <input type="email" id="manual-order-company-email" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;" required placeholder="contact@company.co.uk" autocomplete="off">
+                            </div>
+                            <div>
+                                <label for="manual-order-company-phone" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Company Contact Phone</label>
+                                <input type="text" id="manual-order-company-phone" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;" placeholder="+44 20 7946 0912" autocomplete="off">
+                            </div>
+                        </div>
+
+                        <div>
+                            <label style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Registered Office Address</label>
+                            <div style="display:grid; grid-template-columns:2fr 1fr 1fr; gap:12px; margin-top:6px;">
+                                <input type="text" id="manual-order-reg-address" class="select-filter" style="font-size:0.88rem; padding:10px 14px;" placeholder="Address Line 1 (e.g. 128 City Road)" autocomplete="off">
+                                <input type="text" id="manual-order-reg-city" class="select-filter" style="font-size:0.88rem; padding:10px 14px;" placeholder="City (e.g. London)" autocomplete="off">
+                                <input type="text" id="manual-order-reg-postcode" class="select-filter" style="font-size:0.88rem; padding:10px 14px;" placeholder="Postcode (e.g. EC1V 2NX)" autocomplete="off">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- SECTION 3: DIRECTOR & OWNER DETAILS -->
+                    <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:14px; padding:20px;">
+                        <h4 style="font-size:0.95rem; font-weight:700; color:var(--color-text-primary); margin-bottom:14px; display:flex; align-items:center; gap:8px;">
+                            <i data-lucide="shield-check" style="width:18px; height:18px; color:var(--color-primary);"></i> 3. Director &amp; Officer Information
+                        </h4>
+
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:14px;">
+                            <div>
+                                <label for="manual-order-owner-name" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Director / Owner Full Name</label>
+                                <input type="text" id="manual-order-owner-name" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;" placeholder="e.g. Eleanor Finch" autocomplete="off">
+                            </div>
+                            <div>
+                                <label for="manual-order-director-phone" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Director Direct Phone</label>
+                                <input type="text" id="manual-order-director-phone" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;" placeholder="+44 7700 900077" autocomplete="off">
+                            </div>
+                        </div>
+
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+                            <div>
+                                <label for="manual-order-director-nationality" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Director Nationality</label>
+                                <input type="text" id="manual-order-director-nationality" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;" placeholder="e.g. British" value="British" autocomplete="off">
+                            </div>
+                            <div>
+                                <label for="manual-order-director-residence" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Country of Residence</label>
+                                <input type="text" id="manual-order-director-residence" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;" placeholder="e.g. United Kingdom" value="United Kingdom" autocomplete="off">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- SECTION 4: PRODUCTS, PRICING & PAYMENT -->
+                    <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:14px; padding:20px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+                            <h4 style="font-size:0.95rem; font-weight:700; color:var(--color-text-primary); display:flex; align-items:center; gap:8px;">
+                                <i data-lucide="shopping-bag" style="width:18px; height:18px; color:var(--color-primary);"></i> 4. Ordered Products, Pricing &amp; Payment Mode *
+                            </h4>
+                            <button type="button" class="btn-secondary" style="padding:6px 12px; font-size:0.82rem; display:flex; align-items:center; gap:6px;" onclick="addManualOrderProductLine()">
+                                <i data-lucide="plus" style="width:14px; height:14px;"></i> Add Product / Service
+                            </button>
+                        </div>
+
+                        <div id="manual-order-products-container" style="display:flex; flex-direction:column; gap:10px; margin-bottom:16px;">
                             <!-- Products injected here via JS -->
                         </div>
-                        <div style="text-align:right; margin-top:8px; font-weight:700; font-size:0.9rem; color:#0f172a;">
-                            Total: £<span id="manual-order-total-price">0.00</span>
-                        </div>
                         <datalist id="manual-order-service-list"></datalist>
+
+                        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; align-items:center; margin-top:14px; padding-top:14px; border-top:1px solid var(--color-border);">
+                            <div>
+                                <label for="manual-order-payment-mode" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Payment Channel</label>
+                                <select id="manual-order-payment-mode" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:8px 12px;">
+                                    <option value="Website Checkout">Website Checkout</option>
+                                    <option value="Bank Transfer">Bank Transfer</option>
+                                    <option value="Invoice">Invoice</option>
+                                    <option value="Manual CRM" selected>Manual CRM Entry</option>
+                                    <option value="Card Payment">Card Payment</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="manual-order-initial-status" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Initial Status</label>
+                                <select id="manual-order-initial-status" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:8px 12px;">
+                                    <option value="Processing" selected>Processing</option>
+                                    <option value="Pending Verification">Pending Verification</option>
+                                    <option value="Pending">Pending</option>
+                                    <option value="In Progress">In Progress</option>
+                                    <option value="Completed">Completed</option>
+                                </select>
+                            </div>
+                            <div style="text-align:right;">
+                                <div style="font-size:0.8rem; color:var(--color-text-muted); font-weight:600; text-transform:uppercase;">Total Amount Inc. VAT</div>
+                                <div style="font-size:1.4rem; font-weight:800; color:var(--color-text-primary); margin-top:2px;">
+                                    £<span id="manual-order-total-price">0.00</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style="margin-top:14px;">
+                            <label for="manual-order-notes" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Internal Notes &amp; Special Instructions</label>
+                            <textarea id="manual-order-notes" class="select-filter" style="width:100%; margin-top:6px; min-height:64px; font-size:0.88rem; padding:10px 14px;" placeholder="Add internal notes or special customer instructions..."></textarea>
+                        </div>
                     </div>
-                    <div>
-                        <label style="font-size:0.8rem; font-weight:700;">Owner / director name</label>
-                        <input type="text" id="manual-order-owner-name" class="select-filter" style="width:100%; margin-top:4px;" autocomplete="off">
-                    </div>
-                    <div>
-                        <label style="font-size:0.8rem; font-weight:700;">Notes</label>
-                        <textarea id="manual-order-notes" class="select-filter" style="width:100%; margin-top:4px; min-height:60px;" placeholder="Optional staff notes"></textarea>
-                    </div>
+
                 </div>
-                <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:16px;">
-                    <button type="button" class="btn-secondary" onclick="closeManualOrderModal()">Cancel</button>
-                    <button type="submit" class="btn-primary" id="manual-order-submit">Create order</button>
+
+                <div style="display:flex; justify-content:flex-end; gap:12px; margin-top:24px; padding-top:16px; border-top:1px solid var(--color-border);">
+                    <button type="button" class="btn-secondary" style="padding:10px 20px; font-size:0.9rem;" onclick="closeManualOrderModal()">Cancel</button>
+                    <button type="submit" class="btn-primary" id="manual-order-submit" style="padding:10px 28px; font-size:0.9rem; font-weight:700;">Create Order &amp; Record Registration</button>
                 </div>
             </form>
         </div>
