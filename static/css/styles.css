@@ -5,7 +5,7 @@
    ==================================================== */
 
 :root, html[data-theme="light"] {
-    /* Primary / Navy Palette */
+    /* Primary / Navy Palette (Section 3) */
     --color-primary-900: #0B1220;
     --color-primary-800: #111827;
     --color-primary-700: #172033;
@@ -45,7 +45,7 @@
     --color-sidebar-active-text: #FFFFFF;
     --color-sidebar-active-icon: #60A5FA;
 
-    /* Semantic Status System matching Section 4 */
+    /* Semantic Status System (Section 4) */
     --color-success: #15803D;
     --color-success-soft: #F0FDF4;
     --color-success-border: #BBF7D0;
@@ -62,7 +62,7 @@
     --color-info-soft: #F0F9FF;
     --color-info-border: #BAE6FD;
 
-    /* Compatibility Mappings */
+    /* Compatibility Variables */
     --brand-primary: var(--color-primary);
     --brand-secondary: var(--color-primary-900);
     --brand-accent: var(--color-accent);
@@ -83,7 +83,7 @@
     
     --sidebar-bg: var(--color-sidebar-bg);
     --sidebar-active-bg: var(--color-sidebar-active-bg);
-    --sidebar-active-border: var(--color-primary);
+    --sidebar-active-border: rgba(37, 99, 235, 0.3);
     --sidebar-active-text: var(--color-sidebar-active-text);
     --sidebar-text: var(--color-sidebar-text);
     --sidebar-text-muted: var(--color-sidebar-icon);
@@ -126,7 +126,7 @@
 }
 
 html[data-theme="dark"] {
-    /* Dark Mode Palette matching Section 7 */
+    /* Dark Mode Palette (Section 7) */
     --color-bg: #080D16;
     --color-surface: #0F1724;
     --color-surface-soft: #151F2E;
@@ -195,7 +195,7 @@ html[data-theme="dark"] {
 
     --sidebar-bg: var(--color-sidebar-bg);
     --sidebar-active-bg: var(--color-sidebar-active-bg);
-    --sidebar-active-border: var(--color-primary);
+    --sidebar-active-border: rgba(96, 165, 250, 0.3);
     --sidebar-active-text: var(--color-sidebar-active-text);
     --sidebar-text: var(--color-sidebar-text);
     --sidebar-text-muted: var(--color-sidebar-icon);
