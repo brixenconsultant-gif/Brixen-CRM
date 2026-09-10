@@ -1,6 +1,130 @@
 import json
 
 PRODUCT_FORM_CONFIGS = {
+    "Business Bank Account Assistance": {
+        "fields": [
+            {
+                "id": "company_name",
+                "name": "company_name",
+                "label": "Company Name",
+                "type": "text",
+                "placeholder": "Enter your company name",
+                "required": True
+            },
+            {
+                "id": "company_number",
+                "name": "company_number",
+                "label": "Company Registration Number",
+                "type": "text",
+                "placeholder": "Enter your company registration number",
+                "required": True
+            },
+            {
+                "id": "trading_proof",
+                "name": "trading_proof",
+                "label": "Business Trading Proof (Website or Selling Platform)",
+                "type": "text",
+                "placeholder": "Enter website URL or platform name",
+                "help_text": "If available, otherwise we can create it for you.",
+                "required": False
+            },
+            {
+                "id": "email",
+                "name": "email",
+                "label": "Email Address",
+                "type": "email",
+                "placeholder": "Enter your email address",
+                "required": True
+            },
+            {
+                "id": "uk_contact",
+                "name": "uk_contact",
+                "label": "UK Contact Phone Number",
+                "type": "phone",
+                "placeholder": "Enter your UK contact number (+44...)",
+                "required": True
+            }
+        ],
+        "repeatable_sections": [],
+        "document_requirements": [
+            {
+                "id": "valid_passport",
+                "name": "Valid Passport / Photo ID",
+                "description": "Valid passport or government photo ID (Accepted: JPG, PNG, PDF, DOC).",
+                "required": True,
+                "allowed_extensions": [".jpg", ".jpeg", ".png", ".pdf", ".doc", ".docx"]
+            },
+            {
+                "id": "bank_statement",
+                "name": "Local Bank Statement (Last 3 months)",
+                "description": "Recent local bank statement issued within the last 90 days.",
+                "required": True,
+                "allowed_extensions": [".jpg", ".jpeg", ".png", ".pdf", ".doc", ".docx"]
+            }
+        ]
+    },
+    "Tide Business Bank Details": {
+        "fields": [
+            {
+                "id": "company_name",
+                "name": "company_name",
+                "label": "Company Name",
+                "type": "text",
+                "placeholder": "Enter your company name",
+                "required": True
+            },
+            {
+                "id": "company_number",
+                "name": "company_number",
+                "label": "Company Registration Number",
+                "type": "text",
+                "placeholder": "Enter your company registration number",
+                "required": True
+            },
+            {
+                "id": "trading_proof",
+                "name": "trading_proof",
+                "label": "Business Trading Proof (Website or Selling Platform)",
+                "type": "text",
+                "placeholder": "Enter website URL or platform name",
+                "help_text": "If available, otherwise we can create it for you.",
+                "required": False
+            },
+            {
+                "id": "email",
+                "name": "email",
+                "label": "Email Address",
+                "type": "email",
+                "placeholder": "Enter your email address",
+                "required": True
+            },
+            {
+                "id": "uk_contact",
+                "name": "uk_contact",
+                "label": "UK Contact Phone Number",
+                "type": "phone",
+                "placeholder": "Enter your UK contact number (+44...)",
+                "required": True
+            }
+        ],
+        "repeatable_sections": [],
+        "document_requirements": [
+            {
+                "id": "valid_passport",
+                "name": "Valid Passport / Photo ID",
+                "description": "Valid passport or government photo ID.",
+                "required": True,
+                "allowed_extensions": [".jpg", ".jpeg", ".png", ".pdf", ".doc", ".docx"]
+            },
+            {
+                "id": "bank_statement",
+                "name": "Local Bank Statement (Last 3 months)",
+                "description": "Recent local bank statement issued within the last 90 days.",
+                "required": True,
+                "allowed_extensions": [".jpg", ".jpeg", ".png", ".pdf", ".doc", ".docx"]
+            }
+        ]
+    },
     "Company Formation Package": {
         "fields": [
             {
@@ -327,11 +451,18 @@ PRODUCT_FORM_CONFIGS = {
 }
 
 def get_product_form_config(product_name):
-    """Return product configuration dict for a given product name."""
+    """Return product configuration dict for a given product name matching brixenconsultants.com."""
     if product_name in PRODUCT_FORM_CONFIGS:
         return PRODUCT_FORM_CONFIGS[product_name]
     
-    # Generic default configuration for arbitrary services catalog products
+    pname_lower = str(product_name or '').lower()
+    for k, config in PRODUCT_FORM_CONFIGS.items():
+        if k.lower() in pname_lower or pname_lower in k.lower():
+            return config
+            
+    if 'bank' in pname_lower or 'tide' in pname_lower:
+        return PRODUCT_FORM_CONFIGS["Business Bank Account Assistance"]
+
     return {
         "fields": [
             {
