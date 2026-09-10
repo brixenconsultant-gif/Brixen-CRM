@@ -11164,11 +11164,21 @@ async function loadAdminClientsForManualOrderSelect() {
 async function onManualOrderClientChange() {
     const clientSelect = document.getElementById('manual-order-client');
     const companySelect = document.getElementById('manual-order-company');
+    const companyEmail = document.getElementById('manual-order-company-email');
     if (!clientSelect || !companySelect) return;
 
     const clientId = clientSelect.value;
     companySelect.innerHTML = '<option value="">No company / create with name below</option>';
     if (!clientId) return;
+
+    // Auto-fill B2B client account owner email for notification routing
+    const selectedOpt = clientSelect.options[clientSelect.selectedIndex];
+    if (selectedOpt && selectedOpt.textContent && companyEmail) {
+        const match = selectedOpt.textContent.match(/\(([^)]+)\)/);
+        if (match && match[1]) {
+            companyEmail.value = match[1];
+        }
+    }
 
     try {
         const res = await fetch(`/api/admin/companies?client_id=${clientId}`, { credentials: 'same-origin' });

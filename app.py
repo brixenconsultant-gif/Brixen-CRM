@@ -1449,11 +1449,11 @@ def create_manual_crm_order(data, actor=None):
 
     owner_name = (extras.get('owner_name') or extras.get('director') or (client or {}).get('full_name') or '').strip()
     owner_email = normalize_notify_email(
-        extras.get('company_email')
+        (client or {}).get('email')
+        or extras.get('company_email')
         or extras.get('owner_form_email')
         or extras.get('registered_email')
         or (company or {}).get('registered_email')
-        or (client or {}).get('email')
     )
     if not owner_email:
         return None, 'Enter the company notification email for this order'
