@@ -11486,13 +11486,12 @@ async function openUniversalOrderWizard(prefillData = null) {
         );
         if (match) {
             universalOrderWizardState.selectedProduct = match;
-            if (isClient) jumpToWizardStep(3);
-            else jumpToWizardStep(1);
+            jumpToWizardStep(3);
         } else {
-            jumpToWizardStep(1);
+            jumpToWizardStep(isClient ? 2 : 1);
         }
     } else {
-        jumpToWizardStep(1);
+        jumpToWizardStep(isClient ? 2 : 1);
     }
 
     safeCreateIcons();
@@ -11740,11 +11739,24 @@ function selectWizardProduct(productId) {
 
 function jumpToWizardStep(stepNum) {
     hideWizardError();
+    const isClient = (window.currentUser && window.currentUser.role === 'CLIENT');
+    if (isClient && stepNum === 1) {
+        stepNum = 2;
+    }
+
+    const pill1 = document.getElementById('wizard-step-pill-1');
+    if (pill1) {
+        pill1.style.display = isClient ? 'none' : 'flex';
+    }
 
     // Guard Step Navigation
     if (stepNum > 1 && !universalOrderWizardState.selectedCustomer) {
-        showWizardError('Please select a customer first.');
-        return;
+        if (isClient && window.currentUser) {
+            universalOrderWizardState.selectedCustomer = window.currentUser;
+        } else {
+            showWizardError('Please select a customer first.');
+            return;
+        }
     }
     if (stepNum > 2 && !universalOrderWizardState.selectedProduct) {
         showWizardError('Please select a service/product first.');
@@ -11777,7 +11789,8 @@ function jumpToWizardStep(stepNum) {
     const btnNext = document.getElementById('wizard-btn-next');
     const btnSubmit = document.getElementById('wizard-btn-submit');
 
-    if (btnBack) btnBack.style.display = (stepNum > 1) ? 'inline-flex' : 'none';
+    const minStep = isClient ? 2 : 1;
+    if (btnBack) btnBack.style.display = (stepNum > minStep) ? 'inline-flex' : 'none';
     if (btnNext) btnNext.style.display = (stepNum < 5) ? 'inline-flex' : 'none';
     if (btnSubmit) btnSubmit.style.display = (stepNum === 5) ? 'inline-flex' : 'none';
 
