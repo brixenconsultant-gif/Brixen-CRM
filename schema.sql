@@ -24,9 +24,13 @@ CREATE TABLE IF NOT EXISTS users (
     department TEXT,
     status TEXT NOT NULL DEFAULT 'Active' CHECK(status IN ('Active', 'Suspended', 'Pending')),
     two_factor_enabled INTEGER DEFAULT 0,
+    b2b_id TEXT UNIQUE,
+    client_type TEXT DEFAULT 'B2B',
+    theme_preference TEXT DEFAULT 'system',
     last_synced_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_b2b_id ON users(b2b_id) WHERE b2b_id IS NOT NULL;
 
 -- 2b. RBAC Roles & Permissions
 CREATE TABLE IF NOT EXISTS roles (
@@ -113,9 +117,12 @@ CREATE TABLE IF NOT EXISTS companies (
     business_email_updated_at TIMESTAMP,
     compliance_last_notification_at TIMESTAMP,
     compliance_last_notification_id TEXT,
+    b2b_id TEXT UNIQUE,
+    client_type TEXT DEFAULT 'B2B',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_companies_b2b_id ON companies(b2b_id) WHERE b2b_id IS NOT NULL;
 
 
 -- 3b. Dismissed company cards (staff deleted; block auto-recreation from webhooks)

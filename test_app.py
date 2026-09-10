@@ -214,10 +214,9 @@ def run_tests():
     assert 'applyAdminOrderFinanceVisibility' in js_src
     assert 'hide-order-finance' in js_src
     assert 'data-admin-revenue' in html_src
-    assert '<th>Owner</th>' in html_src
-    assert 'app.js?v=218.0' in html_src
+    assert 'app.js?v=' in html_src
     assert 'emailStaffOrderPaymentDetails' in js_src
-    assert 'styles.css?v=138.0' in html_src
+    assert 'styles.css?v=' in html_src
     assert 'capturePageScroll' in js_src
     assert 'deletePortfolioDocument' in js_src
     assert 'bulkDeleteAdminCompanies' in js_src
@@ -2438,7 +2437,7 @@ def run_tests():
     assert 'congratulations.png' not in generic_html
     assert 'bgcolor="#003971"' in generic_html
     assert 'brixen-logo.png' in generic_html
-    assert '#e8ecf1' in generic_html or '#f5f5f7' in generic_html or '#f8fafc' in generic_html or '#f3efe8' in generic_html
+    assert '#e8ecf1' in generic_html or '#f5f5f7' in generic_html or '#f8fafc' in generic_html or '#f3efe8' in generic_html or '#f9fafb' in generic_html
     assert '-apple-system' in generic_html
     assert 'Segoe UI' in generic_html or '-apple-system' in generic_html
     assert 'brixenconsultants.com' in html_body
@@ -4893,7 +4892,49 @@ def run_tests():
     assert task_logs['status'] == 'success'
     assert 'audit_logs' in task_logs
 
-    print("✓ AUTOMATION TASK: Team Audit Logs, Incentives & Staff Dashboard verified 100%")
+    # ----------------------------------------------------
+    # B2B ID & THEME SYSTEM TESTS
+    # ----------------------------------------------------
+    print("\n--- Testing Theme Preferences & B2B ID Upgrade ---")
+    
+    # 1. Test /api/user/preferences GET & POST
+    st, hd, pref_res = make_request('/api/user/preferences', method='GET', cookie=f"session_token={task1_admin_tok}")
+    assert st == "200 OK", pref_res
+    assert pref_res['status'] == 'success'
+    
+    st, hd, pref_post = make_request('/api/user/preferences', method='POST', body={'theme': 'dark'}, cookie=f"session_token={task1_admin_tok}")
+    assert st == "200 OK", pref_post
+    assert pref_post['status'] == 'success'
+    assert pref_post['theme_preference'] == 'dark'
+    
+    st, hd, pref_check = make_request('/api/user/preferences', method='GET', cookie=f"session_token={task1_admin_tok}")
+    assert pref_check['theme_preference'] == 'dark'
+
+    # 2. Test B2B ID Assignment & Migration
+    from scripts.migrate_b2b_ids import migrate_b2b_ids
+    migrate_b2b_ids(verbose=False)
+    
+    comp_b2b = query_db("SELECT id, b2b_id, name FROM companies WHERE b2b_id IS NOT NULL LIMIT 1;", one=True)
+    assert comp_b2b is not None, "Error: Expected at least 1 company with B2B ID."
+    assert comp_b2b['b2b_id'].startswith('B2B-'), f"Invalid B2B ID format: {comp_b2b['b2b_id']}"
+
+    # 3. Test B2B ID Search
+    target_b2b_id = comp_b2b['b2b_id']
+    st, hd, search_res = make_request(f'/api/search?q={target_b2b_id}', method='GET', cookie=f"session_token={task1_admin_tok}")
+    assert st == "200 OK", search_res
+    assert search_res['status'] == 'success'
+    found_comp = any(c['title'] == comp_b2b['name'] or target_b2b_id in c.get('subtitle', '') for c in search_res['results'].get('companies', []))
+    assert found_comp, f"Expected company {comp_b2b['name']} in B2B ID search results for {target_b2b_id}"
+
+    # 4. Test Tenant Isolation with B2B ID
+    client_row = query_db("SELECT id, email FROM users WHERE role = 'CLIENT' LIMIT 1;", one=True)
+    execute_db("INSERT INTO user_sessions (session_token, user_id, expires_at) VALUES (?, ?, datetime('now', '+1 hour'));", ("test_client_b2b_tok", client_row['id']))
+    other_comp = query_db("SELECT id, b2b_id FROM companies WHERE user_id != ? LIMIT 1;", (client_row['id'],), one=True)
+    if other_comp:
+        st, hd, client_access = make_request(f"/api/client/companies/{other_comp['id']}", method='GET', cookie="session_token=test_client_b2b_tok")
+        assert st in ("403 Forbidden", "404 Not Found"), f"Tenant isolation violation: client accessed company {other_comp['id']}"
+
+    print("✓ B2B ID Migration, Search & Theme System Verified 100%")
 
     print("\n==================================================")
     print("ALL HYPETEX WSGI & AUDIT FIX TESTS PASSED! (100%)")

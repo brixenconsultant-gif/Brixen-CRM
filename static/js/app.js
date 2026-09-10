@@ -405,10 +405,103 @@ function safeCreateIcons() {
     }
 })();
 
+let currentTheme = localStorage.getItem('brixen_theme') || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+
+function initThemeSystem() {
+    applyThemeUI(currentTheme);
+    if (window.matchMedia) {
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+            if (!localStorage.getItem('brixen_theme')) {
+                setTheme(e.matches ? 'dark' : 'light', false);
+            }
+        });
+    }
+}
+
+function applyThemeUI(theme) {
+    currentTheme = theme;
+    document.documentElement.setAttribute('data-theme', theme);
+    const btn = document.getElementById('theme-toggle-btn');
+    const icon = document.getElementById('theme-toggle-icon');
+    const text = document.getElementById('theme-toggle-text');
+    
+    if (theme === 'dark') {
+        if (text) text.textContent = 'Dark';
+        if (icon) icon.setAttribute('data-lucide', 'moon');
+        if (btn) btn.setAttribute('title', 'Switch to Light mode (currently Dark)');
+    } else {
+        if (text) text.textContent = 'Light';
+        if (icon) icon.setAttribute('data-lucide', 'sun');
+        if (btn) btn.setAttribute('title', 'Switch to Dark mode (currently Light)');
+    }
+    requestAnimationFrame(() => safeCreateIcons());
+    updateChartsTheme(theme);
+}
+
+async function setTheme(theme, save = true) {
+    if (!['light', 'dark'].includes(theme)) return;
+    applyThemeUI(theme);
+    if (save) {
+        localStorage.setItem('brixen_theme', theme);
+        if (currentUser) {
+            try {
+                fetch('/api/user/preferences', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'same-origin',
+                    body: JSON.stringify({ theme: theme })
+                }).catch(() => {});
+            } catch (e) {}
+        }
+    }
+}
+
+function toggleTheme() {
+    const nextTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    setTheme(nextTheme, true);
+}
+
+function updateChartsTheme(theme) {
+    if (typeof Chart === 'undefined') return;
+    const isDark = theme === 'dark';
+    const gridColor = isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)';
+    const textColor = isDark ? '#94a3b8' : '#64748b';
+
+    try {
+        Chart.defaults.color = textColor;
+        if (Chart.defaults.scale && Chart.defaults.scale.grid) {
+            Chart.defaults.scale.grid.color = gridColor;
+        }
+        if (Chart.instances) {
+            Object.keys(Chart.instances).forEach(key => {
+                const chart = Chart.instances[key];
+                if (!chart || !chart.options) return;
+                if (chart.options.scales) {
+                    Object.keys(chart.options.scales).forEach(scaleKey => {
+                        const scale = chart.options.scales[scaleKey];
+                        if (scale.grid) scale.grid.color = gridColor;
+                        if (scale.ticks) scale.ticks.color = textColor;
+                    });
+                }
+                if (chart.options.plugins && chart.options.plugins.legend && chart.options.plugins.legend.labels) {
+                    chart.options.plugins.legend.labels.color = textColor;
+                }
+                chart.update('none');
+            });
+        }
+    } catch (err) {}
+}
+
 // Initialize Application on Page Load
 document.addEventListener('DOMContentLoaded', async () => {
+    initThemeSystem();
     try {
         await checkAuth();
+        if (currentUser && currentUser.theme_preference && ['light', 'dark'].includes(currentUser.theme_preference)) {
+            if (!localStorage.getItem('brixen_theme')) {
+                setTheme(currentUser.theme_preference, false);
+            }
+        }
     } catch (err) {
         console.error('Auth check error:', err);
         // Keep any cached session on boot errors — never force logout on refresh.
@@ -2045,7 +2138,10 @@ function renderRegisteredCompanyCard(company, isAdmin) {
                 <div class="portfolio-card-icon" aria-hidden="true"><i data-lucide="building-2"></i></div>
                 <div class="portfolio-card-titles">
                     <h3>${escapeHtml(company.name || 'Company')}</h3>
-                    <p>${escapeHtml(company.company_number || '—')}</p>
+                    <p style="display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:2px;">
+                        <span>#${escapeHtml(company.company_number || '—')}</span>
+                        ${company.b2b_id ? `<span class="b2b-badge">${escapeHtml(company.b2b_id)}</span>` : ''}
+                    </p>
                     ${(() => {
                         const names = portfolioDirectorNames(company);
                         if (!isRegisteredCompany(company) || !names.length) return '';
@@ -2117,6 +2213,8 @@ function companyMatchesAdminSearch(company, query) {
     const hay = [
         company && company.name,
         company && company.company_number,
+        company && company.b2b_id,
+        company && company.client_type,
         company && company.director,
         company && company.reg_office,
         company && company.package,
@@ -7046,6 +7144,8 @@ async function openCrmClientModal(clientId) {
         document.getElementById('crm-modal-name').textContent = displayName;
         document.getElementById('crm-modal-meta').textContent = `WP User ID: ${c.wordpress_user_id || 'N/A'} | ${c.email || ''}`;
         document.getElementById('crm-modal-avatar').textContent = initials;
+        const b2bElem = document.getElementById('crm-ov-b2b-id');
+        if (b2bElem) b2bElem.textContent = c.b2b_id || 'B2B-000001';
         document.getElementById('crm-ov-email').textContent = c.email || 'N/A';
         document.getElementById('crm-ov-phone').textContent = c.phone || 'N/A';
         document.getElementById('crm-ov-country').textContent = c.country || 'United Kingdom';
@@ -7057,11 +7157,11 @@ async function openCrmClientModal(clientId) {
         if (compBox) {
             const companies = data.companies || [];
             compBox.innerHTML = companies.length ? companies.map((comp) => `
-                <div style="padding:10px; border:1px solid #e2e8f0; border-radius:8px; margin-bottom:8px;">
-                    <strong>${escapeHtml(comp.name || '')}</strong> (#${escapeHtml(comp.company_number || '')}) • ${escapeHtml(comp.package || '')}
-                    <div style="font-size:0.78rem; color:#64748b;">Office: ${escapeHtml(comp.reg_office || '—')} | Status: ${escapeHtml(comp.status || '')}</div>
+                <div style="padding:10px; border:1px solid var(--border-color); border-radius:8px; margin-bottom:8px;">
+                    <strong>${escapeHtml(comp.name || '')}</strong> ${comp.b2b_id ? `<span class="b2b-badge">${escapeHtml(comp.b2b_id)}</span>` : ''} (#${escapeHtml(comp.company_number || '')}) • ${escapeHtml(comp.package || '')}
+                    <div style="font-size:0.78rem; color:var(--text-muted);">Office: ${escapeHtml(comp.reg_office || '—')} | Status: ${escapeHtml(comp.status || '')}</div>
                 </div>
-            `).join('') : '<p style="color:#64748b;">No registered companies for this client.</p>';
+            `).join('') : '<p style="color:var(--text-muted);">No registered companies for this client.</p>';
         }
 
         const ordBox = document.getElementById('crm-orders-list');

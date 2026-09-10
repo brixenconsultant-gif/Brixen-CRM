@@ -4,6 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#003971">
+    <script>
+        (function() {
+            var saved = localStorage.getItem('brixen_theme');
+            var theme = saved || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
     <title>Brixen Consultants - Corporate CMS & Client Portal</title>
     <link rel="icon" type="image/png" href="https://brixenconsultants.com/wp-content/uploads/2025/11/Brixen-Consultants.png">
     <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -59,7 +66,7 @@
             if (app) app.setAttribute('hidden', '');
         });
     </script>
-    <link rel="stylesheet" href="/static/css/styles.css?v=210.0">
+    <link rel="stylesheet" href="/static/css/styles.css?v=220.0">
     <script src="/static/js/vendor/lucide.min.js"></script>
     <script src="/static/js/vendor/chart.umd.min.js"></script>
 </head>
@@ -189,6 +196,90 @@
 
         <div id="mobile-nav-backdrop" class="mobile-nav-backdrop" hidden onclick="closeMobileNav()"></div>
 
+    <!-- ====================================================
+         CENTRALIZED CLIENT CRM RECORD MODAL
+         ==================================================== -->
+    <div id="crm-client-modal" class="modal-overlay">
+        <div class="modal-card" style="max-width:850px;">
+            <div class="modal-header">
+                <div style="display:flex; align-items:center; gap:12px;">
+                    <div id="crm-modal-avatar" class="user-avatar" style="width:44px; height:44px; font-size:1.1rem;">JH</div>
+                    <div>
+                        <h3 id="crm-modal-name">Customer</h3>
+                        <p style="font-size:0.78rem; color:var(--text-secondary);" id="crm-modal-meta"></p>
+                    </div>
+                </div>
+                <button class="btn-close" onclick="closeCrmClientModal()"><i data-lucide="x"></i></button>
+            </div>
+
+            <!-- CRM Tabs -->
+            <div class="crm-tabs" style="display:flex; gap:8px; border-bottom:1px solid var(--border-color); padding-bottom:8px;">
+                <button class="btn-secondary active" onclick="switchCrmTab('overview')" id="crm-tab-overview" style="padding:6px 12px; font-size:0.78rem;">Overview</button>
+                <button class="btn-secondary" onclick="switchCrmTab('companies')" id="crm-tab-companies" style="padding:6px 12px; font-size:0.78rem;">Companies</button>
+                <button class="btn-secondary" onclick="switchCrmTab('orders')" id="crm-tab-orders" style="padding:6px 12px; font-size:0.78rem;">Orders</button>
+                <button class="btn-secondary" onclick="switchCrmTab('invoices')" id="crm-tab-invoices" style="padding:6px 12px; font-size:0.78rem;">Invoices</button>
+                <button class="btn-secondary" onclick="switchCrmTab('documents')" id="crm-tab-documents" style="padding:6px 12px; font-size:0.78rem;">Documents</button>
+                <button class="btn-secondary" onclick="switchCrmTab('support')" id="crm-tab-support" style="padding:6px 12px; font-size:0.78rem;">Support</button>
+                <button class="btn-secondary" onclick="switchCrmTab('logs')" id="crm-tab-logs" style="padding:6px 12px; font-size:0.78rem;">Activity</button>
+            </div>
+
+            <!-- Tab Contents -->
+            <div id="crm-tab-content-overview" class="crm-tab-pane">
+                <div class="crm-overview-grid" style="display:grid; grid-template-columns:repeat(2, 1fr); gap:14px; font-size:0.85rem;">
+                    <div><strong>B2B ID:</strong> <span id="crm-ov-b2b-id" class="b2b-badge">-</span></div>
+                    <div><strong>Login email:</strong> <span id="crm-ov-email"></span></div>
+                    <div><strong>Phone:</strong> <span id="crm-ov-phone">+44 7700 900001</span></div>
+                    <div><strong>Country:</strong> <span id="crm-ov-country">United Kingdom</span></div>
+                    <div><strong>Status:</strong> <span id="crm-ov-status" class="status-badge completed">Active</span></div>
+                    <div><strong>WordPress Sync:</strong> <span id="crm-ov-synced">Synced (12 Aug 2026)</span></div>
+                    <div><strong>Address:</strong> <span id="crm-ov-address">15 Regent Street, London</span></div>
+                    <div style="grid-column:1 / -1; border-top:1px solid var(--border-color); padding-top:12px; margin-top:4px;">
+                        <label for="crm-ov-notify-email" style="display:block; font-size:0.78rem; font-weight:700; color:var(--text-secondary); margin-bottom:6px;">Send all client notifications to</label>
+                        <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+                            <input type="email" id="crm-ov-notify-email" class="select-filter" style="flex:1; min-width:220px;" placeholder="Leave blank to use login email" autocomplete="off">
+                            <button type="button" class="btn-primary" id="crm-ov-notify-save" onclick="saveCrmClientNotificationEmail()">Save</button>
+                        </div>
+                        <p id="crm-ov-notify-hint" style="margin:6px 0 0; font-size:0.75rem; color:var(--text-muted);">Orders, documents, payments, and activity emails for this client all go here.</p>
+                        <p id="crm-ov-notify-status" style="margin:6px 0 0; font-size:0.75rem; color:var(--success); display:none;" role="status"></p>
+                    </div>
+                </div>
+            </div>
+
+            <div id="crm-tab-content-companies" class="crm-tab-pane" style="display:none;">
+                <div id="crm-companies-list"></div>
+            </div>
+
+            <div id="crm-tab-content-orders" class="crm-tab-pane" style="display:none;">
+                <div id="crm-orders-list"></div>
+            </div>
+
+            <div id="crm-tab-content-invoices" class="crm-tab-pane" style="display:none;">
+                <div id="crm-invoices-list"></div>
+            </div>
+
+            <div id="crm-tab-content-documents" class="crm-tab-pane" style="display:none;">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:12px;">
+                    <div style="font-size:0.8rem; color:var(--text-muted);">Documents stored for this customer only.</div>
+                    <button type="button" class="btn-primary staff-deliver-doc-btn" id="crm-upload-document-btn" onclick="openDeliverDocumentModal()" style="display:none;"><i data-lucide="upload"></i> Upload Document</button>
+                </div>
+                <div id="crm-deliver-doc-status" style="display:none; padding:10px; border-radius:8px; background:var(--bg-surface-subtle); color:var(--success); font-size:0.8rem; font-weight:600; margin-bottom:10px;" role="status"></div>
+                <div id="crm-documents-list"></div>
+            </div>
+
+            <div id="crm-tab-content-support" class="crm-tab-pane" style="display:none;">
+                <div id="crm-support-list"></div>
+            </div>
+
+            <div id="crm-tab-content-logs" class="crm-tab-pane" style="display:none;">
+                <div id="crm-logs-list"></div>
+            </div>
+
+            <div class="modal-footer" style="padding-top:12px; border-top:1px solid var(--border-color); text-align:right;">
+                <button class="btn-secondary" onclick="closeCrmClientModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
         <!-- ====================================================
              MAIN WRAPPER & TOP HEADER
              ==================================================== -->
@@ -197,12 +288,6 @@
                 <button type="button" id="mobile-nav-toggle" class="mobile-nav-toggle" onclick="toggleMobileNav()" aria-label="Open menu" aria-expanded="false">
                     <i data-lucide="menu"></i>
                 </button>
-                <div class="header-search-wrap" id="header-search-box" style="display: none;">
-                    <div class="search-box">
-                    <i data-lucide="search" style="width:16px; height:16px; color:#86868b;"></i>
-                    <input type="text" id="global-search-input" placeholder="Search clients, email, orders…" autocomplete="off" oninput="handleGlobalSearch(this.value)" onfocus="handleGlobalSearch(this.value)">
-                    </div>
-                </div>
 
                 <!-- ====================================================
                      TOP HORIZONTAL MENU SECTION (INSIDE TOP HEADER BAR)
@@ -275,91 +360,29 @@
                 </div>
 
                 <div class="header-right">
-                    <!-- ====================================================
-         CENTRALIZED CLIENT CRM RECORD MODAL
-         ==================================================== -->
-    <div id="crm-client-modal" class="modal-overlay">
-        <div class="modal-card" style="max-width:850px;">
-            <div class="modal-header">
-                <div style="display:flex; align-items:center; gap:12px;">
-                    <div id="crm-modal-avatar" class="user-avatar" style="width:44px; height:44px; font-size:1.1rem;">JH</div>
-                    <div>
-                        <h3 id="crm-modal-name">Customer</h3>
-                        <p style="font-size:0.78rem; color:#64748b;" id="crm-modal-meta"></p>
-                    </div>
-                </div>
-                <button class="btn-close" onclick="closeCrmClientModal()"><i data-lucide="x"></i></button>
-            </div>
+                    <!-- Theme Toggle Control -->
+                    <button type="button" id="theme-toggle-btn" class="theme-toggle-btn" onclick="toggleTheme()" aria-label="Toggle theme" title="Toggle Light or Dark Mode">
+                        <i data-lucide="sun" id="theme-toggle-icon" style="width:16px; height:16px;"></i>
+                        <span id="theme-toggle-text">Light</span>
+                    </button>
 
-            <!-- CRM Tabs -->
-            <div class="crm-tabs" style="display:flex; gap:8px; border-bottom:1px solid #e2e8f0; padding-bottom:8px;">
-                <button class="btn-secondary active" onclick="switchCrmTab('overview')" id="crm-tab-overview" style="padding:6px 12px; font-size:0.78rem;">Overview</button>
-                <button class="btn-secondary" onclick="switchCrmTab('companies')" id="crm-tab-companies" style="padding:6px 12px; font-size:0.78rem;">Companies</button>
-                <button class="btn-secondary" onclick="switchCrmTab('orders')" id="crm-tab-orders" style="padding:6px 12px; font-size:0.78rem;">Orders</button>
-                <button class="btn-secondary" onclick="switchCrmTab('invoices')" id="crm-tab-invoices" style="padding:6px 12px; font-size:0.78rem;">Invoices</button>
-                <button class="btn-secondary" onclick="switchCrmTab('documents')" id="crm-tab-documents" style="padding:6px 12px; font-size:0.78rem;">Documents</button>
-                <button class="btn-secondary" onclick="switchCrmTab('support')" id="crm-tab-support" style="padding:6px 12px; font-size:0.78rem;">Support</button>
-                <button class="btn-secondary" onclick="switchCrmTab('logs')" id="crm-tab-logs" style="padding:6px 12px; font-size:0.78rem;">Activity</button>
-            </div>
-
-            <!-- Tab Contents -->
-            <div id="crm-tab-content-overview" class="crm-tab-pane">
-                <div class="crm-overview-grid" style="display:grid; grid-template-columns:repeat(2, 1fr); gap:14px; font-size:0.85rem;">
-                    <div><strong>Login email:</strong> <span id="crm-ov-email"></span></div>
-                    <div><strong>Phone:</strong> <span id="crm-ov-phone">+44 7700 900001</span></div>
-                    <div><strong>Country:</strong> <span id="crm-ov-country">United Kingdom</span></div>
-                    <div><strong>Status:</strong> <span id="crm-ov-status" class="status-badge completed">Active</span></div>
-                    <div><strong>WordPress Sync:</strong> <span id="crm-ov-synced">Synced (12 Aug 2026)</span></div>
-                    <div><strong>Address:</strong> <span id="crm-ov-address">15 Regent Street, London</span></div>
-                    <div style="grid-column:1 / -1; border-top:1px solid #e2e8f0; padding-top:12px; margin-top:4px;">
-                        <label for="crm-ov-notify-email" style="display:block; font-size:0.78rem; font-weight:700; color:#475569; margin-bottom:6px;">Send all client notifications to</label>
-                        <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
-                            <input type="email" id="crm-ov-notify-email" class="select-filter" style="flex:1; min-width:220px;" placeholder="Leave blank to use login email" autocomplete="off">
-                            <button type="button" class="btn-primary" id="crm-ov-notify-save" onclick="saveCrmClientNotificationEmail()">Save</button>
+                    <div id="notification-bell-wrap" style="position:relative; display:none;">
+                        <button class="btn-icon-relative" title="Notifications" onclick="toggleNotificationsModal(event)" aria-label="Notifications">
+                            <i data-lucide="bell"></i>
+                            <span class="notification-badge" id="header-unread-count" style="display:none;">0</span>
+                        </button>
+                        <div id="notifications-dropdown" style="display:none; position:absolute; right:0; top:calc(100% + 8px); width:360px; max-width:min(360px, 90vw); background:var(--modal-bg); border:1px solid var(--border-color); border-radius:16px; z-index:1200; overflow:hidden;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 14px; border-bottom:1px solid var(--border-color);">
+                                <strong style="font-size:0.88rem; color:var(--text-primary);">Notifications</strong>
+                                <button type="button" class="btn-secondary" style="padding:4px 8px; font-size:0.72rem;" onclick="markNotificationsRead(event)">Mark all read</button>
+                            </div>
+                            <div id="notifications-list" style="max-height:380px; overflow-y:auto;"></div>
                         </div>
-                        <p id="crm-ov-notify-hint" style="margin:6px 0 0; font-size:0.75rem; color:#64748b;">Orders, documents, payments, and activity emails for this client all go here.</p>
-                        <p id="crm-ov-notify-status" style="margin:6px 0 0; font-size:0.75rem; color:#047857; display:none;" role="status"></p>
                     </div>
-                </div>
-            </div>
 
-            <div id="crm-tab-content-companies" class="crm-tab-pane" style="display:none;">
-                <div id="crm-companies-list"></div>
-            </div>
-
-            <div id="crm-tab-content-orders" class="crm-tab-pane" style="display:none;">
-                <div id="crm-orders-list"></div>
-            </div>
-
-            <div id="crm-tab-content-invoices" class="crm-tab-pane" style="display:none;">
-                <div id="crm-invoices-list"></div>
-            </div>
-
-            <div id="crm-tab-content-documents" class="crm-tab-pane" style="display:none;">
-                <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:12px;">
-                    <div style="font-size:0.8rem; color:#64748b;">Documents stored for this customer only.</div>
-                    <button type="button" class="btn-primary staff-deliver-doc-btn" id="crm-upload-document-btn" onclick="openDeliverDocumentModal()" style="display:none;"><i data-lucide="upload"></i> Upload Document</button>
-                </div>
-                <div id="crm-deliver-doc-status" style="display:none; padding:10px; border-radius:8px; background:#ecfdf5; color:#047857; font-size:0.8rem; font-weight:600; margin-bottom:10px;" role="status"></div>
-                <div id="crm-documents-list"></div>
-            </div>
-
-            <div id="crm-tab-content-support" class="crm-tab-pane" style="display:none;">
-                <div id="crm-support-list"></div>
-            </div>
-
-            <div id="crm-tab-content-logs" class="crm-tab-pane" style="display:none;">
-                <div id="crm-logs-list"></div>
-            </div>
-
-            <div class="modal-footer" style="padding-top:12px; border-top:1px solid #e2e8f0; text-align:right;">
-                <button class="btn-secondary" onclick="closeCrmClientModal()">Close</button>
-            </div>
-        </div>
-    </div>
                     <!-- Glass Client View / Account Control -->
                     <div id="header-account-wrap" style="position:relative; display:none;">
-                        <button type="button" class="glass-account-control" id="header-account-control" title="Account menu" onclick="toggleAccountMenu(event)" style="border: none; font: inherit; text-align: left;">
+                        <button type="button" class="glass-account-control" id="header-account-control" title="Account menu" onclick="toggleAccountMenu(event)" style="border: none; font: inherit; text-align: left;" aria-label="Account menu">
                             <div class="account-avatar" id="header-user-avatar"></div>
                             <div class="account-details">
                                 <span class="account-name" id="header-user-name"></span>
@@ -375,20 +398,6 @@
                             </div>
                             <button type="button" id="account-menu-profile" class="account-dropdown-item" style="display:none;" onclick="openAccountProfile(event)">Profile &amp; Password</button>
                             <button type="button" class="account-dropdown-item" onclick="handleLogout()">Sign out</button>
-                        </div>
-                    </div>
-
-                    <div id="notification-bell-wrap" style="position:relative; display:none;">
-                        <button class="btn-icon-relative" title="Notifications" onclick="toggleNotificationsModal(event)">
-                            <i data-lucide="bell"></i>
-                            <span class="notification-badge" id="header-unread-count" style="display:none;">0</span>
-                        </button>
-                        <div id="notifications-dropdown" style="display:none; position:absolute; right:0; top:calc(100% + 8px); width:360px; max-width:min(360px, 90vw); background:#ffffff; border:1px solid #e2e8f0; border-radius:16px; z-index:1200; overflow:hidden;">
-                            <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 14px; border-bottom:1px solid #e2e8f0;">
-                                <strong style="font-size:0.88rem; color:#0f172a;">Notifications</strong>
-                                <button type="button" class="btn-secondary" style="padding:4px 8px; font-size:0.72rem;" onclick="markNotificationsRead(event)">Mark all read</button>
-                            </div>
-                            <div id="notifications-list" style="max-height:380px; overflow-y:auto;"></div>
                         </div>
                     </div>
                 </div>

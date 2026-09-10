@@ -567,6 +567,9 @@ def public_me_user(user, impersonated=False):
         'role': src.get('role'),
         'department': (departments_from_user(src) or [None])[0],
         'departments': departments_from_user(src),
+        'b2b_id': src.get('b2b_id'),
+        'client_type': src.get('client_type') or 'B2B',
+        'theme_preference': src.get('theme_preference') or 'system',
         'impersonated': bool(impersonated)
     }
 
@@ -3738,6 +3741,8 @@ def public_client_company(row, deadlines=None, for_staff=False, resolve_owner=Fa
         'registered_email': str(src.get('registered_email') or '').strip(),
         'whatsapp_number': str(src.get('whatsapp_number') or '').strip(),
         'deadlines': list(deadlines or []),
+        'b2b_id': str(src.get('b2b_id') or '').strip(),
+        'client_type': str(src.get('client_type') or 'B2B').strip() or 'B2B',
     }
     if is_placeholder_company_email(payload['registered_email']):
         payload['registered_email'] = ''
@@ -3823,7 +3828,8 @@ COMPANY_STAFF_SELECT = (
     "business_email_verified_by, business_email_verified_at, business_email_source, business_email_updated_at, "
     "whatsapp_number, accounts_next_due, accounts_overdue, "
     "confirmation_next_due, confirmation_overdue, ch_attention_json, "
-    "ch_alert_fingerprint, ch_alert_sent_at, compliance_last_notification_at, compliance_last_notification_id"
+    "ch_alert_fingerprint, ch_alert_sent_at, compliance_last_notification_at, compliance_last_notification_id, "
+    "b2b_id, client_type"
 )
 COMPANY_LIST_SELECT = (
     "id, name, company_number, status, inc_date, director, reg_office, package, account_status, "
@@ -3831,7 +3837,8 @@ COMPANY_LIST_SELECT = (
     "sic_codes, registered_email, registered_email_locked, business_email_verified, "
     "business_email_verified_by, business_email_verified_at, business_email_source, business_email_updated_at, "
     "whatsapp_number, accounts_next_due, accounts_overdue, "
-    "confirmation_next_due, confirmation_overdue, ch_attention_json"
+    "confirmation_next_due, confirmation_overdue, ch_attention_json, "
+    "b2b_id, client_type"
 )
 
 
@@ -11030,6 +11037,25 @@ def ensure_client_for_manual_company(data, actor=None):
     return client_id, client, None
 
 
+def generate_next_b2b_id():
+    max_num = 0
+    for row in query_db("SELECT b2b_id FROM companies WHERE b2b_id LIKE 'B2B-%';") or []:
+        try:
+            num = int((row['b2b_id'] or '').replace('B2B-', ''))
+            if num > max_num:
+                max_num = num
+        except (ValueError, AttributeError):
+            pass
+    for row in query_db("SELECT b2b_id FROM users WHERE b2b_id LIKE 'B2B-%';") or []:
+        try:
+            num = int((row['b2b_id'] or '').replace('B2B-', ''))
+            if num > max_num:
+                max_num = num
+        except (ValueError, AttributeError):
+            pass
+    return f"B2B-{(max_num + 1):06d}"
+
+
 def create_manual_company(data, actor=None):
     extras = data if isinstance(data, dict) else {}
     client_id, client, client_err = ensure_client_for_manual_company(extras, actor)
@@ -11058,10 +11084,11 @@ def create_manual_company(data, actor=None):
     if len(inc_date) < 10:
         inc_date = datetime.date.today().isoformat()
     form_email = registered_email_for_client(client, extras)
+    b2b_id = generate_next_b2b_id()
     company_id = execute_db(
         """
-        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status, registered_email)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status, registered_email, b2b_id, client_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'B2B');
         """,
         (
             client_id,
@@ -11074,6 +11101,7 @@ def create_manual_company(data, actor=None):
             (extras.get('package') or 'Historical Registration').strip() or 'Historical Registration',
             (extras.get('account_status') or 'Good Standing').strip() or 'Good Standing',
             form_email or None,
+            b2b_id,
         ),
     )
     created = query_db(
@@ -11201,10 +11229,11 @@ def ensure_company_from_registration_order(client_id, client_name, o_data, servi
         'closed': 'Closed',
     }
     company_status = status_map.get(raw_status, 'Active')
+    b2b_id = generate_next_b2b_id()
     company_id = execute_db(
         """
-        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending');
+        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status, b2b_id, client_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, 'B2B');
         """,
         (
             client_id,
@@ -11215,6 +11244,7 @@ def ensure_company_from_registration_order(client_id, client_name, o_data, servi
             client_name or 'Director',
             address,
             service_name or 'Company Formation',
+            b2b_id,
         ),
     )
     return company_id
@@ -11823,34 +11853,36 @@ def run_portal_search(user, query):
 
     if check_permission(user, 'clients.view'):
         sql = """
-            SELECT u.id, u.full_name, u.email, u.phone
+            SELECT u.id, u.full_name, u.email, u.phone, u.b2b_id
             FROM users u
             WHERE u.role = 'CLIENT'
-              AND (u.full_name LIKE ? OR u.email LIKE ? OR IFNULL(u.phone, '') LIKE ?)
+              AND (u.full_name LIKE ? OR u.email LIKE ? OR IFNULL(u.phone, '') LIKE ? OR IFNULL(u.b2b_id, '') LIKE ?)
         """
-        params = [like, like, like]
+        params = [like, like, like, like]
         scope_sql, scope_params = _manager_client_scope_sql(user, 'u')
         sql += scope_sql
         params.extend(scope_params)
         sql += " ORDER BY u.full_name COLLATE NOCASE LIMIT ?;"
         params.append(limit)
         for row in query_db(sql, params) or []:
-            subtitle = row.get('email') or ''
+            subtitle = row.get('b2b_id') or row.get('email') or ''
+            if row.get('b2b_id') and row.get('email'):
+                subtitle = f"{row['b2b_id']} · {row['email']}"
             if row.get('phone'):
                 subtitle = f"{subtitle} · {row['phone']}".strip(' ·')
             customers.append(_search_hit(row['id'], 'customer', row.get('full_name'), subtitle))
 
     if check_permission(user, 'orders.view'):
         clauses = [
-            "(o.order_number LIKE ? OR o.service_name LIKE ? OR u.full_name LIKE ? OR u.email LIKE ? OR IFNULL(c.name, '') LIKE ?)"
+            "(o.order_number LIKE ? OR o.service_name LIKE ? OR u.full_name LIKE ? OR u.email LIKE ? OR IFNULL(c.name, '') LIKE ? OR IFNULL(c.b2b_id, '') LIKE ? OR IFNULL(u.b2b_id, '') LIKE ?)"
         ]
-        params = [like, like, like, like, like]
+        params = [like, like, like, like, like, like, like]
         scope_sql, scope_params = manager_order_scope(user)
         if scope_sql:
             clauses.append(scope_sql)
             params.extend(scope_params)
         sql = """
-            SELECT o.id, o.order_number, o.service_name, u.full_name as client_name, c.name as company_name
+            SELECT o.id, o.order_number, o.service_name, u.full_name as client_name, c.name as company_name, c.b2b_id as company_b2b_id
             FROM orders o
             JOIN users u ON o.user_id = u.id
             LEFT JOIN companies c ON o.company_id = c.id
@@ -11861,25 +11893,29 @@ def run_portal_search(user, query):
         params.append(limit)
         for row in query_db(sql, params) or []:
             bits = [row.get('client_name') or '', row.get('service_name') or '']
-            if row.get('company_name'):
+            if row.get('company_b2b_id'):
+                bits.append(row['company_b2b_id'])
+            elif row.get('company_name'):
                 bits.append(row['company_name'])
             orders.append(_search_hit(row['id'], 'order', row.get('order_number'), ' · '.join([b for b in bits if b])))
 
     if user.get('role') in INTERNAL_STAFF_ROLES:
         sql = """
-            SELECT c.id, c.name, c.company_number, u.full_name as client_name
+            SELECT c.id, c.name, c.company_number, c.b2b_id, u.full_name as client_name
             FROM companies c
             JOIN users u ON c.user_id = u.id
-            WHERE (c.name LIKE ? OR c.company_number LIKE ? OR c.director LIKE ? OR u.full_name LIKE ? OR u.email LIKE ?)
+            WHERE (c.name LIKE ? OR c.company_number LIKE ? OR c.director LIKE ? OR IFNULL(c.b2b_id, '') LIKE ? OR u.full_name LIKE ? OR u.email LIKE ?)
         """
-        params = [like, like, like, like, like]
+        params = [like, like, like, like, like, like]
         scope_sql, scope_params = _manager_client_scope_sql(user, 'u')
         sql += scope_sql
         params.extend(scope_params)
         sql += " ORDER BY c.created_at DESC LIMIT ?;"
         params.append(limit)
         for row in query_db(sql, params) or []:
-            subtitle = row.get('company_number') or ''
+            subtitle = row.get('b2b_id') or row.get('company_number') or ''
+            if row.get('b2b_id') and row.get('company_number'):
+                subtitle = f"{row['b2b_id']} · {row['company_number']}"
             if row.get('client_name'):
                 subtitle = f"{subtitle} · {row['client_name']}".strip(' ·')
             companies.append(_search_hit(row['id'], 'company', row.get('name'), subtitle))
@@ -15626,6 +15662,24 @@ def application(environ, start_response):
                 continue
             settings_dict[key] = r['value']
         return json_response(start_response, {'status': 'success', 'settings': settings_dict})
+
+    # ----------------------------------------------------
+    # API: User Preferences (Theme, UI settings)
+    # ----------------------------------------------------
+    if path == '/api/user/preferences' and method in ('GET', 'POST'):
+        if not user:
+            return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
+        if method == 'POST':
+            data = parse_body(environ)
+            theme = str(data.get('theme') or data.get('theme_preference') or 'system').lower().strip()
+            if theme not in ('light', 'dark', 'system'):
+                return json_response(start_response, {'status': 'error', 'message': 'Invalid theme option'}, "400 Bad Request")
+            execute_db("UPDATE users SET theme_preference = ? WHERE id = ?;", (theme, user['id']))
+            user['theme_preference'] = theme
+            return json_response(start_response, {'status': 'success', 'theme_preference': theme})
+        else:
+            current_theme = user.get('theme_preference') or 'system'
+            return json_response(start_response, {'status': 'success', 'theme_preference': current_theme})
 
     # ----------------------------------------------------
     # API: Auth

@@ -226,6 +226,12 @@ def ensure_schema():
     if 'account_type' not in user_cols:
         conn.execute("ALTER TABLE users ADD COLUMN account_type TEXT DEFAULT 'B2B Client (Brixen Website Panel)'")
         conn.execute("UPDATE users SET account_type = 'B2B Client (Brixen Website Panel)', is_b2b = 1 WHERE role = 'CLIENT'")
+    if 'b2b_id' not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN b2b_id TEXT")
+    if 'client_type' not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN client_type TEXT DEFAULT 'B2B'")
+    if 'theme_preference' not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN theme_preference TEXT DEFAULT 'system'")
     if 'checkout_phone' not in order_cols:
         conn.execute("ALTER TABLE orders ADD COLUMN checkout_phone TEXT")
     if 'checkout_dob' not in order_cols:
@@ -343,6 +349,12 @@ def ensure_schema():
         conn.execute("ALTER TABLE companies ADD COLUMN compliance_last_notification_at TIMESTAMP")
     if 'compliance_last_notification_id' not in company_cols:
         conn.execute("ALTER TABLE companies ADD COLUMN compliance_last_notification_id TEXT")
+    if 'b2b_id' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN b2b_id TEXT")
+    if 'client_type' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN client_type TEXT DEFAULT 'B2B'")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_companies_b2b_id ON companies(b2b_id) WHERE b2b_id IS NOT NULL;")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_b2b_id ON users(b2b_id) WHERE b2b_id IS NOT NULL;")
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS company_email_verification_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
