@@ -2246,6 +2246,52 @@
                     <div><span class="staff-order-field-label">Form email</span><strong id="staff-order-owner-email">—</strong></div>
                     <div><span class="staff-order-field-label">UK contact</span><strong id="staff-order-owner-phone">—</strong></div>
                     <div><span class="staff-order-field-label">Portal login</span><strong id="staff-order-portal-email">—</strong></div>
+            </div>
+            <!-- SERVICE ACCESS CREDENTIALS CARD -->
+            <div id="staff-order-credentials-card" style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:14px; padding:18px; margin:16px 0;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                    <h4 class="staff-order-section-title" style="margin:0; display:flex; align-items:center; gap:6px;">
+                        <i data-lucide="key" style="width:16px; height:16px; color:var(--color-primary);"></i> Service Access Credentials
+                    </h4>
+                    <button type="button" class="btn-ghost" style="padding:2px 8px; font-size:0.75rem;" onclick="toggleStaffOrderCredentialsEdit()" id="btn-edit-credentials">Edit Credentials</button>
+                </div>
+
+                <!-- Display Mode -->
+                <div id="staff-order-credentials-display" style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                    <div>
+                        <span class="staff-order-field-label">Service Account Email</span>
+                        <div style="display:flex; align-items:center; gap:6px; margin-top:2px;">
+                            <strong id="disp-access-email" style="font-size:0.88rem; color:var(--color-text-primary);">None recorded</strong>
+                            <button type="button" class="icon-edit-btn" title="Copy Email" onclick="copyTextToClipboard(document.getElementById('disp-access-email').textContent)"><i data-lucide="copy" style="width:12px; height:12px;"></i></button>
+                        </div>
+                    </div>
+
+                    <div>
+                        <span class="staff-order-field-label">Email Password / Access Code</span>
+                        <div style="display:flex; align-items:center; gap:6px; margin-top:2px;">
+                            <span id="disp-access-password" style="font-family:monospace; font-size:0.9rem; font-weight:700; color:var(--color-text-primary);">••••••••</span>
+                            <button type="button" class="icon-edit-btn" title="Show / Hide Password" onclick="toggleDisplayPasswordVisibility('disp-access-password')"><i data-lucide="eye" id="eye-disp-access-password" style="width:12px; height:12px;"></i></button>
+                            <button type="button" class="icon-edit-btn" title="Copy Password" onclick="copyTextToClipboard(this.getAttribute('data-pass'))" id="btn-copy-pass"><i data-lucide="copy" style="width:12px; height:12px;"></i></button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Edit Mode -->
+                <div id="staff-order-credentials-editor" style="display:none; margin-top:10px;">
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <div>
+                            <label style="font-size:0.78rem; font-weight:700; color:var(--color-text-muted);">Service Email</label>
+                            <input type="email" id="edit-access-email" class="select-filter" style="width:100%; margin-top:4px;" placeholder="e.g. info@clientcompany.co.uk">
+                        </div>
+                        <div>
+                            <label style="font-size:0.78rem; font-weight:700; color:var(--color-text-muted);">Email Password</label>
+                            <input type="text" id="edit-access-password" class="select-filter" style="width:100%; margin-top:4px;" placeholder="Enter password / access code">
+                        </div>
+                    </div>
+                    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:10px;">
+                        <button type="button" class="btn-secondary" style="font-size:0.8rem; padding:6px 12px;" onclick="toggleStaffOrderCredentialsEdit(false)">Cancel</button>
+                        <button type="button" class="btn-primary" style="font-size:0.8rem; padding:6px 12px;" onclick="saveStaffOrderCredentials()">Save Credentials</button>
+                    </div>
                 </div>
             </div>
             <div class="staff-order-section-head">
@@ -2673,6 +2719,29 @@
                     <!-- Repeatable Sections Container (Directors, Shareholders, etc. - ONLY if product config specifies it) -->
                     <div id="wizard-repeatable-sections-container" style="display:flex; flex-direction:column; gap:20px; margin-top:20px;">
                         <!-- Repeatable section cards rendered here -->
+                    </div>
+
+                    <!-- Service Access Credentials Section (Email & Password) -->
+                    <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:14px; padding:18px; margin-top:20px;">
+                        <h5 style="font-size:0.88rem; font-weight:700; color:var(--color-text-primary); margin:0 0 10px 0; display:flex; align-items:center; gap:6px;">
+                            <i data-lucide="key" style="width:16px; height:16px; color:var(--color-primary);"></i> Service Access Credentials (Email &amp; Password)
+                        </h5>
+                        <p style="font-size:0.78rem; color:var(--color-text-muted); margin:0 0 12px 0;">Record the service account email and password credentials for this order.</p>
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                            <div>
+                                <label for="wizard-access-email" style="font-size:0.8rem; font-weight:700; color:var(--color-text-primary);">Service Account Email</label>
+                                <input type="email" id="wizard-access-email" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 14px;" placeholder="e.g. info@clientcompany.co.uk" oninput="universalOrderWizardState.formValues['access_email'] = this.value">
+                            </div>
+                            <div>
+                                <label for="wizard-access-email-password" style="font-size:0.8rem; font-weight:700; color:var(--color-text-primary);">Email Password / Access Code</label>
+                                <div style="position:relative;">
+                                    <input type="password" id="wizard-access-email-password" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 38px 10px 14px;" placeholder="Enter password / access code" autocomplete="new-password" oninput="universalOrderWizardState.formValues['access_email_password'] = this.value">
+                                    <button type="button" class="btn-ghost" style="position:absolute; right:6px; top:50%; transform:translateY(-50%); padding:4px 6px;" onclick="toggleAccessPasswordVisibility('wizard-access-email-password')">
+                                        <i data-lucide="eye" id="eye-wizard-access-email-password" style="width:14px; height:14px;"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                 </div>

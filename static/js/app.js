@@ -5980,6 +5980,22 @@ async function openStaffOrderWorkspace(orderId, options) {
         setPortfolioText('staff-order-owner-email', owner.form_email || '—');
         setPortfolioText('staff-order-owner-phone', owner.phone || '—');
         setPortfolioText('staff-order-portal-email', order.portal_login_email || order.client_email || '—');
+
+        const dispEmail = document.getElementById('disp-access-email');
+        const dispPass = document.getElementById('disp-access-password');
+        const btnCopyPass = document.getElementById('btn-copy-pass');
+        const accEmail = order.access_email || '';
+        const accPass = order.access_email_password || '';
+        if (dispEmail) dispEmail.textContent = accEmail || 'None recorded';
+        if (dispPass) {
+            dispPass.setAttribute('data-actual-password', accPass);
+            dispPass.textContent = '••••••••';
+        }
+        if (btnCopyPass) btnCopyPass.setAttribute('data-pass', accPass);
+        if (typeof toggleStaffOrderCredentialsEdit === 'function') {
+            toggleStaffOrderCredentialsEdit(false);
+        }
+
         const productSummary = order.products_summary || order.service_name || '—';
         const productEl = document.getElementById('staff-order-product');
         if (productEl) productEl.innerHTML = renderProductPills(productSummary, order.category_name);
@@ -12357,5 +12373,113 @@ async function submitCreateCustomerForm(event) {
         }
     } finally {
         if (submitBtn) submitBtn.disabled = false;
+    }
+}
+
+/* ====================================================
+   SERVICE ACCESS CREDENTIALS & PASSWORD TOGGLE HELPERS
+   ==================================================== */
+function toggleAccessPasswordVisibility(inputId) {
+    const input = document.getElementById(inputId);
+    const eyeIcon = document.getElementById(`eye-${inputId}`);
+    if (!input) return;
+
+    if (input.type === 'password') {
+        input.type = 'text';
+        if (eyeIcon) eyeIcon.setAttribute('data-lucide', 'eye-off');
+    } else {
+        input.type = 'password';
+        if (eyeIcon) eyeIcon.setAttribute('data-lucide', 'eye');
+    }
+    safeCreateIcons();
+}
+
+function toggleDisplayPasswordVisibility(elementId) {
+    const el = document.getElementById(elementId);
+    const eyeIcon = document.getElementById(`eye-${elementId}`);
+    if (!el) return;
+
+    const actualPass = el.getAttribute('data-actual-password') || '';
+    if (el.textContent === '••••••••') {
+        el.textContent = actualPass || 'None recorded';
+        if (eyeIcon) eyeIcon.setAttribute('data-lucide', 'eye-off');
+    } else {
+        el.textContent = '••••••••';
+        if (eyeIcon) eyeIcon.setAttribute('data-lucide', 'eye');
+    }
+    safeCreateIcons();
+}
+
+function copyTextToClipboard(text) {
+    if (!text || text === 'None recorded') return;
+    navigator.clipboard.writeText(text).then(() => {
+        alert('📋 Copied to clipboard: ' + text);
+    }).catch(() => {
+        alert('Copied: ' + text);
+    });
+}
+
+function toggleStaffOrderCredentialsEdit(show = true) {
+    const disp = document.getElementById('staff-order-credentials-display');
+    const editor = document.getElementById('staff-order-credentials-editor');
+    const btn = document.getElementById('btn-edit-credentials');
+    if (!disp || !editor) return;
+
+    if (show) {
+        disp.style.display = 'none';
+        editor.style.display = 'block';
+        if (btn) btn.style.display = 'none';
+
+        const dispEmail = document.getElementById('disp-access-email')?.textContent || '';
+        const btnCopyPass = document.getElementById('btn-copy-pass');
+        const passVal = btnCopyPass ? (btnCopyPass.getAttribute('data-pass') || '') : '';
+
+        const editEmail = document.getElementById('edit-access-email');
+        const editPass = document.getElementById('edit-access-password');
+        if (editEmail) editEmail.value = (dispEmail !== 'None recorded' ? dispEmail : '');
+        if (editPass) editPass.value = passVal;
+    } else {
+        disp.style.display = 'grid';
+        editor.style.display = 'none';
+        if (btn) btn.style.display = 'inline-block';
+    }
+}
+
+async function saveStaffOrderCredentials() {
+    if (!window.staffOrderId) return;
+
+    const email = document.getElementById('edit-access-email').value.trim();
+    const password = document.getElementById('edit-access-password').value.trim();
+
+    try {
+        const res = await fetch(`/api/admin/orders/${window.staffOrderId}`, {
+            method: 'PUT',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                access_email: email,
+                access_email_password: password
+            })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.status === 'success') {
+            const dispEmail = document.getElementById('disp-access-email');
+            const dispPass = document.getElementById('disp-access-password');
+            const btnCopyPass = document.getElementById('btn-copy-pass');
+
+            if (dispEmail) dispEmail.textContent = email || 'None recorded';
+            if (dispPass) {
+                dispPass.setAttribute('data-actual-password', password);
+                dispPass.textContent = '••••••••';
+            }
+            if (btnCopyPass) btnCopyPass.setAttribute('data-pass', password);
+
+            toggleStaffOrderCredentialsEdit(false);
+            safeCreateIcons();
+        } else {
+            alert('Error saving credentials: ' + (data.message || 'Unknown error'));
+        }
+    } catch (err) {
+        alert('Connection error: ' + err.message);
     }
 }

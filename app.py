@@ -1305,17 +1305,32 @@ def resolve_work_notification_email(*, client=None, company=None, order=None, em
     """
     Company/order work emails go to the company-relevant address first:
       1. Explicit email_to
-      2. companies.registered_email
-      3. company form / owner email
-      4. order owner_form_email
-      5. client notification_email / login email
-    Portal login stays on the customer; mail follows the company.
+      2. If B2B Order / Customer -> B2B Account Owner email (owner_form_email / registered_email)
+      3. companies.registered_email
+      4. company form / owner email
+      5. order owner_form_email
+      6. client notification_email / login email
+    For B2B orders, notifications MUST go to the Account Owner email, NOT directly to the retail customer login email first.
     """
     explicit = normalize_notify_email(email_to) if email_to is not None else ''
     if explicit:
         return explicit
 
-    company_rec = load_company_for_notify(company, order)
+    order_rec = dict(order) if isinstance(order, dict) else (query_db("SELECT * FROM orders WHERE id = ?;", (order,), one=True) if order else None)
+    client_rec = resolve_client_user(client or (order_rec or {}).get('user_id'))
+
+    is_b2b_order = False
+    if client_rec and (client_rec.get('is_b2b') == 1 or client_rec.get('client_type') == 'B2B'):
+        is_b2b_order = True
+    elif order_rec and (order_rec.get('b2b_client_id') or (order_rec.get('checkout_form_json') and 'b2b' in str(order_rec.get('checkout_form_json')).lower())):
+        is_b2b_order = True
+
+    if is_b2b_order and order_rec:
+        b2b_owner_email = normalize_notify_email((order_rec or {}).get('owner_form_email'))
+        if b2b_owner_email:
+            return b2b_owner_email
+
+    company_rec = load_company_for_notify(company, order_rec)
     if company_rec:
         registered = normalize_notify_email(company_rec.get('registered_email'))
         if not registered:
@@ -1326,18 +1341,18 @@ def resolve_work_notification_email(*, client=None, company=None, order=None, em
         if form_email:
             return form_email
 
-    if order:
+    if order_rec:
         try:
-            connector = real_order_connector(order)
+            connector = real_order_connector(order_rec)
             form_email = normalize_notify_email((connector or {}).get('owner_form_email'))
             if form_email:
                 return form_email
         except Exception:
-            form_email = normalize_notify_email((order or {}).get('owner_form_email'))
+            form_email = normalize_notify_email((order_rec or {}).get('owner_form_email'))
             if form_email:
                 return form_email
 
-    return client_notification_recipient(client or order or company_rec)
+    return client_notification_recipient(client_rec or client or order_rec or company_rec)
 
 
 def order_prefix_value():
@@ -1487,11 +1502,11 @@ def create_manual_crm_order(data, actor=None):
 
     owner_name = (extras.get('owner_name') or extras.get('director') or (client or {}).get('full_name') or '').strip()
     owner_email = normalize_notify_email(
-        (client or {}).get('email')
+        extras.get('owner_form_email')
         or extras.get('company_email')
-        or extras.get('owner_form_email')
         or extras.get('registered_email')
         or (company or {}).get('registered_email')
+        or (client or {}).get('email')
     )
     if not owner_email:
         return None, 'Enter the company notification email for this order'
@@ -1527,13 +1542,20 @@ def create_manual_crm_order(data, actor=None):
         'order_notes': notes
     }
 
+    access_email = (extras.get('access_email') or extras.get('service_email') or '').strip() or None
+    access_email_password = (extras.get('access_email_password') or extras.get('service_password') or '').strip() or None
+
+    is_b2b_client = (client and (client.get('is_b2b') == 1 or client.get('client_type') == 'B2B'))
+    b2b_client_id_val = client.get('b2b_id') if (is_b2b_client and client.get('b2b_id')) else None
+
     order_id = execute_db(
         """
         INSERT INTO orders (
             order_number, user_id, company_id, service_id, service_name,
             price, vat, total, status, progress_percent, notes, payment_mode,
-            owner_name, owner_form_email, assigned_staff_id, checkout_form_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            owner_name, owner_form_email, assigned_staff_id, checkout_form_json,
+            b2b_client_id, access_email, access_email_password
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """,
         (
             order_number,
@@ -1552,6 +1574,9 @@ def create_manual_crm_order(data, actor=None):
             owner_email,
             (actor or {}).get('id'),
             json.dumps(checkout_form_data),
+            b2b_client_id_val,
+            access_email,
+            access_email_password,
         ),
     )
 
@@ -17333,6 +17358,12 @@ def application(environ, start_response):
                 "UPDATE invoices SET payment_method = ? WHERE order_id = ? AND status != 'Paid';",
                 (payment_mode, oid),
             )
+        if 'access_email' in data:
+            acc_email = (data.get('access_email') or '').strip() or None
+            execute_db("UPDATE orders SET access_email = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?;", (acc_email, oid))
+        if 'access_email_password' in data:
+            acc_pass = (data.get('access_email_password') or '').strip() or None
+            execute_db("UPDATE orders SET access_email_password = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?;", (acc_pass, oid))
         if 'total' in data or 'price' in data:
             if not can_edit_order_price(user):
                 return json_response(start_response, {'status': 'error', 'message': 'Only an administrator can change order prices'}, "403 Forbidden")

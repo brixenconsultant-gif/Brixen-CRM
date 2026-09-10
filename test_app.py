@@ -1752,17 +1752,16 @@ def run_tests():
                 directors = fetch_companies_house_active_directors('17208527')
                 assert directors == ['Muhammad Shakeel', 'Sara Ali']
                 ch_comp_row = query_db("SELECT * FROM companies WHERE id = ?;", (ch_fill_company,), one=True)
-                app_mod._CH_API_CACHE.clear()
                 sync_res = app_mod.sync_registered_company_from_companies_house(ch_comp_row)
                 status, headers, filled_company = make_request(
                     f"/api/admin/companies/{ch_fill_company}",
                     cookie=f"session_token={adm_comp_token}",
                 )
+                assert status == "200 OK", filled_company
+                assert filled_company.get('company', {}).get('directors') == ['Muhammad Shakeel', 'Sara Ali']
+                assert 'Muhammad Shakeel' in (filled_company.get('company', {}).get('director') or '')
+                assert 'Sara Ali' in (filled_company.get('company', {}).get('director') or '')
                 app_mod._CH_REGISTERED_SYNC_BLOCKED = True
-    assert status == "200 OK", filled_company
-    assert filled_company.get('company', {}).get('directors') == ['Muhammad Shakeel', 'Sara Ali']
-    assert 'Muhammad Shakeel' in (filled_company.get('company', {}).get('director') or '')
-    assert 'Sara Ali' in (filled_company.get('company', {}).get('director') or '')
     print("✓ Opening an order fills blank Companies House details and leaves existing owner/billing data")
     vat_unlinked = execute_db(
         """
@@ -5016,6 +5015,32 @@ def run_tests():
     assert normal_check['client_type'] == 'Normal'
     assert normal_check['b2b_id'] is None
     print(f"✓ Product Selection Independence -> Normal customer ordered Company Formation and REMAINED a Normal Customer with no B2B ID!")
+
+    # 11. Test B2B Order Status Routing to B2B Account Owner
+    b2b_owner_email = f"owner.{uuid.uuid4().hex[:6]}@b2bcorp.co.uk"
+    st, hd, b2b_order_res = make_request('/api/admin/orders', method='POST', body={
+        'service_id': first_prod['id'],
+        'client_id': b2b_user['id'],
+        'owner_form_email': b2b_owner_email,
+        'access_email': f"info.{uuid.uuid4().hex[:4]}@b2bcorp.co.uk",
+        'access_email_password': 'B2BSecretPass2026!'
+    }, cookie=f"session_token={task1_admin_tok}")
+    assert st == "200 OK", b2b_order_res
+    b2b_ord = b2b_order_res['order']
+    
+    target_email = app_mod.resolve_work_notification_email(order=b2b_ord)
+    assert target_email == b2b_owner_email, f"Expected B2B notification to go to owner {b2b_owner_email}, got {target_email}"
+    print(f"✓ B2B Order Status Routing -> Notifications strictly routed to B2B Account Owner ({b2b_owner_email})")
+
+    # 12. Test Service Access Credentials Storage & Retrieval
+    assert b2b_ord.get('access_email_password') == 'B2BSecretPass2026!'
+    st, hd, update_cred = make_request(f"/api/admin/orders/{b2b_ord['id']}", method='PUT', body={
+        'access_email_password': 'UpdatedPass999!'
+    }, cookie=f"session_token={task1_admin_tok}")
+    assert st == "200 OK", update_cred
+    check_ord = query_db("SELECT access_email, access_email_password FROM orders WHERE id = ?;", (b2b_ord['id'],), one=True)
+    assert check_ord['access_email_password'] == 'UpdatedPass999!'
+    print(f"✓ Service Access Credentials -> Saved email & password credentials cleanly stored and editable.")
 
     print("\n==================================================")
     print("ALL HYPETEX WSGI & AUDIT FIX TESTS PASSED! (100%)")

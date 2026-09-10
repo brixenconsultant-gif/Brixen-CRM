@@ -257,6 +257,10 @@ def ensure_schema():
         conn.execute("ALTER TABLE users ADD COLUMN theme_preference TEXT DEFAULT 'system'")
     if 'checkout_phone' not in order_cols:
         conn.execute("ALTER TABLE orders ADD COLUMN checkout_phone TEXT")
+    if 'access_email' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN access_email TEXT")
+    if 'access_email_password' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN access_email_password TEXT")
     if 'checkout_dob' not in order_cols:
         conn.execute("ALTER TABLE orders ADD COLUMN checkout_dob TEXT")
     if 'website_checkout_pulled_at' not in order_cols:

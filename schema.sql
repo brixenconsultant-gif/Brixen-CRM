@@ -239,6 +239,8 @@ CREATE TABLE IF NOT EXISTS orders (
     is_draft INTEGER NOT NULL DEFAULT 0,
     current_step INTEGER NOT NULL DEFAULT 1,
     b2b_client_id TEXT,
+    access_email TEXT,
+    access_email_password TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
