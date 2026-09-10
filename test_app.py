@@ -1753,6 +1753,7 @@ def run_tests():
                 assert directors == ['Muhammad Shakeel', 'Sara Ali']
                 ch_comp_row = query_db("SELECT * FROM companies WHERE id = ?;", (ch_fill_company,), one=True)
                 app_mod._CH_API_CACHE.clear()
+                sync_res = app_mod.sync_registered_company_from_companies_house(ch_comp_row)
                 status, headers, filled_company = make_request(
                     f"/api/admin/companies/{ch_fill_company}",
                     cookie=f"session_token={adm_comp_token}",

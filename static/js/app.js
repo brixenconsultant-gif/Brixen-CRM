@@ -12250,3 +12250,112 @@ function hideWizardError() {
 function roundToTwo(num) {
     return +(Math.round(num + "e+2")  + "e-2");
 }
+
+/* ====================================================
+   DEDICATED CREATE CUSTOMER ENGINE
+   ==================================================== */
+function openCreateCustomerModal() {
+    const modal = document.getElementById('modal-create-customer');
+    if (!modal) return;
+
+    const form = document.getElementById('form-create-customer');
+    if (form) form.reset();
+    onCustomerTypeCardChange('Normal');
+    
+    const errBanner = document.getElementById('create-customer-error-banner');
+    if (errBanner) errBanner.style.display = 'none';
+
+    modal.style.display = 'flex';
+    modal.classList.add('active');
+    safeCreateIcons();
+}
+
+function closeCreateCustomerModal() {
+    const modal = document.getElementById('modal-create-customer');
+    if (modal) {
+        modal.style.display = 'none';
+        modal.classList.remove('active');
+    }
+}
+
+function onCustomerTypeCardChange(type) {
+    const cardNormal = document.getElementById('cust-type-card-normal');
+    const cardB2B = document.getElementById('cust-type-card-b2b');
+
+    if (type === 'B2B') {
+        if (cardNormal) { cardNormal.style.borderColor = 'var(--color-border)'; }
+        if (cardB2B) { cardB2B.style.borderColor = 'var(--color-primary)'; }
+    } else {
+        if (cardNormal) { cardNormal.style.borderColor = 'var(--color-primary)'; }
+        if (cardB2B) { cardB2B.style.borderColor = 'var(--color-border)'; }
+    }
+}
+
+async function submitCreateCustomerForm(event) {
+    event.preventDefault();
+
+    const name = document.getElementById('create-cust-name').value.trim();
+    const email = document.getElementById('create-cust-email').value.trim().toLowerCase();
+    const phone = document.getElementById('create-cust-phone').value.trim();
+    const country = document.getElementById('create-cust-country').value.trim() || 'United Kingdom';
+    const password = document.getElementById('create-cust-password').value;
+    const confirmPassword = document.getElementById('create-cust-password-confirm').value;
+
+    const custTypeRadios = document.getElementsByName('create_cust_type');
+    let custType = 'Normal';
+    for (let r of custTypeRadios) {
+        if (r.checked) { custType = r.value; break; }
+    }
+
+    const errBanner = document.getElementById('create-customer-error-banner');
+    if (password !== confirmPassword) {
+        if (errBanner) {
+            errBanner.textContent = 'Passwords do not match.';
+            errBanner.style.display = 'block';
+        }
+        return;
+    }
+
+    const submitBtn = document.getElementById('btn-submit-create-cust');
+    if (submitBtn) submitBtn.disabled = true;
+
+    const payload = {
+        role: 'CLIENT',
+        full_name: name,
+        email: email,
+        phone: phone,
+        country: country,
+        password: password,
+        confirm_password: confirmPassword,
+        client_type: custType,
+        is_b2b: (custType === 'B2B' ? 1 : 0)
+    };
+
+    try {
+        const res = await fetch('/api/admin/staff', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json().catch(() => ({}));
+
+        if (res.ok && data.status === 'success') {
+            closeCreateCustomerModal();
+            alert(`🎉 Customer account created successfully! (${custType === 'B2B' ? 'B2B Customer: ' + (data.user?.b2b_id || 'B2B Account') : 'Normal Customer'})`);
+            if (typeof loadAdminCustomers === 'function') loadAdminCustomers();
+        } else {
+            if (errBanner) {
+                errBanner.textContent = data.message || 'Could not create customer.';
+                errBanner.style.display = 'block';
+            }
+        }
+    } catch (err) {
+        if (errBanner) {
+            errBanner.textContent = 'Connection error: ' + err.message;
+            errBanner.style.display = 'block';
+        }
+    } finally {
+        if (submitBtn) submitBtn.disabled = false;
+    }
+}

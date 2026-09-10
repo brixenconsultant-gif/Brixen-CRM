@@ -66,7 +66,7 @@
             if (app) app.setAttribute('hidden', '');
         });
     </script>
-    <link rel="stylesheet" href="/static/css/styles.css?v=290.0">
+    <link rel="stylesheet" href="/static/css/styles.css?v=300.0">
     <script src="/static/js/vendor/lucide.min.js"></script>
     <script src="/static/js/vendor/chart.umd.min.js"></script>
 </head>
@@ -1212,9 +1212,9 @@
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>Customers &amp; New Signups</h1>
-                            <p>Website registrations appear here automatically. Newest accounts are listed first. Use Create User for a CRM-only account.</p>
+                            <p>Website registrations appear here automatically. Newest accounts are listed first. Use Create Customer for a CRM account.</p>
                         </div>
-                        <button type="button" class="btn-primary btn-create-user" onclick="openCreateUserModal()" style="display:none;"><i data-lucide="user-plus"></i> Create User</button>
+                        <button type="button" class="btn-primary btn-create-user" id="btn-create-customer-page" onclick="openCreateCustomerModal()"><i data-lucide="user-plus"></i> Create Customer</button>
                     </div>
                     <div class="orders-filter-row orders-filter-toolbar">
                         <div class="filter-group" style="flex-wrap:wrap; width:100%;">
@@ -2090,6 +2090,87 @@
                         <button type="button" class="btn-secondary" onclick="closeCreateUserModal()">Cancel</button>
                         <button type="submit" class="btn-primary" id="create-user-submit"><i data-lucide="user-plus"></i> Create User</button>
                     </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- DEDICATED CREATE CUSTOMER MODAL -->
+    <div id="modal-create-customer" class="modal-overlay" style="z-index:1150; display:none;" onclick="if(event.target===this) closeCreateCustomerModal()">
+        <div class="modal-card" style="max-width:540px; width:92%; padding:28px 32px; border-radius:18px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--color-border); padding-bottom:14px; margin-bottom:18px;">
+                <div>
+                    <h3 style="font-size:1.25rem; font-weight:800; color:var(--color-text-primary); margin:0;">Create Customer</h3>
+                    <p style="font-size:0.82rem; color:var(--color-text-muted); margin:4px 0 0 0;">Create a new customer account (Normal Customer or B2B Account).</p>
+                </div>
+                <button type="button" class="btn-close" onclick="closeCreateCustomerModal()"><i data-lucide="x"></i></button>
+            </div>
+
+            <div id="create-customer-error-banner" style="display:none; padding:10px 14px; border-radius:8px; background:var(--color-danger-soft); color:var(--color-danger); border:1px solid var(--color-danger-border); font-size:0.83rem; font-weight:600; margin-bottom:14px;" role="alert"></div>
+
+            <form id="form-create-customer" onsubmit="submitCreateCustomerForm(event)">
+                <div style="display:flex; flex-direction:column; gap:16px;">
+                    
+                    <!-- Customer Type Selection -->
+                    <div>
+                        <label style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary); display:block; margin-bottom:8px;">Customer Type *</label>
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                            <label style="background:var(--color-surface-soft); border:2px solid var(--color-primary); border-radius:10px; padding:12px; cursor:pointer; display:flex; flex-direction:column; gap:4px;" id="cust-type-card-normal">
+                                <div style="display:flex; align-items:center; gap:8px;">
+                                    <input type="radio" name="create_cust_type" value="Normal" checked onchange="onCustomerTypeCardChange('Normal')" style="accent-color:var(--color-primary);">
+                                    <strong style="font-size:0.88rem; color:var(--color-text-primary);">Normal Customer</strong>
+                                </div>
+                                <span style="font-size:0.75rem; color:var(--color-text-muted); margin-left:22px;">Standard retail/individual client. No B2B Client ID generated.</span>
+                            </label>
+
+                            <label style="background:var(--color-surface-soft); border:2px solid var(--color-border); border-radius:10px; padding:12px; cursor:pointer; display:flex; flex-direction:column; gap:4px;" id="cust-type-card-b2b">
+                                <div style="display:flex; align-items:center; gap:8px;">
+                                    <input type="radio" name="create_cust_type" value="B2B" onchange="onCustomerTypeCardChange('B2B')" style="accent-color:var(--color-primary);">
+                                    <strong style="font-size:0.88rem; color:var(--color-text-primary);">B2B Customer</strong>
+                                </div>
+                                <span style="font-size:0.75rem; color:var(--color-text-muted); margin-left:22px;">Corporate client. Generates unique B2B-XXXXXX ID.</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label for="create-cust-name" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Full Name *</label>
+                        <input type="text" id="create-cust-name" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 14px;" placeholder="e.g. Muhammad Ahmed" required>
+                    </div>
+
+                    <div>
+                        <label for="create-cust-email" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Email Address *</label>
+                        <input type="email" id="create-cust-email" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 14px;" placeholder="customer@example.com" required>
+                    </div>
+
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <div>
+                            <label for="create-cust-phone" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Phone Number</label>
+                            <input type="tel" id="create-cust-phone" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 14px;" placeholder="+44 7911 123456">
+                        </div>
+                        <div>
+                            <label for="create-cust-country" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Country</label>
+                            <input type="text" id="create-cust-country" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 14px;" value="United Kingdom">
+                        </div>
+                    </div>
+
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <div>
+                            <label for="create-cust-password" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Password *</label>
+                            <input type="password" id="create-cust-password" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 14px;" minlength="10" placeholder="Minimum 10 chars" required autocomplete="new-password">
+                        </div>
+                        <div>
+                            <label for="create-cust-password-confirm" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Confirm Password *</label>
+                            <input type="password" id="create-cust-password-confirm" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 14px;" minlength="10" placeholder="Repeat password" required autocomplete="new-password">
+                        </div>
+                    </div>
+                </div>
+
+                <div style="border-top:1px solid var(--color-border); padding-top:16px; margin-top:20px; display:flex; justify-content:flex-end; gap:10px;">
+                    <button type="button" class="btn-secondary" onclick="closeCreateCustomerModal()">Cancel</button>
+                    <button type="submit" class="btn-primary" id="btn-submit-create-cust">
+                        <i data-lucide="user-plus" style="width:16px; height:16px; margin-right:4px;"></i> Create Customer
+                    </button>
                 </div>
             </form>
         </div>
