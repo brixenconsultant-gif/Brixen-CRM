@@ -4936,6 +4936,42 @@ def run_tests():
 
     print("✓ B2B ID Migration, Search & Theme System Verified 100%")
 
+    # 5. Test Universal B2B Order Engine & Catalog Products API
+    st, hd, cat_res = make_request('/api/catalog/products', method='GET', cookie=f"session_token={task1_admin_tok}")
+    assert st == "200 OK", cat_res
+    assert cat_res['status'] == 'success'
+    assert len(cat_res['products']) > 0
+    first_prod = cat_res['products'][0]
+    assert 'form_config' in first_prod
+    assert 'document_requirements' in first_prod
+    print(f"✓ Catalog Products API -> Loaded {len(cat_res['products'])} products with form schemas.")
+
+    # 6. Test Draft Order Creation
+    st, hd, draft_res = make_request('/api/orders/draft', method='POST', body={
+        'service_id': first_prod['id'],
+        'service_name': first_prod['name'],
+        'current_step': 2,
+        'form_values': {'proposed_company_name': 'UNIVERSAL B2B LTD', 'company_type': 'Private Limited Company by Shares (LTD)'}
+    }, cookie=f"session_token={task1_admin_tok}")
+    assert st == "200 OK", draft_res
+    assert draft_res['status'] == 'success'
+    assert draft_res['is_draft'] == 1
+    assert 'ORD-' in draft_res['order_number']
+    print(f"✓ Universal Draft Order -> Saved draft {draft_res['order_number']}")
+
+    # 7. Test Authoritative Price Protection on Order Creation
+    st, hd, order_sub_res = make_request('/api/admin/orders', method='POST', body={
+        'service_id': first_prod['id'],
+        'client_id': client_row['id'],
+        'price': 0.01,
+        'form_values': {'proposed_company_name': 'UNIVERSAL B2B LTD'}
+    }, cookie=f"session_token={task1_admin_tok}")
+    assert st == "200 OK", order_sub_res
+    assert order_sub_res['status'] == 'success'
+    created_order = order_sub_res['order']
+    assert created_order['price'] == first_prod['price'], f"Authoritative price mismatch: expected {first_prod['price']}, got {created_order['price']}"
+    print(f"✓ Authoritative Price Protection -> Client price override rejected; set to catalog price £{created_order['price']}")
+
     print("\n==================================================")
     print("ALL HYPETEX WSGI & AUDIT FIX TESTS PASSED! (100%)")
     print("==================================================")

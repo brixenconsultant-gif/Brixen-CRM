@@ -206,6 +206,9 @@ CREATE TABLE IF NOT EXISTS services (
     vat_rate REAL DEFAULT 0.20,
     renewal_period TEXT DEFAULT 'Annual',
     woocommerce_product_id TEXT,
+    form_config_json TEXT,
+    document_requirements_json TEXT,
+    estimated_delivery_time TEXT DEFAULT '24-48 Hours',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -220,7 +223,7 @@ CREATE TABLE IF NOT EXISTS orders (
     price REAL NOT NULL,
     vat REAL NOT NULL DEFAULT 0.00,
     total REAL NOT NULL,
-    status TEXT NOT NULL CHECK(status IN ('Pending', 'Processing', 'In Progress', 'Completed', 'Cancelled', 'Refunded', 'Pending Verification')),
+    status TEXT NOT NULL CHECK(status IN ('Draft', 'Submitted', 'Pending', 'Processing', 'In Progress', 'Completed', 'Cancelled', 'Refunded', 'Pending Verification', 'Information Required', 'Documents Required')),
     progress_percent INTEGER NOT NULL DEFAULT 0,
     delivery_label TEXT DEFAULT 'Standard Processing',
     assigned_staff_id INTEGER,
@@ -231,6 +234,11 @@ CREATE TABLE IF NOT EXISTS orders (
     portfolio_hidden INTEGER NOT NULL DEFAULT 0,
     owner_name TEXT,
     owner_form_email TEXT,
+    checkout_form_json TEXT,
+    order_form_values_json TEXT,
+    is_draft INTEGER NOT NULL DEFAULT 0,
+    current_step INTEGER NOT NULL DEFAULT 1,
+    b2b_client_id TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,

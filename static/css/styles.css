@@ -34,6 +34,84 @@
     --color-primary-border: #BFDBFE;
     --color-accent: #2563EB;
 
+/* UNIVERSAL ORDER CREATION WIZARD STEPPER */
+.order-wizard-stepper {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+}
+
+.wizard-step-pill {
+    background: var(--color-surface-soft);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    user-select: none;
+}
+
+.wizard-step-pill .step-num {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--color-border);
+    color: var(--color-text-secondary);
+    font-size: 0.75rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.wizard-step-pill .step-text {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--color-text-muted);
+}
+
+.wizard-step-pill.active {
+    background: var(--color-surface);
+    border-color: var(--color-primary);
+    box-shadow: 0 2px 8px rgba(37, 99, 235, 0.12);
+}
+
+.wizard-step-pill.active .step-num {
+    background: var(--color-primary);
+    color: #FFFFFF;
+}
+
+.wizard-step-pill.active .step-text {
+    color: var(--color-text-primary);
+    font-weight: 700;
+}
+
+.wizard-step-pill.completed {
+    background: var(--color-success-soft);
+    border-color: var(--color-success-border);
+}
+
+.wizard-step-pill.completed .step-num {
+    background: var(--color-success);
+    color: #FFFFFF;
+}
+
+.wizard-step-pill.completed .step-text {
+    color: var(--color-success);
+}
+
+@media (max-width: 640px) {
+    .order-wizard-stepper {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    .wizard-step-pill .step-text {
+        font-size: 0.72rem;
+    }
+}
+
     /* Sidebar - Premium Dark Navy matching Section 5 */
     --color-sidebar-bg: #0B1220;
     --color-sidebar-secondary: #111827;

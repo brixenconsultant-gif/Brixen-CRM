@@ -11384,3 +11384,736 @@ async function submitManualOrderForm(event) {
         if (submitBtn) submitBtn.disabled = false;
     }
 }
+
+/* ====================================================
+   UNIVERSAL B2B ORDER CREATION ENGINE & WIZARD
+   ==================================================== */
+let universalOrderWizardState = {
+    currentStep: 1,
+    selectedProduct: null,
+    catalogProducts: [],
+    activeCategory: 'All',
+    formValues: {},
+    repeatableData: {},
+    uploadedDocs: {},
+    draftOrderId: null,
+    draftOrderNumber: null
+};
+
+async function openUniversalOrderWizard(prefillData = null) {
+    const modal = document.getElementById('modal-universal-order-wizard');
+    if (!modal) {
+        if (typeof openManualOrderModal === 'function') openManualOrderModal(prefillData);
+        return;
+    }
+
+    universalOrderWizardState = {
+        currentStep: 1,
+        selectedProduct: null,
+        catalogProducts: [],
+        activeCategory: 'All',
+        formValues: {},
+        repeatableData: {},
+        uploadedDocs: {},
+        draftOrderId: null,
+        draftOrderNumber: null
+    };
+
+    hideWizardError();
+    modal.style.display = 'flex';
+    modal.classList.add('active');
+
+    const isClient = currentUser && currentUser.role === 'CLIENT';
+    const adminClientWrap = document.getElementById('wizard-admin-client-wrap');
+    const clientProfileWrap = document.getElementById('wizard-client-profile-wrap');
+
+    if (isClient) {
+        if (adminClientWrap) adminClientWrap.style.display = 'none';
+        if (clientProfileWrap) {
+            clientProfileWrap.style.display = 'block';
+            document.getElementById('wizard-client-display-name').textContent = currentUser.full_name || 'B2B Client';
+            document.getElementById('wizard-client-display-email').textContent = currentUser.email || '';
+            document.getElementById('wizard-client-display-b2b').textContent = currentUser.b2b_id || 'B2B-CLIENT';
+        }
+        document.getElementById('wizard-owner-email').value = currentUser.email || '';
+    } else {
+        if (adminClientWrap) adminClientWrap.style.display = 'block';
+        if (clientProfileWrap) clientProfileWrap.style.display = 'none';
+        await loadWizardAdminClientsSelect();
+    }
+
+    await fetchWizardCatalogProducts();
+
+    if (prefillData && (prefillData.service_name || prefillData.id)) {
+        const match = universalOrderWizardState.catalogProducts.find(p => 
+            p.id == prefillData.id || 
+            (p.name && prefillData.service_name && p.name.toLowerCase() === prefillData.service_name.toLowerCase())
+        );
+        if (match) {
+            selectWizardProduct(match.id);
+        } else if (prefillData.service_name) {
+            selectWizardProductByName(prefillData.service_name, prefillData.price || 0);
+        }
+    } else {
+        jumpToWizardStep(1);
+    }
+
+    safeCreateIcons();
+}
+
+function closeUniversalOrderWizard() {
+    const modal = document.getElementById('modal-universal-order-wizard');
+    if (modal) {
+        modal.style.display = 'none';
+        modal.classList.remove('active');
+    }
+}
+
+async function fetchWizardCatalogProducts() {
+    const grid = document.getElementById('wizard-products-grid');
+    if (grid) grid.innerHTML = '<div style="text-align:center; padding:40px; color:var(--color-text-muted); grid-column:1/-1;">Loading Services Catalog...</div>';
+
+    try {
+        const res = await fetch('/api/catalog/products', { credentials: 'same-origin' });
+        const data = await res.json().catch(() => ({}));
+        if (data.status === 'success' && Array.isArray(data.products)) {
+            universalOrderWizardState.catalogProducts = data.products;
+        } else {
+            const res2 = await fetch('/api/client/services', { credentials: 'same-origin' });
+            const data2 = await res2.json().catch(() => ({}));
+            universalOrderWizardState.catalogProducts = data2.services || [];
+        }
+    } catch (err) {
+        console.error('Catalog fetch error:', err);
+    }
+
+    renderWizardCategoryPills();
+    renderWizardCatalogGrid();
+}
+
+function renderWizardCategoryPills() {
+    const container = document.getElementById('wizard-category-pills');
+    if (!container) return;
+
+    const cats = ['All'];
+    universalOrderWizardState.catalogProducts.forEach(p => {
+        if (p.category && !cats.includes(p.category)) cats.push(p.category);
+    });
+
+    container.innerHTML = cats.map(cat => `
+        <button type="button" class="badge ${universalOrderWizardState.activeCategory === cat ? 'active' : ''}" 
+                style="cursor:pointer; border:1px solid var(--color-border); padding:6px 12px; font-size:0.78rem; ${universalOrderWizardState.activeCategory === cat ? 'background:var(--color-primary) !important; color:#FFFFFF !important;' : 'background:var(--color-surface); color:var(--color-text-primary);'}"
+                onclick="setWizardCategoryFilter('${escapeJsString(cat)}')">
+            ${escapeHtml(cat)}
+        </button>
+    `).join('');
+}
+
+function setWizardCategoryFilter(cat) {
+    universalOrderWizardState.activeCategory = cat;
+    renderWizardCategoryPills();
+    renderWizardCatalogGrid();
+}
+
+function filterWizardCatalogProducts() {
+    renderWizardCatalogGrid();
+}
+
+function renderWizardCatalogGrid() {
+    const grid = document.getElementById('wizard-products-grid');
+    if (!grid) return;
+
+    const searchTerm = (document.getElementById('wizard-product-search')?.value || '').toLowerCase().trim();
+    const cat = universalOrderWizardState.activeCategory;
+
+    const filtered = universalOrderWizardState.catalogProducts.filter(p => {
+        const matchesCat = (cat === 'All' || p.category === cat);
+        const matchesSearch = !searchTerm || 
+            (p.name && p.name.toLowerCase().includes(searchTerm)) || 
+            (p.description && p.description.toLowerCase().includes(searchTerm)) ||
+            (p.category && p.category.toLowerCase().includes(searchTerm));
+        return matchesCat && matchesSearch;
+    });
+
+    if (filtered.length === 0) {
+        grid.innerHTML = '<div style="text-align:center; padding:40px; color:var(--color-text-muted); grid-column:1/-1;">No products found matching your search.</div>';
+        return;
+    }
+
+    grid.innerHTML = filtered.map(p => `
+        <div style="background:var(--color-surface); border:1px solid var(--color-border); border-radius:14px; padding:18px; display:flex; flex-direction:column; justify-content:space-between; transition:all 0.15s ease;" class="card-hover-effect">
+            <div>
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px;">
+                    <span class="status-badge info">${escapeHtml(p.category || 'Service')}</span>
+                    <span style="font-weight:800; font-size:1.15rem; color:var(--color-primary);">£${parseFloat(p.price || 0).toFixed(2)}</span>
+                </div>
+                <h4 style="font-size:1.02rem; font-weight:700; color:var(--color-text-primary); margin:4px 0 6px 0;">${escapeHtml(p.name)}</h4>
+                <p style="font-size:0.8rem; color:var(--color-text-muted); line-height:1.4; margin-bottom:12px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;">
+                    ${escapeHtml(p.description || 'Professional service package.')}
+                </p>
+            </div>
+            <div>
+                <div style="font-size:0.75rem; color:var(--color-text-secondary); margin-bottom:12px; display:flex; gap:12px;">
+                    <span><i data-lucide="clock" style="width:12px; height:12px; margin-right:2px;"></i> ${escapeHtml(p.estimated_delivery_time || '24-48 Hours')}</span>
+                    <span><i data-lucide="file-text" style="width:12px; height:12px; margin-right:2px;"></i> ${p.document_requirements && p.document_requirements.length ? p.document_requirements.length + ' Docs' : 'Online Specs'}</span>
+                </div>
+                <button type="button" class="btn-primary" style="width:100%; justify-content:center; padding:8px 14px; font-size:0.84rem;" onclick="selectWizardProduct(${p.id})">
+                    Select &amp; Configure <i data-lucide="arrow-right" style="width:14px; height:14px; margin-left:4px;"></i>
+                </button>
+            </div>
+        </div>
+    `).join('');
+
+    safeCreateIcons();
+}
+
+function selectWizardProduct(productId) {
+    const product = universalOrderWizardState.catalogProducts.find(p => p.id == productId);
+    if (!product) return;
+
+    universalOrderWizardState.selectedProduct = product;
+    universalOrderWizardState.formValues = {};
+    universalOrderWizardState.repeatableData = {};
+
+    if (product.repeatable_sections && Array.isArray(product.repeatable_sections)) {
+        product.repeatable_sections.forEach(sec => {
+            universalOrderWizardState.repeatableData[sec.id] = [];
+            const minEntries = sec.min_entries || 1;
+            for (let i = 0; i < minEntries; i++) {
+                addWizardRepeatableEntry(sec.id, false);
+            }
+        });
+    }
+
+    if (currentUser) {
+        universalOrderWizardState.formValues['full_name'] = currentUser.full_name || '';
+        universalOrderWizardState.formValues['email'] = currentUser.email || '';
+        universalOrderWizardState.formValues['phone'] = currentUser.phone || '';
+        universalOrderWizardState.formValues['company_name'] = currentUser.company_name || '';
+    }
+
+    jumpToWizardStep(2);
+}
+
+function selectWizardProductByName(name, price = 0) {
+    const mockProduct = {
+        id: 9999,
+        name: name,
+        category: 'Custom Service',
+        description: `Order specifications for ${name}`,
+        price: price,
+        estimated_delivery_time: '24-48 Hours',
+        form_config: [
+            { id: 'service_spec', name: 'service_spec', label: `Specifications for ${name}`, type: 'textarea', required: true, placeholder: 'Enter your project or order requirements...' }
+        ],
+        document_requirements: [
+            { id: 'supporting_file', name: 'Supporting Specification File', required: false, description: 'Optional project upload' }
+        ]
+    };
+    universalOrderWizardState.selectedProduct = mockProduct;
+    jumpToWizardStep(2);
+}
+
+function jumpToWizardStep(stepNum) {
+    hideWizardError();
+
+    if (stepNum > 1 && !universalOrderWizardState.selectedProduct) {
+        showWizardError('Please select a product or service first.');
+        return;
+    }
+
+    if (stepNum === 3) {
+        const valErr = validateWizardStep2Fields();
+        if (valErr) {
+            showWizardError(valErr);
+            return;
+        }
+    }
+
+    universalOrderWizardState.currentStep = stepNum;
+
+    for (let i = 1; i <= 4; i++) {
+        const pill = document.getElementById(`wizard-step-pill-${i}`);
+        const pane = document.getElementById(`wizard-step-${i}`);
+        if (pill) {
+            if (i === stepNum) pill.classList.add('active');
+            else if (i < stepNum) pill.classList.add('completed');
+            else pill.classList.remove('active', 'completed');
+        }
+        if (pane) {
+            pane.style.display = (i === stepNum) ? 'block' : 'none';
+        }
+    }
+
+    const btnBack = document.getElementById('wizard-btn-back');
+    const btnNext = document.getElementById('wizard-btn-next');
+    const btnSubmit = document.getElementById('wizard-btn-submit');
+
+    if (btnBack) btnBack.style.display = (stepNum > 1) ? 'inline-flex' : 'none';
+    if (btnNext) btnNext.style.display = (stepNum < 4) ? 'inline-flex' : 'none';
+    if (btnSubmit) btnSubmit.style.display = (stepNum === 4) ? 'inline-flex' : 'none';
+
+    if (stepNum === 2) {
+        renderWizardStep2Form();
+    } else if (stepNum === 3) {
+        renderWizardStep3Documents();
+    } else if (stepNum === 4) {
+        renderWizardStep4Review();
+    }
+
+    safeCreateIcons();
+}
+
+function navigateWizardStep(delta) {
+    const target = universalOrderWizardState.currentStep + delta;
+    if (target >= 1 && target <= 4) {
+        jumpToWizardStep(target);
+    }
+}
+
+function renderWizardStep2Form() {
+    const p = universalOrderWizardState.selectedProduct;
+    if (!p) return;
+
+    document.getElementById('wizard-selected-cat').textContent = p.category || 'Service';
+    document.getElementById('wizard-selected-title').textContent = p.name;
+    document.getElementById('wizard-selected-desc').textContent = p.description || '';
+    document.getElementById('wizard-selected-price').textContent = `£${parseFloat(p.price || 0).toFixed(2)}`;
+    document.getElementById('wizard-selected-est').textContent = `Est: ${p.estimated_delivery_time || '24-48 Hours'}`;
+
+    const fieldsContainer = document.getElementById('wizard-dynamic-fields-container');
+    if (fieldsContainer) {
+        const fields = p.form_config || [];
+        if (fields.length === 0) {
+            fieldsContainer.innerHTML = '<div style="font-size:0.85rem; color:var(--color-text-muted);">No specific custom fields required for this product. Click Continue to proceed.</div>';
+        } else {
+            fieldsContainer.innerHTML = fields.map(f => renderSingleWizardFieldHTML(f)).join('');
+        }
+    }
+
+    renderWizardRepeatableSections();
+}
+
+function renderSingleWizardFieldHTML(f) {
+    const val = universalOrderWizardState.formValues[f.id] !== undefined ? universalOrderWizardState.formValues[f.id] : (f.default_value || '');
+    const isHidden = shouldHideWizardConditionalField(f);
+
+    let inputHTML = '';
+    const fieldType = (f.type || 'text').toLowerCase();
+
+    if (fieldType === 'textarea' || fieldType === 'long text') {
+        inputHTML = `<textarea id="wfield-${f.id}" class="select-filter" style="width:100%; margin-top:4px; min-height:70px; font-size:0.88rem; padding:10px 14px;" placeholder="${escapeHtml(f.placeholder || '')}" onchange="updateWizardFieldValue('${f.id}', this.value)">${escapeHtml(val)}</textarea>`;
+    } else if (fieldType === 'dropdown' || fieldType === 'select') {
+        const opts = f.options || [];
+        inputHTML = `
+            <select id="wfield-${f.id}" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 14px;" onchange="updateWizardFieldValue('${f.id}', this.value)">
+                ${opts.map(o => `<option value="${escapeHtml(o)}" ${val === o ? 'selected' : ''}>${escapeHtml(o)}</option>`).join('')}
+            </select>`;
+    } else if (fieldType === 'radio') {
+        const opts = f.options || ['YES', 'NO'];
+        inputHTML = `
+            <div style="display:flex; gap:16px; margin-top:6px;">
+                ${opts.map(o => `
+                    <label style="font-size:0.85rem; font-weight:600; cursor:pointer; color:var(--color-text-primary);">
+                        <input type="radio" name="wfield-${f.id}" value="${escapeHtml(o)}" ${val === o ? 'checked' : ''} onchange="updateWizardFieldValue('${f.id}', this.value)" style="accent-color:var(--color-primary);"> ${escapeHtml(o)}
+                    </label>
+                `).join('')}
+            </div>`;
+    } else {
+        const inputType = (fieldType === 'email') ? 'email' : (fieldType === 'phone') ? 'tel' : (fieldType === 'number') ? 'number' : (fieldType === 'date') ? 'date' : 'text';
+        inputHTML = `<input type="${inputType}" id="wfield-${f.id}" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 14px;" value="${escapeHtml(val)}" placeholder="${escapeHtml(f.placeholder || '')}" autocomplete="off" oninput="updateWizardFieldValue('${f.id}', this.value)">`;
+    }
+
+    return `
+        <div id="wfield-wrap-${f.id}" style="${isHidden ? 'display:none;' : ''}">
+            <label for="wfield-${f.id}" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">
+                ${escapeHtml(f.label)} ${f.required ? '<span style="color:var(--color-danger);">*</span>' : ''}
+            </label>
+            ${inputHTML}
+            ${f.help_text ? `<div style="font-size:0.75rem; color:var(--color-text-muted); margin-top:4px;">${escapeHtml(f.help_text)}</div>` : ''}
+        </div>
+    `;
+}
+
+function shouldHideWizardConditionalField(f) {
+    if (!f.depends_on) return false;
+    const parentVal = universalOrderWizardState.formValues[f.depends_on];
+    if (f.condition === 'equals') {
+        return parentVal !== f.condition_value;
+    }
+    return false;
+}
+
+function updateWizardFieldValue(fieldId, value) {
+    universalOrderWizardState.formValues[fieldId] = value;
+    
+    const p = universalOrderWizardState.selectedProduct;
+    if (p && p.form_config) {
+        p.form_config.forEach(f => {
+            if (f.depends_on === fieldId) {
+                const wrap = document.getElementById(`wfield-wrap-${f.id}`);
+                if (wrap) {
+                    const hide = shouldHideWizardConditionalField(f);
+                    wrap.style.display = hide ? 'none' : 'block';
+                }
+            }
+        });
+    }
+}
+
+function renderWizardRepeatableSections() {
+    const container = document.getElementById('wizard-repeatable-sections-container');
+    if (!container) return;
+
+    const p = universalOrderWizardState.selectedProduct;
+    const sections = p.repeatable_sections || [];
+    if (sections.length === 0) {
+        container.innerHTML = '';
+        return;
+    }
+
+    container.innerHTML = sections.map(sec => {
+        const entries = universalOrderWizardState.repeatableData[sec.id] || [];
+        return `
+            <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:14px; padding:20px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+                    <h5 style="font-size:0.92rem; font-weight:700; color:var(--color-text-primary); margin:0;">${escapeHtml(sec.title)} (${entries.length})</h5>
+                    <button type="button" class="btn-secondary" style="padding:6px 12px; font-size:0.8rem;" onclick="addWizardRepeatableEntry('${sec.id}')">
+                        <i data-lucide="plus" style="width:14px; height:14px; margin-right:4px;"></i> ${escapeHtml(sec.button_label || 'Add Entry')}
+                    </button>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:12px;">
+                    ${entries.map((entry, idx) => `
+                        <div style="background:var(--color-surface); border:1px solid var(--color-border); border-radius:10px; padding:14px; position:relative;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                                <strong style="font-size:0.82rem; color:var(--color-primary);">${sec.title.slice(0, -1) || 'Entry'} #${idx + 1}</strong>
+                                ${entries.length > (sec.min_entries || 1) ? `
+                                    <button type="button" class="btn-ghost" style="color:var(--color-danger); padding:2px 8px; font-size:0.75rem;" onclick="removeWizardRepeatableEntry('${sec.id}', ${idx})">Remove</button>
+                                ` : ''}
+                            </div>
+                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                                ${(sec.fields || []).map(sf => `
+                                    <div>
+                                        <label style="font-size:0.78rem; font-weight:700; color:var(--color-text-primary);">${escapeHtml(sf.label)}</label>
+                                        <input type="${sf.type === 'email' ? 'email' : sf.type === 'number' ? 'number' : sf.type === 'date' ? 'date' : 'text'}" 
+                                               class="select-filter" style="width:100%; margin-top:2px; font-size:0.82rem; padding:8px 10px;" 
+                                               value="${escapeHtml(entry[sf.id] || '')}" 
+                                               oninput="updateWizardRepeatableFieldValue('${sec.id}', ${idx}, '${sf.id}', this.value)">
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    safeCreateIcons();
+}
+
+function addWizardRepeatableEntry(sectionId, render = true) {
+    if (!universalOrderWizardState.repeatableData[sectionId]) {
+        universalOrderWizardState.repeatableData[sectionId] = [];
+    }
+    universalOrderWizardState.repeatableData[sectionId].push({});
+    if (render) renderWizardRepeatableSections();
+}
+
+function removeWizardRepeatableEntry(sectionId, idx) {
+    if (universalOrderWizardState.repeatableData[sectionId]) {
+        universalOrderWizardState.repeatableData[sectionId].splice(idx, 1);
+        renderWizardRepeatableSections();
+    }
+}
+
+function updateWizardRepeatableFieldValue(sectionId, idx, fieldId, value) {
+    if (universalOrderWizardState.repeatableData[sectionId] && universalOrderWizardState.repeatableData[sectionId][idx]) {
+        universalOrderWizardState.repeatableData[sectionId][idx][fieldId] = value;
+    }
+}
+
+function validateWizardStep2Fields() {
+    const p = universalOrderWizardState.selectedProduct;
+    if (!p || !p.form_config) return null;
+
+    for (let f of p.form_config) {
+        if (f.required && !shouldHideWizardConditionalField(f)) {
+            const val = (universalOrderWizardState.formValues[f.id] || '').toString().trim();
+            if (!val) {
+                return `Please complete required field: ${f.label}`;
+            }
+        }
+    }
+    return null;
+}
+
+function renderWizardStep3Documents() {
+    const container = document.getElementById('wizard-documents-checklist');
+    if (!container) return;
+
+    const p = universalOrderWizardState.selectedProduct;
+    const reqs = p.document_requirements || [];
+
+    if (reqs.length === 0) {
+        container.innerHTML = '<div style="font-size:0.85rem; color:var(--color-text-muted); text-align:center; padding:30px;">No document uploads required for this product. Click Continue to review your order.</div>';
+        return;
+    }
+
+    container.innerHTML = reqs.map(doc => {
+        const uploaded = universalOrderWizardState.uploadedDocs[doc.id];
+        const statusText = uploaded ? uploaded.status : (doc.required ? 'Required' : 'Optional');
+        const statusClass = uploaded ? 'completed' : (doc.required ? 'pending' : 'info');
+
+        return `
+            <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:12px; padding:16px 20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+                <div>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <strong style="font-size:0.9rem; color:var(--color-text-primary);">${escapeHtml(doc.name)}</strong>
+                        <span class="status-badge ${statusClass}">${statusText}</span>
+                    </div>
+                    <p style="font-size:0.8rem; color:var(--color-text-muted); margin:4px 0 0 0;">${escapeHtml(doc.description || '')}</p>
+                    ${uploaded ? `<div style="font-size:0.78rem; color:var(--color-success); font-weight:600; margin-top:4px;">✓ ${escapeHtml(uploaded.file_name)}</div>` : ''}
+                </div>
+                <div>
+                    <input type="file" id="doc-file-input-${doc.id}" style="display:none;" onchange="handleWizardFileUpload('${doc.id}', this)">
+                    <button type="button" class="btn-secondary" style="font-size:0.82rem; padding:8px 14px;" onclick="document.getElementById('doc-file-input-${doc.id}').click()">
+                        <i data-lucide="upload-cloud" style="width:14px; height:14px; margin-right:4px;"></i> ${uploaded ? 'Replace Document' : 'Upload File'}
+                    </button>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    safeCreateIcons();
+}
+
+async function handleWizardFileUpload(docReqId, fileInput) {
+    if (!fileInput.files || !fileInput.files[0]) return;
+    const file = fileInput.files[0];
+
+    showWizardError(`Uploading ${file.name}...`, false);
+
+    const formData = new FormData();
+    formData.append('document', file);
+    formData.append('document_type', docReqId);
+
+    try {
+        const res = await fetch('/api/client/documents/upload', {
+            method: 'POST',
+            credentials: 'same-origin',
+            body: formData
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && (data.status === 'success' || data.document_id)) {
+            hideWizardError();
+            universalOrderWizardState.uploadedDocs[docReqId] = {
+                document_id: data.document_id || data.id,
+                file_name: file.name,
+                file_path: data.file_path || '',
+                status: 'Uploaded'
+            };
+            renderWizardStep3Documents();
+        } else {
+            showWizardError(data.message || 'File upload failed. Please try again.');
+        }
+    } catch (err) {
+        showWizardError('Document upload error: ' + err.message);
+    }
+}
+
+function renderWizardStep4Review() {
+    const p = universalOrderWizardState.selectedProduct;
+    if (!p) return;
+
+    const price = parseFloat(p.price || 0);
+    const vat = roundToTwo(price * 0.20);
+    const total = roundToTwo(price + vat);
+
+    document.getElementById('review-service-category').textContent = (p.category || 'Service').toUpperCase();
+    document.getElementById('review-service-name').textContent = p.name;
+    document.getElementById('review-total-price').textContent = `£${total.toFixed(2)}`;
+    document.getElementById('review-vat-breakdown').textContent = `Subtotal £${price.toFixed(2)} + VAT (20%) £${vat.toFixed(2)}`;
+
+    const ownerEmail = document.getElementById('wizard-owner-email')?.value || (currentUser ? currentUser.email : '');
+    document.getElementById('review-b2b-routing-info').textContent = `Order work notifications routed directly to B2B Account Owner (${ownerEmail})`;
+
+    const fieldsErr = validateWizardStep2Fields();
+    const fieldsIcon = document.getElementById('review-fields-check-icon');
+    const fieldsTitle = document.getElementById('review-fields-check-title');
+
+    if (fieldsErr) {
+        if (fieldsIcon) { fieldsIcon.setAttribute('data-lucide', 'alert-circle'); fieldsIcon.style.color = 'var(--color-danger)'; }
+        if (fieldsTitle) fieldsTitle.textContent = 'Missing Product Information';
+    } else {
+        if (fieldsIcon) { fieldsIcon.setAttribute('data-lucide', 'check-circle'); fieldsIcon.style.color = 'var(--color-success)'; }
+        if (fieldsTitle) fieldsTitle.textContent = 'Product Information Complete';
+    }
+
+    const summaryContainer = document.getElementById('review-form-values-summary');
+    if (summaryContainer) {
+        const entries = Object.entries(universalOrderWizardState.formValues);
+        if (entries.length === 0) {
+            summaryContainer.innerHTML = '<div style="color:var(--color-text-muted);">Standard catalog order specifications.</div>';
+        } else {
+            summaryContainer.innerHTML = entries.map(([k, v]) => `
+                <div><span style="color:var(--color-text-muted);">${escapeHtml(k)}:</span> <strong>${escapeHtml(v)}</strong></div>
+            `).join('');
+        }
+    }
+
+    safeCreateIcons();
+}
+
+async function saveUniversalOrderDraft() {
+    const p = universalOrderWizardState.selectedProduct;
+    if (!p) {
+        showWizardError('Please select a product first.');
+        return;
+    }
+
+    const payload = {
+        service_id: p.id,
+        service_name: p.name,
+        current_step: universalOrderWizardState.currentStep,
+        form_values: universalOrderWizardState.formValues,
+        repeatable_data: universalOrderWizardState.repeatableData,
+        order_id: universalOrderWizardState.draftOrderId,
+        notes: document.getElementById('wizard-order-notes')?.value || ''
+    };
+
+    try {
+        const res = await fetch('/api/orders/draft', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.status === 'success') {
+            universalOrderWizardState.draftOrderId = data.order_id;
+            universalOrderWizardState.draftOrderNumber = data.order_number;
+            showWizardError(`✓ Draft saved as ${data.order_number}.`, false);
+        } else {
+            showWizardError(data.message || 'Could not save draft.');
+        }
+    } catch (err) {
+        showWizardError('Draft save error: ' + err.message);
+    }
+}
+
+async function submitUniversalOrder() {
+    const p = universalOrderWizardState.selectedProduct;
+    if (!p) {
+        showWizardError('Please select a product.');
+        return;
+    }
+
+    const fieldsErr = validateWizardStep2Fields();
+    if (fieldsErr) {
+        showWizardError(fieldsErr);
+        jumpToWizardStep(2);
+        return;
+    }
+
+    const submitBtn = document.getElementById('wizard-btn-submit');
+    if (submitBtn) submitBtn.disabled = true;
+
+    const isClient = currentUser && currentUser.role === 'CLIENT';
+    const clientSelect = document.getElementById('wizard-client-id');
+    const clientId = !isClient ? (clientSelect ? clientSelect.value : '') : currentUser.id;
+    const ownerEmail = document.getElementById('wizard-owner-email')?.value || (currentUser ? currentUser.email : '');
+
+    const payload = {
+        service_id: p.id,
+        service_name: p.name,
+        client_id: clientId,
+        company_email: ownerEmail,
+        form_values: universalOrderWizardState.formValues,
+        repeatable_data: universalOrderWizardState.repeatableData,
+        uploaded_docs: universalOrderWizardState.uploadedDocs,
+        notes: document.getElementById('wizard-order-notes')?.value || '',
+        order_id: universalOrderWizardState.draftOrderId
+    };
+
+    try {
+        const endpoint = isClient ? '/api/client/orders' : '/api/admin/orders';
+        const res = await fetch(endpoint, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.status === 'success') {
+            closeUniversalOrderWizard();
+            alert(`🎉 Order ${data.order?.order_number || data.order_number || 'created'} submitted successfully!`);
+            if (typeof loadAdminOrders === 'function') loadAdminOrders();
+            if (typeof loadClientOrders === 'function') loadClientOrders();
+        } else {
+            throw new Error(data.message || 'Order submission failed.');
+        }
+    } catch (err) {
+        showWizardError(err.message);
+    } finally {
+        if (submitBtn) submitBtn.disabled = false;
+    }
+}
+
+async function loadWizardAdminClientsSelect() {
+    const select = document.getElementById('wizard-client-id');
+    if (!select) return;
+    select.innerHTML = '<option value="">-- Select Client --</option>';
+    try {
+        const res = await fetch('/api/admin/customers?limit=500', { credentials: 'same-origin' });
+        const data = await res.json().catch(() => ({}));
+        const customers = data.customers || data.users || [];
+        if (Array.isArray(customers)) {
+            customers.forEach(c => {
+                const opt = document.createElement('option');
+                opt.value = c.id;
+                opt.textContent = `${c.full_name || 'Client'} (${c.email}) • ${c.b2b_id || 'B2B'}`;
+                select.appendChild(opt);
+            });
+        }
+    } catch (err) { console.error(err); }
+}
+
+function onWizardClientChange() {
+    const select = document.getElementById('wizard-client-id');
+    const emailInput = document.getElementById('wizard-owner-email');
+    if (!select || !emailInput) return;
+
+    const selectedOpt = select.options[select.selectedIndex];
+    if (selectedOpt && selectedOpt.textContent) {
+        const match = selectedOpt.textContent.match(/\(([^)]+)\)/);
+        if (match && match[1]) {
+            emailInput.value = match[1];
+        }
+    }
+}
+
+function showWizardError(msg, isError = true) {
+    const banner = document.getElementById('wizard-error-banner');
+    if (!banner) return;
+    banner.style.display = 'block';
+    banner.textContent = msg;
+    if (isError) {
+        banner.style.background = 'var(--color-danger-soft)';
+        banner.style.color = 'var(--color-danger)';
+        banner.style.borderColor = 'var(--color-danger-border)';
+    } else {
+        banner.style.background = 'var(--color-success-soft)';
+        banner.style.color = 'var(--color-success)';
+        banner.style.borderColor = 'var(--color-success-border)';
+    }
+}
+
+function hideWizardError() {
+    const banner = document.getElementById('wizard-error-banner');
+    if (banner) banner.style.display = 'none';
+}
+
+function roundToTwo(num) {
+    return +(Math.round(num + "e+2")  + "e-2");
+}

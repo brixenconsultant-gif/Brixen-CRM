@@ -214,6 +214,23 @@ def ensure_schema():
     service_cols = {row[1] for row in conn.execute("PRAGMA table_info(services)").fetchall()}
     if 'woocommerce_product_id' not in service_cols:
         conn.execute("ALTER TABLE services ADD COLUMN woocommerce_product_id TEXT")
+    if 'form_config_json' not in service_cols:
+        conn.execute("ALTER TABLE services ADD COLUMN form_config_json TEXT")
+    if 'document_requirements_json' not in service_cols:
+        conn.execute("ALTER TABLE services ADD COLUMN document_requirements_json TEXT")
+    if 'estimated_delivery_time' not in service_cols:
+        conn.execute("ALTER TABLE services ADD COLUMN estimated_delivery_time TEXT DEFAULT '24-48 Hours'")
+
+    if 'checkout_form_json' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN checkout_form_json TEXT")
+    if 'order_form_values_json' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN order_form_values_json TEXT")
+    if 'is_draft' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN is_draft INTEGER NOT NULL DEFAULT 0")
+    if 'current_step' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN current_step INTEGER NOT NULL DEFAULT 1")
+    if 'b2b_client_id' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN b2b_client_id TEXT")
     user_cols = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
     if 'department' not in user_cols:
         conn.execute("ALTER TABLE users ADD COLUMN department TEXT")

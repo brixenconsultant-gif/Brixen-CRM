@@ -1344,15 +1344,51 @@ def order_prefix_value():
     return prefix or '#GB'
 
 
-def next_manual_order_number():
-    prefix = order_prefix_value()
+import product_catalog_config
+
+def next_universal_order_number():
+    year = datetime.date.today().year
+    prefix = f"ORD-{year}-"
     highest = 0
     for row in query_db("SELECT order_number FROM orders;") or []:
         number = str(row.get('order_number') or '').strip()
         match = re.search(r'(\d+)$', number)
         if match:
             highest = max(highest, int(match.group(1)))
-    return f"{prefix}{highest + 1}"
+    return f"{prefix}{highest + 1:06d}"
+
+def get_service_catalog_schema(service):
+    """Enrich a service database record with product_catalog_config dynamic form schema."""
+    if not service:
+        return None
+    s = dict(service)
+    pname = str(s.get('name') or '').strip()
+    config = product_catalog_config.get_product_form_config(pname)
+    
+    if not s.get('form_config_json'):
+        s['form_config'] = config.get('fields', [])
+        s['repeatable_sections'] = config.get('repeatable_sections', [])
+    else:
+        try:
+            parsed = json.loads(s['form_config_json'])
+            s['form_config'] = parsed.get('fields', parsed) if isinstance(parsed, dict) else parsed
+            s['repeatable_sections'] = parsed.get('repeatable_sections', []) if isinstance(parsed, dict) else []
+        except Exception:
+            s['form_config'] = config.get('fields', [])
+            s['repeatable_sections'] = config.get('repeatable_sections', [])
+
+    if not s.get('document_requirements_json'):
+        s['document_requirements'] = config.get('document_requirements', [])
+    else:
+        try:
+            s['document_requirements'] = json.loads(s['document_requirements_json'])
+        except Exception:
+            s['document_requirements'] = config.get('document_requirements', [])
+            
+    if not s.get('estimated_delivery_time'):
+        s['estimated_delivery_time'] = '24-48 Hours'
+        
+    return s
 
 
 def create_manual_crm_order(data, actor=None):
@@ -1400,8 +1436,8 @@ def create_manual_crm_order(data, actor=None):
                 return None, 'Service not found'
             if not service_name:
                 service_name = str(service.get('name') or '').strip()
-            if extras.get('price') in (None, '') and service.get('price') is not None:
-                extras = dict(extras)
+            extras = dict(extras)
+            if service.get('price') is not None:
                 extras['price'] = service.get('price')
         if not service_name:
             return None, 'Enter the service / product name'
@@ -1466,9 +1502,9 @@ def create_manual_crm_order(data, actor=None):
         status = 'Processing'
     payment_mode = (extras.get('payment_mode') or 'Manual CRM').strip() or 'Manual CRM'
     notes = (extras.get('notes') or '').strip() or 'Created manually in CRM (no website signup).'
-    order_number = (extras.get('order_number') or '').strip() or next_manual_order_number()
+    order_number = (extras.get('order_number') or '').strip() or next_universal_order_number()
     if query_db("SELECT id FROM orders WHERE order_number = ?;", (order_number,), one=True):
-        order_number = next_manual_order_number()
+        order_number = next_universal_order_number()
 
     checkout_form_data = {
         'company_name': (company or {}).get('name') or extras.get('company_name') or '',
@@ -16584,11 +16620,60 @@ def application(environ, start_response):
         """, (user['id'],))
         return json_response(start_response, {'status': 'success', 'documents': [public_document(d, for_client=True) for d in docs]})
 
+    if path in ('/api/catalog/products', '/api/client/catalog') and method == 'GET':
+        svcs = query_db("SELECT * FROM services WHERE status = 'Active' ORDER BY category ASC, price ASC;")
+        enriched = [get_service_catalog_schema(s) for s in svcs if s]
+        return json_response(start_response, {'status': 'success', 'products': enriched, 'services': enriched})
+
     if path == '/api/client/services' and method == 'GET':
+        svcs = query_db("SELECT * FROM services WHERE status = 'Active' ORDER BY category ASC, price ASC;")
+        enriched = [get_service_catalog_schema(s) for s in svcs if s]
+        return json_response(start_response, {'status': 'success', 'services': enriched})
+
+    if path == '/api/orders/draft' and method == 'POST':
         if not user:
             return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
-        svcs = query_db("SELECT * FROM services WHERE status = 'Active' ORDER BY category ASC, price ASC;")
-        return json_response(start_response, {'status': 'success', 'services': svcs})
+        data = parse_body(environ)
+        data = dict(data if isinstance(data, dict) else {})
+        
+        service_id = optional_record_id(data.get('service_id'))
+        service = query_db("SELECT * FROM services WHERE id = ?;", (service_id,), one=True) if service_id else None
+        
+        existing_order_id = optional_record_id(data.get('order_id'))
+        if existing_order_id:
+            order_rec = query_db("SELECT * FROM orders WHERE id = ? AND user_id = ?;", (existing_order_id, user['id']), one=True)
+            if not order_rec and user.get('role') not in ('ADMIN', 'SUPER_ADMIN'):
+                return json_response(start_response, {'status': 'error', 'message': 'Draft order not found'}, "404 Not Found")
+            order_id = existing_order_id
+            order_number = order_rec['order_number']
+            execute_db("""
+                UPDATE orders SET current_step = ?, order_form_values_json = ?, notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?;
+            """, (int(data.get('current_step') or 1), json.dumps(data.get('form_values') or {}), str(data.get('notes') or ''), order_id))
+        else:
+            order_number = next_universal_order_number()
+            sname = (service or {}).get('name') or data.get('service_name') or 'Custom Order'
+            price = float((service or {}).get('price') or 0.0)
+            vat = round(price * 0.20, 2)
+            total = round(price + vat, 2)
+            b2b_id = (user or {}).get('b2b_id') or ''
+            order_id = execute_db("""
+                INSERT INTO orders (
+                    order_number, user_id, service_id, service_name, price, vat, total,
+                    status, is_draft, current_step, order_form_values_json, b2b_client_id, owner_name, owner_form_email
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Draft', 1, ?, ?, ?, ?, ?);
+            """, (
+                order_number, user['id'], service_id, sname, price, vat, total,
+                int(data.get('current_step') or 1), json.dumps(data.get('form_values') or {}), b2b_id,
+                user.get('full_name'), user.get('email')
+            ))
+            
+        return json_response(start_response, {
+            'status': 'success',
+            'order_id': order_id,
+            'order_number': order_number,
+            'is_draft': 1,
+            'message': f"Draft order {order_number} saved."
+        })
 
     if path == '/api/client/payments' and method == 'GET':
         if not user:
