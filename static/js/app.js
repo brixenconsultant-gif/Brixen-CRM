@@ -11663,6 +11663,8 @@ function renderWizardCatalogGrid() {
 
     const searchTerm = (document.getElementById('wizard-product-search')?.value || '').toLowerCase().trim();
     const cat = universalOrderWizardState.activeCategory;
+    const selectedCust = universalOrderWizardState.selectedCustomer;
+    const isB2BCust = (selectedCust && (selectedCust.is_b2b === 1 || selectedCust.client_type === 'B2B')) || (window.currentUser && (window.currentUser.is_b2b === 1 || window.currentUser.client_type === 'B2B'));
 
     const filtered = universalOrderWizardState.catalogProducts.filter(p => {
         const matchesCat = (cat === 'All' || p.category === cat);
@@ -11683,7 +11685,10 @@ function renderWizardCatalogGrid() {
             <div>
                 <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px;">
                     <span class="status-badge info">${escapeHtml(p.category || 'Service')}</span>
-                    <span style="font-weight:800; font-size:1.15rem; color:var(--color-primary);">£${parseFloat(p.price || 0).toFixed(2)}</span>
+                    ${isB2BCust 
+                        ? `<span style="font-weight:700; font-size:0.8rem; color:var(--color-primary); background:var(--color-primary-soft); padding:4px 8px; border-radius:6px;">Custom B2B Rate</span>`
+                        : `<span style="font-weight:800; font-size:1.15rem; color:var(--color-primary);">£${parseFloat(p.price || 0).toFixed(2)}</span>`
+                    }
                 </div>
                 <h4 style="font-size:1.02rem; font-weight:700; color:var(--color-text-primary); margin:4px 0 6px 0;">${escapeHtml(p.name)}</h4>
                 <p style="font-size:0.8rem; color:var(--color-text-muted); line-height:1.4; margin-bottom:12px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;">
@@ -11799,12 +11804,11 @@ function renderWizardStep3Form() {
     const cust = universalOrderWizardState.selectedCustomer;
     if (!p) return;
 
+    const isB2B = (cust && (cust.is_b2b === 1 || cust.client_type === 'B2B')) || (window.currentUser && (window.currentUser.is_b2b === 1 || window.currentUser.client_type === 'B2B'));
     document.getElementById('wizard-selected-cat').textContent = p.category || 'Service';
     document.getElementById('wizard-selected-title').textContent = p.name;
-    document.getElementById('wizard-selected-price').textContent = `£${parseFloat(p.price || 0).toFixed(2)}`;
+    document.getElementById('wizard-selected-price').textContent = isB2B ? 'Custom B2B Rate' : `£${parseFloat(p.price || 0).toFixed(2)}`;
     document.getElementById('wizard-selected-est').textContent = `Est: ${p.estimated_delivery_time || '24-48 Hours'}`;
-
-    const isB2B = (cust && (cust.is_b2b === 1 || cust.client_type === 'B2B'));
     const custSummary = document.getElementById('wizard-selected-customer-summary');
     if (custSummary) {
         if (isB2B && cust.b2b_id) {
@@ -12064,12 +12068,16 @@ function renderWizardStep5Review() {
     const vat = roundToTwo(price * 0.20);
     const total = roundToTwo(price + vat);
 
+    const isB2B = (cust && (cust.is_b2b === 1 || cust.client_type === 'B2B')) || (window.currentUser && (window.currentUser.is_b2b === 1 || window.currentUser.client_type === 'B2B'));
     document.getElementById('review-service-category').textContent = (p.category || 'Service').toUpperCase();
     document.getElementById('review-service-name').textContent = p.name;
-    document.getElementById('review-total-price').textContent = `£${total.toFixed(2)}`;
-    document.getElementById('review-vat-breakdown').textContent = `Subtotal £${price.toFixed(2)} + VAT (20%) £${vat.toFixed(2)}`;
-
-    const isB2B = (cust && (cust.is_b2b === 1 || cust.client_type === 'B2B'));
+    if (isB2B) {
+        document.getElementById('review-total-price').textContent = 'Custom B2B Rate';
+        document.getElementById('review-vat-breakdown').textContent = 'Admin will assign custom rate upon order review.';
+    } else {
+        document.getElementById('review-total-price').textContent = `£${total.toFixed(2)}`;
+        document.getElementById('review-vat-breakdown').textContent = `Subtotal £${price.toFixed(2)} + VAT (20%) £${vat.toFixed(2)}`;
+    }
     const custIdentity = document.getElementById('review-customer-identity');
     if (custIdentity) {
         if (isB2B && cust.b2b_id) {

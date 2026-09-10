@@ -1454,8 +1454,15 @@ def create_manual_crm_order(data, actor=None):
             if not service_name:
                 service_name = str(service.get('name') or '').strip()
             extras = dict(extras)
+            is_b2b_client = bool(client and (client.get('is_b2b') == 1 or client.get('client_type') == 'B2B'))
             if service.get('price') is not None:
-                extras['price'] = service.get('price')
+                if is_b2b_client:
+                    if 'price' in extras and extras.get('price') not in (None, '') and actor and actor.get('role') in INTERNAL_STAFF_ROLES:
+                        extras['price'] = float(extras['price'])
+                    else:
+                        extras['price'] = 0.0
+                else:
+                    extras['price'] = service.get('price')
         if not service_name:
             return None, 'Enter the service / product name'
 
