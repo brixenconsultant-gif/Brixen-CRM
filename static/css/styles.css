@@ -30,11 +30,11 @@
     --border-glass: #e2e8f0;
     
     /* Sidebar */
-    --sidebar-bg: #003971;
-    --sidebar-active-bg: rgba(255, 255, 255, 0.14);
-    --sidebar-text: rgba(255, 255, 255, 0.88);
-    --sidebar-text-muted: rgba(255, 255, 255, 0.55);
-    --sidebar-border: rgba(255, 255, 255, 0.1);
+    --sidebar-bg: #04264e;
+    --sidebar-active-bg: #0066ff;
+    --sidebar-text: rgba(255, 255, 255, 0.85);
+    --sidebar-text-muted: rgba(255, 255, 255, 0.45);
+    --sidebar-border: rgba(255, 255, 255, 0.08);
 
     /* Typography */
     --font-text: "Inter", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
@@ -103,10 +103,10 @@ html[data-theme="dark"] {
     --border-glass: #1e2d4a;
 
     /* Sidebar */
-    --sidebar-bg: #070d1e;
-    --sidebar-active-bg: rgba(0, 108, 255, 0.22);
+    --sidebar-bg: #031833;
+    --sidebar-active-bg: #0066ff;
     --sidebar-text: #f8fafc;
-    --sidebar-text-muted: #94a3b8;
+    --sidebar-text-muted: rgba(255, 255, 255, 0.45);
     --sidebar-border: rgba(255, 255, 255, 0.08);
 
     /* Typography */
@@ -250,15 +250,54 @@ html.authenticated:not(.auth-pending) .sidebar.is-open:not([hidden]) { display: 
     display: none;
 }
 
-.logo-container-glass {
-    background: transparent;
-    padding: 4px 0px;
+.sidebar-brand-wrap {
     display: flex;
     align-items: center;
-    justify-content: flex-start;
+    gap: 12px;
     width: 100%;
-    border: none;
-    box-shadow: none !important;
+    padding: 4px 0;
+}
+
+.sidebar-brand-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    background: #0066ff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    box-shadow: 0 4px 12px rgba(0, 102, 255, 0.35);
+}
+
+.sidebar-brand-icon svg {
+    width: 22px;
+    height: 22px;
+}
+
+.sidebar-brand-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    overflow: hidden;
+}
+
+.sidebar-brand-text .brand-title {
+    font-size: 1.02rem;
+    font-weight: 700;
+    color: #ffffff;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+    line-height: 1.15;
+}
+
+.sidebar-brand-text .brand-subtitle {
+    font-size: 0.64rem;
+    font-weight: 700;
+    color: #38bdf8;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    line-height: 1;
 }
 
 .brixen-brand-logo {
@@ -266,29 +305,24 @@ html.authenticated:not(.auth-pending) .sidebar.is-open:not([hidden]) { display: 
     width: auto;
     max-width: 180px;
     object-fit: contain;
-    filter: brightness(0) invert(1); /* Make logo white on dark navy background */
+    filter: brightness(0) invert(1);
 }
 
-.sidebar-nav { flex: 1; padding-top: 20px; display: flex; flex-direction: column; gap: 20px; }
-.nav-group-title { font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--sidebar-text-muted); padding: 0 10px; margin-bottom: 8px; }
-.nav-list { display: flex; flex-direction: column; gap: 4px; }
+.sidebar-nav { flex: 1; padding-top: 18px; display: flex; flex-direction: column; gap: 16px; }
+.nav-group-title { font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: rgba(255, 255, 255, 0.42); padding: 0 10px; margin-bottom: 6px; }
+.nav-list { display: flex; flex-direction: column; gap: 3px; }
 .nav-item { list-style: none; }
-.nav-item a { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: var(--radius-md); color: var(--sidebar-text); font-size: 0.88rem; font-weight: 500; transition: var(--transition); }
-.nav-item a:hover { background: rgba(255, 255, 255, 0.10); color: #ffffff; }
+.nav-item a { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 10px; color: rgba(255, 255, 255, 0.82); font-size: 0.88rem; font-weight: 500; transition: all 0.18s ease; }
+.nav-item a:hover { background: rgba(255, 255, 255, 0.09); color: #ffffff; }
 
-/* Active Sidebar Navigation Item — bright blue left border */
+/* Active Sidebar Navigation Item — Vibrant Blue Pill matching screenshot */
 .nav-item.active a {
-    background: rgba(255, 255, 255, 0.14);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    color: #ffffff;
-    font-weight: 700;
-    border-left: 3px solid #006cff;
-    border-top: 1px solid rgba(255, 255, 255, 0.18);
-    border-right: 1px solid rgba(255, 255, 255, 0.1);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    background: #0066ff !important;
+    color: #ffffff !important;
+    font-weight: 600 !important;
+    border-radius: 10px !important;
+    border: none !important;
+    box-shadow: 0 4px 14px rgba(0, 102, 255, 0.38) !important;
 }
 .nav-item svg { width: 18px; height: 18px; flex-shrink: 0; }
 
