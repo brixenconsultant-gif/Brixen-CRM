@@ -1375,8 +1375,8 @@ html.authenticated:not(.auth-pending) .main-wrapper { margin-left: 270px; width:
    DATA TABLES & CARD CONTAINERS
    ==================================================== */
 .data-table-container {
-    background: #ffffff;
-    border: 1px solid var(--border-color);
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
     border-radius: var(--radius-xl);
     box-shadow: var(--shadow-card);
     overflow-x: auto;
@@ -1389,56 +1389,35 @@ html.authenticated:not(.auth-pending) .main-wrapper { margin-left: 270px; width:
     border-spacing: 0;
     margin: 0;
     font-size: 0.85rem;
-    color: var(--text-primary);
-}
-.data-table th {
-    text-align: left;
-    padding: 12px 16px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    border-bottom: 1px solid var(--border-color);
-    background: #ffffff;
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-}
-.data-table td {
-    padding: 14px 16px;
-    border-bottom: 1px solid var(--border-color);
-    background: #ffffff;
-    vertical-align: middle;
-}
-.data-table tr:hover td {
-    background: #f9fafb;
+    color: var(--color-text-primary);
 }
 
-.orders-table-wrap .data-table {
-    width: 100%;
-    border-collapse: separate;
-    border-spacing: 0;
-    margin: 0;
-    font-size: 0.85rem;
-    color: var(--text-primary);
-}
 .data-table th {
     text-align: left;
     padding: 12px 16px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    border-bottom: 1px solid var(--border-color);
-    background: #ffffff;
+    font-weight: 600;
+    color: var(--color-text-muted);
+    border-bottom: 1px solid var(--color-border);
+    background-color: var(--color-surface-soft);
     font-size: 0.75rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-}
-.data-table td {
-    padding: 14px 16px;
-    border-bottom: 1px solid var(--border-color);
-    background: #ffffff;
+    white-space: nowrap;
     vertical-align: middle;
 }
+
+.data-table td {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--color-border);
+    background-color: var(--color-surface);
+    color: var(--color-text-primary);
+    vertical-align: middle;
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
 .data-table tr:hover td {
-    background: #f9fafb;
+    background-color: var(--color-surface-soft);
 }
 
 .orders-table-wrap .data-table th,
@@ -1517,36 +1496,7 @@ html.authenticated:not(.auth-pending) .main-wrapper { margin-left: 270px; width:
     display: none !important;
 }
 
-.data-table th {
-    padding: 13px 16px;
-    font-size: 0.72rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: #6e6e73;
-    background: #f5f5f7;
-    border-bottom: 1px solid #d2d2d7;
-    vertical-align: middle;
-    white-space: nowrap;
-    text-align: left;
-}
 
-.data-table td {
-    padding: 14px 16px;
-    font-size: 0.88rem;
-    font-weight: 500;
-    color: var(--text-primary);
-    border-bottom: 1px solid #f1f5f9;
-    vertical-align: middle;
-}
-
-.data-table tr:last-child td {
-    border-bottom: none;
-}
-
-.data-table tr:hover td {
-    background: #f5f5f7;
-}
 
 /* ====================================================
    ORDERS GRID & ORDER CARD STYLING
@@ -4452,63 +4402,7 @@ button,
         -webkit-overflow-scrolling: touch;
     }
 
-    .data-table {
-    width: 100%;
-    border-collapse: separate;
-    border-spacing: 0;
-    margin: 0;
-    font-size: 0.85rem;
-    color: var(--text-primary);
-}
-.data-table th {
-    text-align: left;
-    padding: 12px 16px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    border-bottom: 1px solid var(--border-color);
-    background: #ffffff;
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-}
-.data-table td {
-    padding: 14px 16px;
-    border-bottom: 1px solid var(--border-color);
-    background: #ffffff;
-    vertical-align: middle;
-}
-.data-table tr:hover td {
-    background: #f9fafb;
-}
 
-    .orders-table-wrap .data-table {
-    width: 100%;
-    border-collapse: separate;
-    border-spacing: 0;
-    margin: 0;
-    font-size: 0.85rem;
-    color: var(--text-primary);
-}
-.data-table th {
-    text-align: left;
-    padding: 12px 16px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    border-bottom: 1px solid var(--border-color);
-    background: #ffffff;
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-}
-.data-table td {
-    padding: 14px 16px;
-    border-bottom: 1px solid var(--border-color);
-    background: #ffffff;
-    vertical-align: middle;
-}
-.data-table tr:hover td {
-    background: #f9fafb;
-}
 
     .order-row-actions {
         flex-wrap: wrap;
@@ -4681,63 +4575,7 @@ button,
         font-size: 1.15rem;
     }
 
-    .data-table {
-    width: 100%;
-    border-collapse: separate;
-    border-spacing: 0;
-    margin: 0;
-    font-size: 0.85rem;
-    color: var(--text-primary);
-}
-.data-table th {
-    text-align: left;
-    padding: 12px 16px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    border-bottom: 1px solid var(--border-color);
-    background: #ffffff;
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-}
-.data-table td {
-    padding: 14px 16px;
-    border-bottom: 1px solid var(--border-color);
-    background: #ffffff;
-    vertical-align: middle;
-}
-.data-table tr:hover td {
-    background: #f9fafb;
-}
 
-    .orders-table-wrap .data-table {
-    width: 100%;
-    border-collapse: separate;
-    border-spacing: 0;
-    margin: 0;
-    font-size: 0.85rem;
-    color: var(--text-primary);
-}
-.data-table th {
-    text-align: left;
-    padding: 12px 16px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    border-bottom: 1px solid var(--border-color);
-    background: #ffffff;
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-}
-.data-table td {
-    padding: 14px 16px;
-    border-bottom: 1px solid var(--border-color);
-    background: #ffffff;
-    vertical-align: middle;
-}
-.data-table tr:hover td {
-    background: #f9fafb;
-}
 
     .data-table th,
     .data-table td {
@@ -6584,5 +6422,46 @@ html[data-theme="dark"] .stage-icon-circle {
     background: var(--color-info-soft) !important;
     color: var(--color-info) !important;
     border: 1px solid var(--color-info-border) !important;
+}
+
+/* ====================================================
+   SYSTEM OF DESIGN: UNIVERSAL COMPONENT TOKEN BINDINGS
+   ==================================================== */
+.card, .glass-card, .stat-card, .stat-card-brixen, .metric-card,
+.dashboard-card, .portfolio-card, .revenue-chart-card, .modal-card,
+.support-card, .service-card, .doc-card, .intake-card, .log-card,
+.tracker-order-card, .order-card, .history-order-card, .form-card,
+.apple-card, .doc-review-card, .intake-drop-zone, .cashbook-card {
+    background-color: var(--color-surface) !important;
+    border: 1px solid var(--color-border) !important;
+    color: var(--color-text-primary) !important;
+}
+
+.table-select, select, input[type="text"], input[type="email"], input[type="password"],
+input[type="number"], input[type="date"], input[type="search"], textarea, .select-filter, .filter-select {
+    background-color: var(--input-bg) !important;
+    color: var(--input-text) !important;
+    border: 1px solid var(--input-border) !important;
+}
+
+.table-select:focus, select:focus, input:focus, textarea:focus, .select-filter:focus {
+    border-color: var(--color-primary) !important;
+    box-shadow: 0 0 0 3px var(--brand-glow) !important;
+    outline: none !important;
+}
+
+/* Informational & Notice Banners */
+.info-banner, .notice-banner, .dash-banner-info, .notice-card {
+    background-color: var(--color-info-soft) !important;
+    border: 1px solid var(--color-info-border) !important;
+    color: var(--color-info) !important;
+    border-radius: var(--radius-lg);
+}
+
+.dash-banner-error, .error-banner {
+    background-color: var(--color-danger-soft) !important;
+    border: 1px solid var(--color-danger-border) !important;
+    color: var(--color-danger) !important;
+    border-radius: var(--radius-lg);
 }
 
