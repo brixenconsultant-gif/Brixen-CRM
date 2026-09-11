@@ -11086,6 +11086,9 @@ async function openManualOrderModal(prefillData) {
     const err = document.getElementById('manual-order-error');
     if (!modal) return;
 
+    modal.style.display = 'flex';
+    modal.classList.add('active');
+
     if (form) form.reset();
     if (err) {
         err.style.display = 'none';
@@ -11438,6 +11441,11 @@ async function openUniversalOrderWizard(prefillData = null) {
         return;
     }
 
+    // Show modal instantly on click (0ms latency)
+    modal.style.display = 'flex';
+    modal.classList.add('active');
+    hideWizardError();
+
     let activeUser = getCurrentUser();
     if (!activeUser) {
         try {
@@ -11467,10 +11475,6 @@ async function openUniversalOrderWizard(prefillData = null) {
         draftOrderId: null,
         draftOrderNumber: null
     };
-
-    hideWizardError();
-    modal.style.display = 'flex';
-    modal.classList.add('active');
 
     const adminCustomerPane = document.getElementById('wizard-admin-customer-select-pane');
     const clientCustomerPane = document.getElementById('wizard-client-customer-summary-pane');
