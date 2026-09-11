@@ -8739,10 +8739,20 @@ def process_smart_intake_files(files_data, user, batch_identities=None, source_m
         name_kind = classify_intake_document_kind(f'{folder_path} {fname}')
         # Admin-selected type wins; otherwise filename then OCR content.
         final_kind = forced_kind or name_kind or content_kind
+
+        def _kind_matches_allowed(k, allowed):
+            if not k:
+                return False
+            if k in allowed:
+                return True
+            if k in INTAKE_ID_KINDS and any(a in INTAKE_ID_KINDS for a in allowed):
+                return True
+            return False
+
         if allowed_types:
-            if forced_kind and forced_kind in allowed_types:
+            if forced_kind and _kind_matches_allowed(forced_kind, allowed_types):
                 final_kind = forced_kind
-            elif final_kind and final_kind not in allowed_types:
+            elif final_kind and not _kind_matches_allowed(final_kind, allowed_types):
                 skip_msg = (
                     f'Skipped ({final_kind}) — not in selected options: '
                     + ', '.join(allowed_types)

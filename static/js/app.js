@@ -9807,7 +9807,14 @@ function getCheckedIntakeDocumentTypes() {
     const types = [];
     boxes.forEach((box) => {
         const normalized = normalizeIntakeDocumentType(box.value);
-        if (normalized && !types.includes(normalized)) types.push(normalized);
+        if (normalized) {
+            if (!types.includes(normalized)) types.push(normalized);
+            if (normalized === 'Identity Card' || normalized === 'Passport') {
+                if (!types.includes('Passport')) types.push('Passport');
+                if (!types.includes('Identity Card')) types.push('Identity Card');
+                if (!types.includes('Driving Licence')) types.push('Driving Licence');
+            }
+        }
     });
     return types;
 }
