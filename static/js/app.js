@@ -11700,6 +11700,7 @@ function renderWizardCatalogGrid() {
 
     const searchTerm = (document.getElementById('wizard-product-search')?.value || '').toLowerCase().trim();
     const cat = universalOrderWizardState.activeCategory;
+    const selectedCust = universalOrderWizardState.selectedCustomer;
     const activeUser = getCurrentUser();
     const isB2BCust = (selectedCust && (selectedCust.is_b2b === 1 || selectedCust.client_type === 'B2B')) || (activeUser && (activeUser.is_b2b === 1 || activeUser.client_type === 'B2B'));
 
