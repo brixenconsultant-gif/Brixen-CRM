@@ -3,6 +3,11 @@
    ==================================================== */
 
 let currentUser = null;
+function getCurrentUser() {
+    if (typeof currentUser !== 'undefined' && currentUser) return currentUser;
+    if (typeof window !== 'undefined' && window.currentUser) return window.currentUser;
+    return null;
+}
 let activeView = 'login';
 let activeTicketId = null;
 let adminChart = null;
@@ -11426,9 +11431,12 @@ async function openUniversalOrderWizard(prefillData = null) {
         return;
     }
 
+    const activeUser = getCurrentUser();
+    const isClient = !!(activeUser && activeUser.role === 'CLIENT');
+
     universalOrderWizardState = {
         currentStep: 1,
-        selectedCustomer: null,
+        selectedCustomer: isClient ? activeUser : null,
         selectedProduct: null,
         customersList: [],
         catalogProducts: [],
@@ -11445,7 +11453,6 @@ async function openUniversalOrderWizard(prefillData = null) {
     modal.style.display = 'flex';
     modal.classList.add('active');
 
-    const isClient = currentUser && currentUser.role === 'CLIENT';
     const adminCustomerPane = document.getElementById('wizard-admin-customer-select-pane');
     const clientCustomerPane = document.getElementById('wizard-client-customer-summary-pane');
 
@@ -11453,24 +11460,24 @@ async function openUniversalOrderWizard(prefillData = null) {
         if (adminCustomerPane) adminCustomerPane.style.display = 'none';
         if (clientCustomerPane) {
             clientCustomerPane.style.display = 'block';
-            document.getElementById('wizard-client-self-name').textContent = currentUser.full_name || 'Customer';
-            document.getElementById('wizard-client-self-email').textContent = currentUser.email || '';
+            document.getElementById('wizard-client-self-name').textContent = activeUser.full_name || 'Customer';
+            document.getElementById('wizard-client-self-email').textContent = activeUser.email || '';
 
-            const isB2B = (currentUser.is_b2b === 1 || currentUser.client_type === 'B2B');
+            const isB2B = (activeUser.is_b2b === 1 || activeUser.client_type === 'B2B');
             const b2bWrap = document.getElementById('wizard-client-self-b2b-wrap');
             const b2bBadge = document.getElementById('wizard-client-self-b2b-badge');
             const typeLabel = document.getElementById('wizard-client-self-type-label');
 
-            if (isB2B && currentUser.b2b_id) {
+            if (isB2B && activeUser.b2b_id) {
                 if (typeLabel) typeLabel.textContent = 'B2B CORPORATE ACCOUNT';
-                if (b2bBadge) b2bBadge.textContent = currentUser.b2b_id;
+                if (b2bBadge) b2bBadge.textContent = activeUser.b2b_id;
                 if (b2bWrap) b2bWrap.style.display = 'block';
             } else {
                 if (typeLabel) typeLabel.textContent = 'NORMAL CUSTOMER ACCOUNT';
                 if (b2bWrap) b2bWrap.style.display = 'none';
             }
         }
-        universalOrderWizardState.selectedCustomer = currentUser;
+        universalOrderWizardState.selectedCustomer = activeUser;
     } else {
         if (adminCustomerPane) adminCustomerPane.style.display = 'block';
         if (clientCustomerPane) clientCustomerPane.style.display = 'none';
@@ -11662,8 +11669,8 @@ function renderWizardCatalogGrid() {
 
     const searchTerm = (document.getElementById('wizard-product-search')?.value || '').toLowerCase().trim();
     const cat = universalOrderWizardState.activeCategory;
-    const selectedCust = universalOrderWizardState.selectedCustomer;
-    const isB2BCust = (selectedCust && (selectedCust.is_b2b === 1 || selectedCust.client_type === 'B2B')) || (window.currentUser && (window.currentUser.is_b2b === 1 || window.currentUser.client_type === 'B2B'));
+    const activeUser = getCurrentUser();
+    const isB2BCust = (selectedCust && (selectedCust.is_b2b === 1 || selectedCust.client_type === 'B2B')) || (activeUser && (activeUser.is_b2b === 1 || activeUser.client_type === 'B2B'));
 
     const filtered = universalOrderWizardState.catalogProducts.filter(p => {
         const matchesCat = (cat === 'All' || p.category === cat);
@@ -11739,7 +11746,8 @@ function selectWizardProduct(productId) {
 
 function jumpToWizardStep(stepNum) {
     hideWizardError();
-    const isClient = (window.currentUser && window.currentUser.role === 'CLIENT');
+    const activeUser = getCurrentUser();
+    const isClient = !!(activeUser && activeUser.role === 'CLIENT');
     if (isClient && stepNum === 1) {
         stepNum = 2;
     }
@@ -11749,10 +11757,14 @@ function jumpToWizardStep(stepNum) {
         pill1.style.display = isClient ? 'none' : 'flex';
     }
 
+    if (isClient && activeUser) {
+        universalOrderWizardState.selectedCustomer = activeUser;
+    }
+
     // Guard Step Navigation
     if (stepNum > 1 && !universalOrderWizardState.selectedCustomer) {
-        if (isClient && window.currentUser) {
-            universalOrderWizardState.selectedCustomer = window.currentUser;
+        if (isClient && activeUser) {
+            universalOrderWizardState.selectedCustomer = activeUser;
         } else {
             showWizardError('Please select a customer first.');
             return;
@@ -11817,7 +11829,8 @@ function renderWizardStep3Form() {
     const cust = universalOrderWizardState.selectedCustomer;
     if (!p) return;
 
-    const isB2B = (cust && (cust.is_b2b === 1 || cust.client_type === 'B2B')) || (window.currentUser && (window.currentUser.is_b2b === 1 || window.currentUser.client_type === 'B2B'));
+    const activeUser = getCurrentUser();
+    const isB2B = (cust && (cust.is_b2b === 1 || cust.client_type === 'B2B')) || (activeUser && (activeUser.is_b2b === 1 || activeUser.client_type === 'B2B'));
     document.getElementById('wizard-selected-cat').textContent = p.category || 'Service';
     document.getElementById('wizard-selected-title').textContent = p.name;
     document.getElementById('wizard-selected-price').textContent = isB2B ? 'Custom B2B Rate' : `£${parseFloat(p.price || 0).toFixed(2)}`;
@@ -12081,7 +12094,8 @@ function renderWizardStep5Review() {
     const vat = roundToTwo(price * 0.20);
     const total = roundToTwo(price + vat);
 
-    const isB2B = (cust && (cust.is_b2b === 1 || cust.client_type === 'B2B')) || (window.currentUser && (window.currentUser.is_b2b === 1 || window.currentUser.client_type === 'B2B'));
+    const activeUser = getCurrentUser();
+    const isB2B = (cust && (cust.is_b2b === 1 || cust.client_type === 'B2B')) || (activeUser && (activeUser.is_b2b === 1 || activeUser.client_type === 'B2B'));
     document.getElementById('review-service-category').textContent = (p.category || 'Service').toUpperCase();
     document.getElementById('review-service-name').textContent = p.name;
     if (isB2B) {
