@@ -41,7 +41,6 @@ COPY scripts/ scripts/
 # ── Runtime data directories ───────────────────────────────
 # Production database and client files are mounted from the VPS.
 RUN mkdir -p /app/seed /app/data /app/storage/clients
-COPY storage/clients/ /app/seed/clients/
 
 # ── Entrypoint ─────────────────────────────────────────────
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
