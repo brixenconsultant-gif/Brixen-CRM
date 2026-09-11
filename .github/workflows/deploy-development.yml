@@ -83,13 +83,13 @@ jobs:
             cd '$DEPLOY_PATH'
             if ! command -v docker >/dev/null 2>&1; then
               apt-get update
-              apt-get install -y ca-certificates curl
-              curl -fsSL https://get.docker.com | sh
+              apt-get install -y docker.io docker-compose
             fi
             if ! docker compose version >/dev/null 2>&1 && ! command -v docker-compose >/dev/null 2>&1; then
               apt-get update
-              apt-get install -y docker-compose-plugin || apt-get install -y docker-compose
+              apt-get install -y docker-compose
             fi
+            systemctl enable --now docker
             if docker compose version >/dev/null 2>&1; then
               COMPOSE='docker compose'
             else
