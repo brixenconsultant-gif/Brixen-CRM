@@ -10693,9 +10693,11 @@ function renderIntakeResults(data) {
 
     function renderTopCandidates(list) {
         if (!candidatesEl || !list || !list.length) return;
-        candidatesEl.innerHTML = `<div style="margin-top:10px; font-size:0.8rem; color:#475569;">
-            <div style="font-weight:700; margin-bottom:6px;">Top candidates</div>
-            ${list.slice(0, 3).map(c => {
+        candidatesEl.innerHTML = `<div style="margin-top:12px; padding:10px 12px; background:var(--color-surface-soft, #f8fafc); border:1px solid var(--border-color, #e2e8f0); border-radius:8px;">
+            <div style="font-size:0.8rem; font-weight:700; color:var(--text-primary, #0f172a); margin-bottom:8px; display:flex; align-items:center; gap:6px;">
+                <i data-lucide="building-2" style="width:14px; height:14px; color:var(--color-primary, #2563eb);"></i> Companies House Suggested Matches for Staff Review:
+            </div>
+            ${list.slice(0, 4).map((c, idx) => {
                 const score = c.score != null ? `${c.score}%` : '';
                 const label = escapeHtml(c.name || 'Candidate');
                 const num = escapeHtml(c.company_number || '—');
@@ -10707,11 +10709,27 @@ function renderIntakeResults(data) {
                         : ` · CH birth year ${dob.year}`;
                 }
                 const why = (c.reasons || []).some(r => String(r).includes('Incompatible DOB'))
-                    ? ' <span style="color:#b45309;">(different person — DOB mismatch)</span>'
+                    ? ' <span style="color:#b45309; font-weight:600;">(DOB mismatch)</span>'
                     : '';
-                return `<div style="padding:6px 0; border-top:1px solid #f1f5f9;"><strong>${label}</strong> — ${escapeHtml(String(score))} <span style="color:#64748b;">(#${num}${escapeHtml(dobTxt)})</span>${why}</div>`;
+                const compNumStr = String(c.company_number || '');
+                return `
+                    <div style="padding:8px 0; border-top:${idx > 0 ? '1px solid var(--border-color, #e2e8f0)' : 'none'}; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                        <div>
+                            <div style="font-weight:700; font-size:0.85rem; color:var(--text-primary, #0f172a);">${label}</div>
+                            <div style="font-size:0.75rem; color:var(--text-secondary, #475569);">
+                                Score: <strong>${escapeHtml(String(score))}</strong> · Company #${num}${escapeHtml(dobTxt)}${why}
+                            </div>
+                        </div>
+                        ${compNumStr ? `
+                            <button type="button" class="btn-secondary" style="padding:4px 10px; font-size:0.75rem;" onclick="assignIntakeCompanyCandidate('${escapeJsString(compNumStr)}', '${escapeJsString(c.name || '')}', '${escapeJsString(c.company_id || '')}')">
+                                <i data-lucide="check" style="width:12px; height:12px;"></i> Select Company
+                            </button>
+                        ` : ''}
+                    </div>
+                `;
             }).join('')}
         </div>`;
+        if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
     }
 
     if (chStatus === 'matched') {
@@ -12632,5 +12650,44 @@ async function submitGoogleDriveImport(event) {
         }
     } finally {
         if (btn) btn.disabled = false;
+    }
+}
+
+async function assignIntakeCompanyCandidate(companyNumber, companyName, companyId) {
+    if (!confirm(`Are you sure you want to assign company "${companyName}" (#${companyNumber}) to this client file?`)) return;
+    try {
+        const clientName = document.getElementById('res-client-name')?.textContent || '';
+        const res = await fetch('/api/admin/companies/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                company_number: companyNumber,
+                company_name: companyName,
+                director_name: clientName
+            })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Could not assign company candidate.');
+        }
+
+        const resCompCard = document.getElementById('res-company-card');
+        const resCompName = document.getElementById('res-company-name');
+        const resCompNum = document.getElementById('res-company-num');
+        const resCompBadge = document.getElementById('res-company-status-badge');
+        const resCompExpl = document.getElementById('res-company-explanation');
+
+        if (resCompCard) resCompCard.style.borderTopColor = '#16a34a';
+        if (resCompName) resCompName.textContent = companyName;
+        if (resCompNum) resCompNum.textContent = `Company #: ${companyNumber} · Manually Confirmed by Staff`;
+        if (resCompBadge) resCompBadge.innerHTML = `<span class="badge-status-approved">✓ MANUALLY CONFIRMED &amp; LINKED</span>`;
+        if (resCompExpl) resCompExpl.innerHTML = `<strong>Company:</strong> ${escapeHtml(companyName)} (#${escapeHtml(companyNumber)})<br><strong>Status:</strong> Assigned to client profile by staff manual review.`;
+
+        const candidatesEl = document.getElementById('res-company-candidates');
+        if (candidatesEl) candidatesEl.innerHTML = '';
+
+        alert(`Company "${companyName}" (#${companyNumber}) has been assigned to the client profile.`);
+    } catch (e) {
+        alert(e.message || 'Failed to assign company candidate.');
     }
 }
