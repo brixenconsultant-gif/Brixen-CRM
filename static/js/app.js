@@ -9933,28 +9933,29 @@ function assessIntakeFileRelevance(file, relPath, mode, options) {
 
     const kind = classifyIntakeDocumentKind(`${lowerPath} ${lowerBase}`);
 
-    // Hard filter: when boxes are ticked, only those types enter the queue.
+    // Filter: when category boxes are ticked
     if (selectedTypes.length) {
-        if (kind && selectedTypes.includes(kind)) {
-            if (sourceMode === 'ID_ONLY_DISCOVERY' && !INTAKE_ID_KINDS.has(kind)) {
-                return { ok: false, reason: 'ID-Only mode: passport / ID card / driving licence only' };
-            }
-            return { ok: true, reason: kind, document_type: kind, allowed_types: selectedTypes.slice() };
-        }
-        // Browse Files (not folder): one type ticked + user picked the file → assign that type.
-        if (!fromFolder && selectedTypes.length === 1 && !kind) {
-            const only = selectedTypes[0];
-            if (sourceMode === 'ID_ONLY_DISCOVERY' && !INTAKE_ID_KINDS.has(only)) {
-                return { ok: false, reason: 'ID-Only mode: passport / ID card / driving licence only' };
-            }
-            return { ok: true, reason: only, document_type: only, allowed_types: selectedTypes.slice() };
-        }
         if (kind) {
-            return { ok: false, reason: `Skipped (${kind}) — not in selected options` };
+            const matchesAllowed = selectedTypes.includes(kind) ||
+                (INTAKE_ID_KINDS.has(kind) && selectedTypes.some((t) => INTAKE_ID_KINDS.has(t)));
+            if (matchesAllowed) {
+                if (sourceMode === 'ID_ONLY_DISCOVERY' && !INTAKE_ID_KINDS.has(kind)) {
+                    return { ok: false, reason: 'ID-Only mode: passport / ID card / driving licence only' };
+                }
+                return { ok: true, reason: kind, document_type: kind, allowed_types: selectedTypes.slice() };
+            } else {
+                return { ok: false, reason: `Skipped (${kind}) — not in selected options` };
+            }
+        }
+        // Generic camera photo or PDF (PHOTO-*.jpg, IMG_*.jpg, scan.pdf) with unclassified filename:
+        // Accept into queue so high-quality OCR reads and confirms the document content!
+        if (['pdf', 'png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff'].includes(ext)) {
+            const defaultDocType = (selectedTypes.length === 1) ? selectedTypes[0] : '';
+            return { ok: true, reason: 'Scan queued — high-quality OCR will confirm type', document_type: defaultDocType, allowed_types: selectedTypes.slice() };
         }
         return {
             ok: false,
-            reason: `Skipped — filename does not match selected: ${selectedTypes.join(', ')}`,
+            reason: `Skipped — file format unsupported for selected options: ${selectedTypes.join(', ')}`,
         };
     }
 
