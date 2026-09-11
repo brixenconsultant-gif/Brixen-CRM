@@ -1384,6 +1384,35 @@
                     <!-- UPLOAD CONTAINER CARD -->
                     <div class="modal-card" style="max-width:100%; margin:0 0 24px 0; padding:24px;">
                         <form id="intake-upload-form" onsubmit="submitSmartIntakeForm(event)">
+                            <!-- DOCUMENT CATEGORY FILTER CHECKBOXES BAR -->
+                            <div style="margin-bottom:16px; padding:14px 18px; background:var(--color-surface-soft, #f8fafc); border:1px solid var(--border-color, #e2e8f0); border-radius:10px;">
+                                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:10px;">
+                                    <label style="font-size:0.85rem; font-weight:700; color:var(--text-primary, #0f172a); display:flex; align-items:center; gap:6px;">
+                                        <i data-lucide="filter" style="width:16px; height:16px; color:var(--color-primary, #2563eb);"></i>
+                                        Document Category Filter
+                                    </label>
+                                    <span id="intake-type-hint" style="font-size:0.75rem; color:var(--text-muted, #64748b); font-weight:500;">Tick target document categories to process, or leave all checked to auto-detect.</span>
+                                </div>
+                                <div id="intake-type-checkboxes" style="display:flex; gap:16px; flex-wrap:wrap; align-items:center;">
+                                    <label style="font-size:0.85rem; font-weight:600; color:var(--text-secondary, #334155); display:flex; align-items:center; gap:6px; cursor:pointer;">
+                                        <input type="checkbox" name="intake-doc-type" value="ID Card" checked onchange="onIntakeTypeCheckboxChange()">
+                                        <i data-lucide="user-check" style="width:16px; height:16px; color:#2563eb;"></i> Passports &amp; IDs
+                                    </label>
+                                    <label style="font-size:0.85rem; font-weight:600; color:var(--text-secondary, #334155); display:flex; align-items:center; gap:6px; cursor:pointer;">
+                                        <input type="checkbox" name="intake-doc-type" value="Bank Statement" checked onchange="onIntakeTypeCheckboxChange()">
+                                        <i data-lucide="landmark" style="width:16px; height:16px; color:#0284c7;"></i> Bank Statements
+                                    </label>
+                                    <label style="font-size:0.85rem; font-weight:600; color:var(--text-secondary, #334155); display:flex; align-items:center; gap:6px; cursor:pointer;">
+                                        <input type="checkbox" name="intake-doc-type" value="Company Document" checked onchange="onIntakeTypeCheckboxChange()">
+                                        <i data-lucide="building-2" style="width:16px; height:16px; color:#059669;"></i> Company Docs
+                                    </label>
+                                    <label style="font-size:0.85rem; font-weight:600; color:var(--text-secondary, #334155); display:flex; align-items:center; gap:6px; cursor:pointer;">
+                                        <input type="checkbox" name="intake-doc-type" value="Invoice" checked onchange="onIntakeTypeCheckboxChange()">
+                                        <i data-lucide="receipt" style="width:16px; height:16px; color:#d97706;"></i> Invoices &amp; Bills
+                                    </label>
+                                </div>
+                            </div>
+
                             <div id="intake-drop-zone" class="intake-drop-zone" ondragover="onIntakeDragOver(event)" ondragleave="onIntakeDragLeave(event)" ondrop="onIntakeDrop(event)" onclick="document.getElementById('intake-files-input').click()">
                                 <div id="intake-drop-zone-empty">
                                     <i data-lucide="file-up" style="width:48px; height:48px; color:#475569; margin-bottom:12px;"></i>
