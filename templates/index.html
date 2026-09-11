@@ -1227,7 +1227,7 @@
                         <button type="button" class="btn-primary btn-create-user" id="btn-create-customer-page" onclick="openCreateCustomerModal()"><i data-lucide="user-plus"></i> Create Customer</button>
                     </div>
                     <div class="orders-filter-row orders-filter-toolbar">
-                        <div class="filter-group" style="flex-wrap:wrap; width:100%;">
+                        <div class="filter-group" style="flex-wrap:wrap; width:100%; align-items:center;">
                             <input type="search" class="select-filter" id="filter-admin-customer-search" placeholder="Search name or email…" oninput="filterAdminCustomers()" style="min-width:220px; flex:1;">
                             <select class="select-filter" id="filter-admin-customer-source" onchange="filterAdminCustomers()">
                                 <option value="">All sources</option>
@@ -1239,6 +1239,9 @@
                                 <option value="7">New — last 7 days</option>
                                 <option value="30">Last 30 days</option>
                             </select>
+                            <button type="button" class="btn-secondary" id="btn-delete-selected-customers" style="display:none; color:#dc2626; border-color:#fca5a5; background:#fef2f2;" onclick="deleteSelectedAdminCustomers()">
+                                <i data-lucide="trash-2"></i> Delete Selected (<span id="selected-customers-count">0</span>)
+                            </button>
                             <span id="adm-customers-count" style="font-size:0.8rem; color:#64748b; font-weight:600;"></span>
                         </div>
                     </div>
@@ -1246,6 +1249,7 @@
                         <table class="data-table">
                             <thead>
                                 <tr>
+                                    <th style="width:36px; text-align:center;"><input type="checkbox" id="select-all-customers" onchange="toggleSelectAllCustomers(this)"></th>
                                     <th>Customer Name</th>
                                     <th>Email</th>
                                     <th>Signed up</th>

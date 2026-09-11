@@ -17096,6 +17096,53 @@ def application(environ, start_response):
             'portal_login_ready': True,
         })
 
+    if (path == '/api/admin/customers/delete' or path.startswith('/api/admin/customers/delete')) and method == 'POST':
+        if not user or not check_permission(user, 'clients.edit'):
+            return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions to delete customer'}, "403 Forbidden")
+        data = parse_body(environ)
+        customer_ids = data.get('customer_ids') or []
+        single_id = data.get('customer_id')
+        if single_id and single_id not in customer_ids:
+            customer_ids.append(single_id)
+
+        valid_ids = []
+        for cid in customer_ids:
+            try:
+                valid_ids.append(int(cid))
+            except (ValueError, TypeError):
+                pass
+
+        if not valid_ids:
+            return json_response(start_response, {'status': 'error', 'message': 'No valid customer IDs provided.'}, "400 Bad Request")
+
+        placeholders = ','.join('?' for _ in valid_ids)
+        targets = query_db(f"SELECT id, email, full_name FROM users WHERE role = 'CLIENT' AND id IN ({placeholders});", valid_ids) or []
+        if not targets:
+            return json_response(start_response, {'status': 'error', 'message': 'No matching customer accounts found to delete.'}, "404 Not Found")
+
+        del_ids = [t['id'] for t in targets]
+        del_placeholders = ','.join('?' for _ in del_ids)
+
+        primary_admin = query_db("SELECT id FROM users WHERE role IN ('ADMIN', 'SUPER_ADMIN') LIMIT 1;", one=True)
+        fallback_uid = primary_admin['id'] if primary_admin else None
+
+        if fallback_uid:
+            execute_db(f"UPDATE companies SET user_id = ? WHERE user_id IN ({del_placeholders});", [fallback_uid] + del_ids)
+            execute_db(f"UPDATE orders SET user_id = ? WHERE user_id IN ({del_placeholders});", [fallback_uid] + del_ids)
+            execute_db(f"UPDATE invoices SET user_id = ? WHERE user_id IN ({del_placeholders});", [fallback_uid] + del_ids)
+            execute_db(f"UPDATE documents SET user_id = ? WHERE user_id IN ({del_placeholders});", [fallback_uid] + del_ids)
+            execute_db(f"UPDATE notifications SET user_id = ? WHERE user_id IN ({del_placeholders});", [fallback_uid] + del_ids)
+
+        execute_db(f"DELETE FROM users WHERE id IN ({del_placeholders});", del_ids)
+
+        log_activity(user, 'CLIENT_DELETED_SELECTIVE', 'users', str(del_ids), f"Selectively removed {len(del_ids)} customer account(s)")
+
+        return json_response(start_response, {
+            'status': 'success',
+            'message': f"Successfully removed {len(del_ids)} customer account(s).",
+            'deleted_count': len(del_ids)
+        })
+
     if path in ('/api/admin/orders', '/api/client/orders') and method == 'POST':
         if not user:
             return json_response(start_response, {'status': 'error', 'message': 'Authentication required'}, "401 Unauthorized")

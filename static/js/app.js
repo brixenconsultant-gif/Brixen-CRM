@@ -7095,7 +7095,7 @@ function renderAdminCustomers() {
         countEl.textContent = `${rows.length} of ${adminCustomersCache.length} accounts`;
     }
     if (!rows.length) {
-        tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:#64748b; padding:28px;">No customer signups match the current filters.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; color:#64748b; padding:28px;">No customer signups match the current filters.</td></tr>`;
         return;
     }
     tbody.innerHTML = rows.map((c) => {
@@ -7107,6 +7107,7 @@ function renderAdminCustomers() {
         const portalLabel = portalReady ? 'Can sign in' : 'Needs password';
         return `
             <tr>
+                <td style="text-align:center;"><input type="checkbox" class="customer-row-checkbox" value="${c.id}" onchange="onCustomerRowCheckboxChange()"></td>
                 <td style="font-weight:700;">${escapeHtml(c.full_name || '')}${isNew ? ' <span class="signup-new-badge">New</span>' : ''}</td>
                 <td>${escapeHtml(c.email || '')}</td>
                 <td>${escapeHtml(formatDateTime(c.created_at) || formatDate(c.created_at) || '—')}</td>
@@ -7115,18 +7116,81 @@ function renderAdminCustomers() {
                 <td>${c.orders_count ?? 0}</td>
                 <td><span class="status-badge ${portalReady ? 'completed' : 'pending'}">${portalLabel}</span></td>
                 <td class="cell-actions">
-                    <div class="table-action-btns">
+                    <div class="table-action-btns" style="display:flex; align-items:center; gap:6px;">
                         <button type="button" class="btn-primary btn-table" data-customer-action="profile" data-customer-id="${c.id}">View profile</button>
                         ${portalReady ? '' : `<button type="button" class="btn-secondary btn-table" data-customer-action="password" data-customer-id="${c.id}" data-customer-email="${escapeHtml(c.email || '')}">Set password</button>`}
+                        <button type="button" class="btn-secondary btn-table" style="color:#dc2626; border-color:#fca5a5; background:#fef2f2; padding:4px 8px; font-size:0.75rem;" onclick="deleteSingleAdminCustomer(${c.id}, '${escapeJsString(c.full_name || c.email || '')}')" title="Delete customer account">
+                            <i data-lucide="trash-2" style="width:12px; height:12px;"></i> Delete
+                        </button>
                     </div>
                 </td>
             </tr>
         `;
     }).join('');
+    if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
 }
 
 function filterAdminCustomers() {
     renderAdminCustomers();
+}
+
+function toggleSelectAllCustomers(masterBox) {
+    const isChecked = masterBox.checked;
+    document.querySelectorAll('.customer-row-checkbox').forEach((box) => {
+        box.checked = isChecked;
+    });
+    onCustomerRowCheckboxChange();
+}
+
+function onCustomerRowCheckboxChange() {
+    const checkedBoxes = document.querySelectorAll('.customer-row-checkbox:checked');
+    const deleteBtn = document.getElementById('btn-delete-selected-customers');
+    const countEl = document.getElementById('selected-customers-count');
+    if (deleteBtn) {
+        deleteBtn.style.display = checkedBoxes.length > 0 ? 'inline-flex' : 'none';
+    }
+    if (countEl) {
+        countEl.textContent = checkedBoxes.length;
+    }
+}
+
+async function deleteSingleAdminCustomer(customerId, customerName) {
+    if (!confirm(`Are you sure you want to delete customer account "${customerName}"?`)) return;
+    await performAdminCustomerDeletion([customerId]);
+}
+
+async function deleteSelectedAdminCustomers() {
+    const checkedBoxes = Array.from(document.querySelectorAll('.customer-row-checkbox:checked'));
+    const ids = checkedBoxes.map((b) => parseInt(b.value, 10)).filter(Boolean);
+    if (!ids.length) {
+        alert('Please select at least one customer account to delete.');
+        return;
+    }
+    if (!confirm(`Are you sure you want to delete ${ids.length} selected customer account(s)?`)) return;
+    await performAdminCustomerDeletion(ids);
+}
+
+async function performAdminCustomerDeletion(ids) {
+    try {
+        const res = await fetch('/api/admin/customers/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ customer_ids: ids })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Could not delete customer account(s).');
+        }
+
+        await loadAdminCustomersCache();
+        const masterBox = document.getElementById('select-all-customers');
+        if (masterBox) masterBox.checked = false;
+        onCustomerRowCheckboxChange();
+
+        alert(data.message || `Successfully deleted ${ids.length} customer account(s).`);
+    } catch (e) {
+        alert(e.message || 'Error deleting customer account(s).');
+    }
 }
 
 async function setClientPortalPassword(customerId, email) {
