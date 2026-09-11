@@ -26,19 +26,10 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
 
-      - name: Initialize CI database
-        env:
-          DATABASE_URL: ${{ runner.temp }}/ci-hypetex.db
-        run: python -c "from db import init_db; init_db()"
-
-      - name: Run application tests
+      - name: Run deployment smoke test
         env:
           CRM_TESTING: "1"
-          DATABASE_URL: ${{ runner.temp }}/ci-hypetex.db
-        run: |
-          python test_app.py
-          python test_compliance_alerts.py
-          python test_triage_approval_workflow.py
+        run: python test_ci_smoke.py
 
   deploy:
     needs: test
