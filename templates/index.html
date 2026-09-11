@@ -1501,6 +1501,124 @@
                     </div>
                 </div>
 
+                <!-- 14B. TEAM INCENTIVES & GRADES VIEW -->
+                <div id="view-admin-incentives" class="view-panel" style="display: none;">
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>Team Incentives &amp; Grades</h1>
+                            <div class="page-kicker">Admin Management</div>
+                            <p>Monthly staff performance leaderboard, SLA compliance, and incentive bonus eligibility.</p>
+                        </div>
+                        <div style="display:flex; align-items:center; gap:10px;">
+                            <input type="month" id="admin-incentives-month" class="select-filter" onchange="loadTeamIncentivesReport()" style="padding:6px 12px; font-size:0.85rem;">
+                            <button type="button" class="btn-secondary" onclick="loadTeamIncentivesReport()"><i data-lucide="rotate-cw"></i> Refresh</button>
+                        </div>
+                    </div>
+
+                    <div class="data-table-container" style="margin-top:16px;">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Rank</th>
+                                    <th>Team Member</th>
+                                    <th>Department</th>
+                                    <th>Assigned</th>
+                                    <th>Completed</th>
+                                    <th>SLA On-Time</th>
+                                    <th>Overdue</th>
+                                    <th>Grade</th>
+                                    <th>Incentive Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="admin-incentives-table">
+                                <tr><td colspan="9" style="text-align:center; padding:24px; color:var(--text-muted);">Loading team incentives report...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 14C. MY PERFORMANCE DASHBOARD VIEW -->
+                <div id="view-staff-dashboard" class="view-panel" style="display: none;">
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>My Performance Dashboard</h1>
+                            <div class="page-kicker">Staff Portal</div>
+                            <p>Track your assigned tasks, monthly SLA, incentive grade, and performance metrics.</p>
+                        </div>
+                        <button type="button" class="btn-secondary" onclick="loadStaffDashboard()"><i data-lucide="rotate-cw"></i> Refresh</button>
+                    </div>
+
+                    <div class="stats-grid" style="margin-top:16px;">
+                        <div class="stat-card">
+                            <div class="stat-info">
+                                <div class="label">Incentive Grade</div>
+                                <div class="value" id="staff-metric-grade" style="color:var(--brand-primary);">Grade --</div>
+                                <span class="stat-chip success" id="staff-grade-status">Calculating performance...</span>
+                            </div>
+                            <div class="stat-icon purple"><i data-lucide="award"></i></div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-info">
+                                <div class="label">Pending Tasks</div>
+                                <div class="value" id="staff-metric-pending">0</div>
+                                <span class="stat-chip warning">Action required</span>
+                            </div>
+                            <div class="stat-icon orange"><i data-lucide="clock"></i></div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-info">
+                                <div class="label">In Progress</div>
+                                <div class="value" id="staff-metric-in-progress">0</div>
+                                <span class="stat-chip info">Active work</span>
+                            </div>
+                            <div class="stat-icon blue"><i data-lucide="loader"></i></div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-info">
+                                <div class="label">Completed (This Month)</div>
+                                <div class="value" id="staff-metric-completed">0</div>
+                                <span class="stat-chip success" id="staff-sla-rate">100% On-Time</span>
+                            </div>
+                            <div class="stat-icon green"><i data-lucide="check-circle-2"></i></div>
+                        </div>
+                    </div>
+
+                    <div id="staff-bonus-badge-wrap" style="margin:16px 0; padding:14px 18px; border-radius:10px; background:var(--color-primary-soft, #eff6ff); border:1px solid var(--color-primary-border, #bfdbfe); color:var(--text-primary);">
+                        <div style="font-weight:700; font-size:0.9rem; color:var(--color-primary, #2563eb); display:flex; align-items:center; gap:8px;">
+                            <i data-lucide="zap"></i> Incentive Eligibility &amp; SLA Status
+                        </div>
+                        <div id="staff-bonus-badge" style="font-size:0.85rem; color:var(--text-secondary); margin-top:4px; font-weight:600;">
+                            Standard Incentive Bonus Tier • Monthly SLA On-Time completion
+                        </div>
+                    </div>
+
+                    <div style="margin-top:20px;">
+                        <div class="tracker-section-header">
+                            <div>
+                                <h2>My Assigned Active Tasks</h2>
+                                <p>Tasks assigned to you requiring action or completion.</p>
+                            </div>
+                        </div>
+                        <div class="data-table-container" style="margin-top:12px;">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Task Title</th>
+                                        <th>Priority</th>
+                                        <th>Department</th>
+                                        <th>Due Date</th>
+                                        <th>Status</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="staff-my-tasks-table">
+                                    <tr><td colspan="6" style="text-align:center; padding:24px; color:var(--text-muted);">Loading your active tasks...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- 15. ADMIN LOGS VIEW -->
 
                 <!-- 15. ADMIN LOGS VIEW -->

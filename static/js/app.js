@@ -10909,7 +10909,7 @@ async function loadStaffDashboard() {
 
         const tbody = document.getElementById('staff-my-tasks-table');
         if (tbody) {
-            const tasks = data.my_tasks || [];
+            const tasks = data.my_tasks || data.active_tasks || [];
             if (tasks.length === 0) {
                 tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding:24px; color:#15803d; font-weight:600;">🎉 All caught up! Zero pending tasks.</td></tr>`;
             } else {
