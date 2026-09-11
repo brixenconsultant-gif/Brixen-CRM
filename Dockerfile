@@ -33,7 +33,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # ── Application source ────────────────────────────────────
 COPY app.py db.py schema.sql seed_db.py ./
-COPY email_engine.py compliance_alerts.py ./
+COPY email_engine.py compliance_alerts.py product_catalog_config.py ./
 COPY templates/ templates/
 COPY static/ static/
 COPY scripts/ scripts/

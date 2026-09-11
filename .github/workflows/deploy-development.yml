@@ -9,7 +9,7 @@ on:
 
 concurrency:
   group: development-vps-deploy
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   test:
