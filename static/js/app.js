@@ -11460,10 +11460,12 @@ async function openUniversalOrderWizard(prefillData = null) {
         if (adminCustomerPane) adminCustomerPane.style.display = 'none';
         if (clientCustomerPane) {
             clientCustomerPane.style.display = 'block';
-            document.getElementById('wizard-client-self-name').textContent = activeUser.full_name || 'Customer';
-            document.getElementById('wizard-client-self-email').textContent = activeUser.email || '';
+            const nameEl = document.getElementById('wizard-client-self-name');
+            const emailEl = document.getElementById('wizard-client-self-email');
+            if (nameEl) nameEl.textContent = (activeUser && activeUser.full_name) || 'Customer';
+            if (emailEl) emailEl.textContent = (activeUser && activeUser.email) || '';
 
-            const isB2B = (activeUser.is_b2b === 1 || activeUser.client_type === 'B2B');
+            const isB2B = !!(activeUser && (activeUser.is_b2b === 1 || activeUser.client_type === 'B2B'));
             const b2bWrap = document.getElementById('wizard-client-self-b2b-wrap');
             const b2bBadge = document.getElementById('wizard-client-self-b2b-badge');
             const typeLabel = document.getElementById('wizard-client-self-type-label');
@@ -11481,10 +11483,20 @@ async function openUniversalOrderWizard(prefillData = null) {
     } else {
         if (adminCustomerPane) adminCustomerPane.style.display = 'block';
         if (clientCustomerPane) clientCustomerPane.style.display = 'none';
-        await fetchWizardCustomersList();
     }
 
-    await fetchWizardCatalogProducts();
+    // Open target step immediately so UI is responsive
+    jumpToWizardStep(isClient ? 2 : 1);
+    safeCreateIcons();
+
+    // Fetch data asynchronously
+    try {
+        const promises = [fetchWizardCatalogProducts()];
+        if (!isClient) promises.push(fetchWizardCustomersList());
+        await Promise.all(promises);
+    } catch (err) {
+        console.error('Wizard initialization fetch error:', err);
+    }
 
     if (prefillData && (prefillData.service_name || prefillData.id)) {
         const match = universalOrderWizardState.catalogProducts.find(p => 
@@ -11494,11 +11506,7 @@ async function openUniversalOrderWizard(prefillData = null) {
         if (match) {
             universalOrderWizardState.selectedProduct = match;
             jumpToWizardStep(3);
-        } else {
-            jumpToWizardStep(isClient ? 2 : 1);
         }
-    } else {
-        jumpToWizardStep(isClient ? 2 : 1);
     }
 
     safeCreateIcons();
