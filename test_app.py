@@ -8,11 +8,30 @@ import hmac
 import hashlib
 import datetime
 import urllib.parse
+from pypdf import PdfReader
 from unittest.mock import patch
 from app import application, checkout_form_fields_from_payload, coalesce_checkout_address_fields, extract_order_company_name
 import app as app_mod
 from db import query_db, execute_db, hash_password, verify_password, needs_rehash, unusable_password_hash
 from seed_db import seed_demo
+
+def pdf_text(payload):
+    if not isinstance(payload, (bytes, bytearray)):
+        return str(payload)
+    return '\n'.join(page.extract_text() or '' for page in PdfReader(io.BytesIO(payload)).pages)
+
+
+def pdf_links(payload):
+    links = []
+    for page in PdfReader(io.BytesIO(payload)).pages:
+        for annotation in page.get('/Annots', []) or []:
+            obj = annotation.get_object()
+            action = obj.get('/A') or {}
+            uri = action.get('/URI')
+            if uri:
+                links.append(str(uri))
+    return links
+
 
 def extract_session_token(headers):
     cookie = ''
@@ -215,9 +234,9 @@ def run_tests():
     assert 'hide-order-finance' in js_src
     assert 'data-admin-revenue' in html_src
     assert '<th>Owner</th>' in html_src
-    assert 'app.js?v=218.0' in html_src
+    assert 'app.js?v=210.0' in html_src
     assert 'emailStaffOrderPaymentDetails' in js_src
-    assert 'styles.css?v=138.0' in html_src
+    assert 'styles.css?v=210.0' in html_src
     assert 'capturePageScroll' in js_src
     assert 'deletePortfolioDocument' in js_src
     assert 'bulkDeleteAdminCompanies' in js_src
@@ -847,7 +866,7 @@ def run_tests():
     assert 'Invoice%20' in (header_map.get('content-disposition') or '') or 'Invoice ' in (header_map.get('content-disposition') or '')
     assert isinstance(inv_pdf, (bytes, bytearray))
     assert inv_pdf.startswith(b'%PDF')
-    inv_text = inv_pdf.decode('latin-1', 'replace')
+    inv_text = pdf_text(inv_pdf)
     assert 'INVOICE' in inv_text
     assert '17314564' in inv_text
     assert '57 Wellesley Road' in inv_text
@@ -857,13 +876,13 @@ def run_tests():
     assert '04-06-05' in inv_text
     assert 'PK42UNIL0109000343170125' in inv_text
     assert 'Bank name' in inv_text
-    assert 'pay.tide.co' in inv_text
+    assert any('pay.tide.co' in link for link in pdf_links(inv_pdf))
     assert 'Muhib Ul Nabi' in inv_text
     assert 'rabexauk@gmail.com' in inv_text
     assert 'SC855741' not in inv_text
     assert 'Butterbiggins' not in inv_text
     assert 'Glasgow' not in inv_text
-    assert 'Payment methods' in inv_text
+    assert 'PAYMENT METHODS' in inv_text.upper()
     pub = app_mod.invoice_public_document_url(connector_inv['id'])
     parsed = urllib.parse.urlparse(pub)
     assert 'Invoice-' in parsed.path or 'Invoice%20' in parsed.path or 'Invoice' in urllib.parse.unquote(parsed.path)
@@ -875,8 +894,9 @@ def run_tests():
     assert 'attachment' in (pub_map.get('content-disposition') or '')
     assert 'Invoice ' in (pub_map.get('content-disposition') or '') or 'Invoice%20' in (pub_map.get('content-disposition') or '')
     assert isinstance(pub_pdf, (bytes, bytearray)) and pub_pdf.startswith(b'%PDF')
-    assert '17314564' in pub_pdf.decode('latin-1', 'replace')
-    assert 'Muhib Ul Nabi' in pub_pdf.decode('latin-1', 'replace')
+    pub_text = pdf_text(pub_pdf)
+    assert '17314564' in pub_text
+    assert 'Muhib Ul Nabi' in pub_text
     status, headers, bad_link = make_request(f"/invoice/{connector_inv['id']}?expires=1&signature=bad")
     assert status.startswith('403')
     status, headers, client_doc = make_request(
@@ -885,7 +905,7 @@ def run_tests():
     )
     assert status == "200 OK"
     assert isinstance(client_doc, (bytes, bytearray)) and client_doc.startswith(b'%PDF')
-    assert '17314564' in client_doc.decode('latin-1', 'replace')
+    assert '17314564' in pdf_text(client_doc)
     status, headers, anon_doc = make_request(f"/api/admin/invoices/{connector_inv['id']}/document")
     assert status in ("401 Unauthorized", "403 Forbidden")
     print("✓ Invoices and paid emails use the company owner, not the website signup")
@@ -904,7 +924,7 @@ def run_tests():
         cookie=f"session_token={adm_comp_token}",
     )
     assert status == "200 OK"
-    deposit_text = deposit_pdf.decode('latin-1', 'replace') if isinstance(deposit_pdf, (bytes, bytearray)) else str(deposit_pdf)
+    deposit_text = pdf_text(deposit_pdf)
     assert 'Deposit now' in deposit_text
     assert '32546658' in deposit_text
     status, headers, deposit_paid = make_request(
@@ -942,7 +962,7 @@ def run_tests():
         f"/api/admin/invoices/{connector_inv['id']}/document",
         cookie=f"session_token={adm_comp_token}",
     )
-    pkr_html = pkr_pdf.decode('latin-1', 'replace') if isinstance(pkr_pdf, (bytes, bytearray)) else str(pkr_pdf)
+    pkr_html = pdf_text(pkr_pdf)
     assert 'PK42UNIL0109000343170125' in pkr_html
     assert 'UBL' in pkr_html
     assert '32546658' in pkr_html

@@ -1,0 +1,108 @@
+name: CI/CD - Development VPS
+
+on:
+  push:
+    branches:
+      - development
+  workflow_dispatch:
+
+concurrency:
+  group: development-vps-deploy
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Initialize CI database
+        env:
+          DATABASE_URL: ${{ runner.temp }}/ci-hypetex.db
+        run: python -c "from db import init_db; init_db()"
+
+      - name: Run application tests
+        env:
+          CRM_TESTING: "1"
+          DATABASE_URL: ${{ runner.temp }}/ci-hypetex.db
+        run: |
+          python test_app.py
+          python test_compliance_alerts.py
+          python test_triage_approval_workflow.py
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Configure SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+        run: |
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+          ssh-keyscan -p "${VPS_PORT:-22}" -H "$VPS_HOST" >> "$HOME/.ssh/known_hosts"
+
+      - name: Back up database and deploy exact commit
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          DEPLOY_PATH: /var/www/brixen-crm
+        run: |
+          SSH="ssh -i $HOME/.ssh/deploy_key -p ${VPS_PORT:-22}"
+          TAR="git archive --format=tar $GITHUB_SHA | gzip"
+
+          $SSH "$VPS_USER@$VPS_HOST" "set -eu
+            cd '$DEPLOY_PATH'
+            test -f hypetex.db
+            mkdir -p backups/db
+            sqlite3 hypetex.db \".backup 'backups/db/hypetex-\$(date +%Y%m%d-%H%M%S).db'\"
+          "
+
+          $TAR | $SSH "$VPS_USER@$VPS_HOST" "tar -xzf - -C '$DEPLOY_PATH'"
+
+      - name: Rebuild and verify production container
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          DEPLOY_PATH: /var/www/brixen-crm
+        run: |
+          SSH="ssh -i $HOME/.ssh/deploy_key -p ${VPS_PORT:-22}"
+          $SSH "$VPS_USER@$VPS_HOST" "set -eu
+            cd '$DEPLOY_PATH'
+            if docker compose version >/dev/null 2>&1; then
+              COMPOSE='docker compose'
+            else
+              COMPOSE='docker-compose'
+            fi
+            \$COMPOSE up -d --build
+            for attempt in 1 2 3 4 5 6; do
+              if curl -fsS http://127.0.0.1:5050/ >/dev/null; then
+                exit 0
+              fi
+              sleep 5
+            done
+            \$COMPOSE ps
+            \$COMPOSE logs --tail=100 brixen-crm
+            exit 1
+          "

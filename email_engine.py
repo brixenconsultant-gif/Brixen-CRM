@@ -572,8 +572,8 @@ def email_signature_html(brand, *, align='left'):
     return (
         f'<div style="margin:24px 0 0;font-family:{EMAIL_FONT_STACK};font-size:15px;line-height:1.5;color:#374151;text-align:{align};">'
         f'<p style="margin:0 0 8px;font-weight:400;">Kind regards,</p>'
-        f'<p style="margin:0;font-weight:600;color:#111827;">The {html_escape(c["brand_name"])} Team</p>'
-        f'<p style="margin:0;">{html_escape(c["company_name"])}</p>'
+        f'<p style="margin:0;font-weight:600;color:#111827;">The {html_escape(c["display_name"])} Team</p>'
+        f'<p style="margin:0;">{html_escape(c["legal_name"])}</p>'
         f'<p style="margin:8px 0 0;font-size:14px;">'
         f'<a href="mailto:{html_escape(c["email"])}" style="color:#6366f1;text-decoration:none;">{html_escape(c["email"])}</a><br>'
         f'{html_escape(c["phone"])}<br>'
