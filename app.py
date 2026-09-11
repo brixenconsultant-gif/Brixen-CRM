@@ -15795,7 +15795,21 @@ def application(environ, start_response):
         email = data.get('email', '').strip().lower()
         password = data.get('password', '')
 
-        found_user = query_db("SELECT * FROM users WHERE LOWER(email) = ?;", (email,), one=True)
+        # Alias resolution for admin signin convenience (.com vs .co.uk vs short names)
+        ALIAS_MAP = {
+            'admin': 'admin@brixenconsultant.co.uk',
+            'superadmin': 'superadmin@brixenconsultant.co.uk',
+            'manager': 'manager@brixenconsultant.co.uk',
+            'admin@brixenconsultants.com': 'admin@brixenconsultant.co.uk',
+            'admin@brixenconsultant.com': 'admin@brixenconsultant.co.uk',
+            'superadmin@brixenconsultants.com': 'superadmin@brixenconsultant.co.uk',
+            'superadmin@brixenconsultant.com': 'superadmin@brixenconsultant.co.uk',
+            'manager@brixenconsultants.com': 'manager@brixenconsultant.co.uk',
+            'manager@brixenconsultant.com': 'manager@brixenconsultant.co.uk',
+        }
+        lookup_email = ALIAS_MAP.get(email, email)
+
+        found_user = query_db("SELECT * FROM users WHERE LOWER(email) = ?;", (lookup_email,), one=True)
         stored_hash = found_user['password_hash'] if found_user else None
         if not verify_password(password, stored_hash):
             return json_response(start_response, {'status': 'error', 'message': 'Invalid email or password.'}, "401 Unauthorized")
