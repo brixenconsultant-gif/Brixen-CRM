@@ -66,7 +66,7 @@
             if (app) app.setAttribute('hidden', '');
         });
     </script>
-    <link rel="stylesheet" href="/static/css/styles.css?v=600.0">
+    <link rel="stylesheet" href="/static/css/styles.css?v=800.0">
     <script src="/static/js/vendor/lucide.min.js"></script>
     <script src="/static/js/vendor/chart.umd.min.js"></script>
 </head>
@@ -1069,7 +1069,12 @@
                         <div class="stat-card"><div class="stat-info"><div class="label">In Progress</div><div class="value" id="adm-ord-stat-progress">—</div></div></div>
                         <div class="stat-card"><div class="stat-info"><div class="label">Completed</div><div class="value" id="adm-ord-stat-completed">—</div></div></div>
                         <div class="stat-card" data-admin-revenue hidden><div class="stat-info"><div class="label">Total Revenue</div><div class="value" id="adm-ord-stat-revenue">—</div></div></div>
-                        <div class="stat-card"><div class="stat-info"><div class="label">This Month</div><div class="value" id="adm-ord-stat-month">—</div></div></div>
+                    </div>
+
+                    <div style="display:flex; gap:8px; margin:16px 0 12px 0;" id="admin-orders-client-type-tabs">
+                        <button type="button" class="badge active" id="tab-orders-all" onclick="setAdminOrderClientTypeFilter('All')" style="cursor:pointer; border:1px solid var(--color-border); padding:8px 16px; font-size:0.82rem; font-weight:700; background:var(--color-primary); color:#FFFFFF;">All Orders</button>
+                        <button type="button" class="badge" id="tab-orders-customer" onclick="setAdminOrderClientTypeFilter('Customer')" style="cursor:pointer; border:1px solid var(--color-border); padding:8px 16px; font-size:0.82rem; font-weight:700; background:var(--color-surface); color:var(--color-text-primary);">Customers</button>
+                        <button type="button" class="badge" id="tab-orders-b2b" onclick="setAdminOrderClientTypeFilter('B2B')" style="cursor:pointer; border:1px solid var(--color-border); padding:8px 16px; font-size:0.82rem; font-weight:700; background:var(--color-surface); color:var(--color-text-primary);">B2B Clients</button>
                     </div>
 
                     <div class="orders-filter-row orders-filter-toolbar">
@@ -3715,6 +3720,6 @@
     </div>
 
     <div id="global-search-results" class="global-search-results" hidden></div>
-    <script src="/static/js/app.js?v=600.0" defer></script>
+    <script src="/static/js/app.js?v=800.0" defer></script>
 </body>
 </html>

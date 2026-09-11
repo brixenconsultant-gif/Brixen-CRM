@@ -5075,6 +5075,28 @@ function adminOrderProgressRange() {
     return { min, max };
 }
 
+let adminOrderClientTypeFilter = 'All';
+
+function setAdminOrderClientTypeFilter(type) {
+    adminOrderClientTypeFilter = type;
+    ['All', 'Customer', 'B2B'].forEach(t => {
+        const btn = document.getElementById(`tab-orders-${t.toLowerCase()}`);
+        if (btn) {
+            if (t === type) {
+                btn.classList.add('active');
+                btn.style.background = 'var(--color-primary)';
+                btn.style.color = '#FFFFFF';
+            } else {
+                btn.classList.remove('active');
+                btn.style.background = 'var(--color-surface)';
+                btn.style.color = 'var(--color-text-primary)';
+            }
+        }
+    });
+    resetAdminOrdersPage();
+    loadAdminOrders();
+}
+
 function buildAdminOrderQuery(page) {
     const qs = new URLSearchParams();
     const search = document.getElementById('filter-admin-order-search')?.value.trim() || '';
@@ -5097,6 +5119,9 @@ function buildAdminOrderQuery(page) {
     if (status) qs.set('status', status);
     if (canViewRevenue() && payment) qs.set('payment_status', payment);
     if (customer) qs.set('customer_id', customer);
+    if (adminOrderClientTypeFilter && adminOrderClientTypeFilter !== 'All') {
+        qs.set('client_type', adminOrderClientTypeFilter);
+    }
     if (preset && preset !== 'custom') qs.set('date_preset', preset);
     if (preset === 'custom' && dateFrom) qs.set('date_from', dateFrom);
     if (preset === 'custom' && dateTo) qs.set('date_to', dateTo);

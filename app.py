@@ -12098,6 +12098,12 @@ def build_admin_order_filters(user, qs):
             clauses.append("o.user_id = ?")
             params.append(cid)
 
+    client_type = _qs_first(qs, 'client_type')
+    if client_type == 'B2B':
+        clauses.append("(u.is_b2b = 1 OR u.client_type = 'B2B')")
+    elif client_type in ('Normal', 'Customer'):
+        clauses.append("(u.is_b2b = 0 OR u.client_type IS NULL OR u.client_type = 'Normal')")
+
     status_filter = _qs_first(qs, 'status')
     status_group = _qs_first(qs, 'status_group')
     if status_filter:
