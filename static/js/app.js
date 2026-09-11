@@ -6,6 +6,13 @@ let currentUser = null;
 function getCurrentUser() {
     if (typeof currentUser !== 'undefined' && currentUser) return currentUser;
     if (typeof window !== 'undefined' && window.currentUser) return window.currentUser;
+    if (typeof readCachedAuthUser === 'function') {
+        const cached = readCachedAuthUser();
+        if (cached) {
+            currentUser = cached;
+            return cached;
+        }
+    }
     return null;
 }
 let activeView = 'login';
@@ -11431,7 +11438,19 @@ async function openUniversalOrderWizard(prefillData = null) {
         return;
     }
 
-    const activeUser = getCurrentUser();
+    let activeUser = getCurrentUser();
+    if (!activeUser) {
+        try {
+            const res = await fetch('/api/auth/me', { credentials: 'same-origin' });
+            const data = await res.json().catch(() => ({}));
+            if (data.status === 'success' && data.user) {
+                currentUser = data.user;
+                if (typeof writeCachedAuthUser === 'function') writeCachedAuthUser(data.user);
+                activeUser = data.user;
+            }
+        } catch (_) {}
+    }
+
     const isClient = !!(activeUser && activeUser.role === 'CLIENT');
 
     universalOrderWizardState = {
