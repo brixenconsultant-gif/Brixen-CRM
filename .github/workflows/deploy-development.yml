@@ -86,16 +86,27 @@ jobs:
               apt-get install -y ca-certificates curl
               curl -fsSL https://get.docker.com | sh
             fi
+            if ! docker compose version >/dev/null 2>&1 && ! command -v docker-compose >/dev/null 2>&1; then
+              apt-get update
+              apt-get install -y docker-compose-plugin || apt-get install -y docker-compose
+            fi
             if docker compose version >/dev/null 2>&1; then
               COMPOSE='docker compose'
             else
               COMPOSE='docker-compose'
             fi
+            command -v docker >/dev/null 2>&1
+            \$COMPOSE version
             mkdir -p '$DEPLOY_PATH/storage/clients'
             export DATABASE_HOST_PATH='$DEPLOY_PATH/hypetex.db'
             export STORAGE_HOST_PATH='$DEPLOY_PATH/storage/clients'
             \$COMPOSE build
             systemctl stop brixen-crm.service
+            rollback() {
+              \$COMPOSE down >/dev/null 2>&1 || true
+              systemctl start brixen-crm.service || true
+            }
+            trap rollback EXIT
             test "\$(sqlite3 hypetex.db 'PRAGMA integrity_check;')" = ok
             DB_SIGNATURE=\$(sqlite3 hypetex.db "SELECT (SELECT COUNT(*) FROM users)||':'||(SELECT COUNT(*) FROM companies)||':'||(SELECT COUNT(*) FROM orders)||':'||(SELECT COUNT(*) FROM documents)||':'||(SELECT COUNT(*) FROM invoices);")
             mkdir -p backups/db
@@ -110,6 +121,7 @@ jobs:
                 CURRENT_SIGNATURE=\$(sqlite3 hypetex.db "SELECT (SELECT COUNT(*) FROM users)||':'||(SELECT COUNT(*) FROM companies)||':'||(SELECT COUNT(*) FROM orders)||':'||(SELECT COUNT(*) FROM documents)||':'||(SELECT COUNT(*) FROM invoices);")
                 if [ "\$CURRENT_SIGNATURE" = "\$DB_SIGNATURE" ]; then
                   systemctl disable brixen-crm.service
+                  trap - EXIT
                   exit 0
                 fi
                 echo "Database row-count signature changed: \$DB_SIGNATURE -> \$CURRENT_SIGNATURE"
