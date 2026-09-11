@@ -17096,51 +17096,63 @@ def application(environ, start_response):
             'portal_login_ready': True,
         })
 
-    if (path == '/api/admin/customers/delete' or path.startswith('/api/admin/customers/delete')) and method == 'POST':
+    if path == '/api/admin/customers/delete' and method == 'POST':
         if not user or not check_permission(user, 'clients.edit'):
-            return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions to delete customer'}, "403 Forbidden")
+            return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
         data = parse_body(environ)
-        customer_ids = data.get('customer_ids') or []
-        single_id = data.get('customer_id')
-        if single_id and single_id not in customer_ids:
-            customer_ids.append(single_id)
+        customer_id, err = to_optional_int(data.get('customer_id'), 'customer_id')
+        if err or not customer_id:
+            return json_response(start_response, {'status': 'error', 'message': 'Customer ID is required'}, "400 Bad Request")
+        target = query_db("SELECT id, email, full_name, role FROM users WHERE id = ?;", (customer_id,), one=True)
+        if not target or target.get('role') != 'CLIENT':
+            return json_response(start_response, {'status': 'error', 'message': 'Customer not found or not a client'}, "404 Not Found")
 
-        valid_ids = []
-        for cid in customer_ids:
-            try:
-                valid_ids.append(int(cid))
-            except (ValueError, TypeError):
-                pass
+        execute_db("UPDATE companies SET user_id = NULL WHERE user_id = ?;", (customer_id,))
+        execute_db("UPDATE orders SET user_id = NULL WHERE user_id = ?;", (customer_id,))
+        execute_db("UPDATE invoices SET user_id = NULL WHERE user_id = ?;", (customer_id,))
+        execute_db("UPDATE documents SET user_id = NULL WHERE user_id = ?;", (customer_id,))
+        execute_db("UPDATE notifications SET user_id = NULL WHERE user_id = ?;", (customer_id,))
+        execute_db("DELETE FROM users WHERE id = ?;", (customer_id,))
 
-        if not valid_ids:
-            return json_response(start_response, {'status': 'error', 'message': 'No valid customer IDs provided.'}, "400 Bad Request")
+        log_activity(user, 'CLIENT_DELETED', 'users', str(customer_id), f"Deleted customer profile {target.get('email')} ({target.get('full_name')})")
+        return json_response(start_response, {
+            'status': 'success',
+            'message': f"Customer '{target.get('full_name') or target.get('email')}' has been removed successfully."
+        })
 
-        placeholders = ','.join('?' for _ in valid_ids)
-        targets = query_db(f"SELECT id, email, full_name FROM users WHERE role = 'CLIENT' AND id IN ({placeholders});", valid_ids) or []
-        if not targets:
-            return json_response(start_response, {'status': 'error', 'message': 'No matching customer accounts found to delete.'}, "404 Not Found")
+    if path == '/api/admin/customers/bulk-delete' and method == 'POST':
+        if not user or not check_permission(user, 'clients.edit'):
+            return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
+        data = parse_body(environ)
+        raw_ids = data.get('customer_ids') or []
+        if not isinstance(raw_ids, (list, tuple)) or not raw_ids:
+            return json_response(start_response, {'status': 'error', 'message': 'No customer IDs selected'}, "400 Bad Request")
+        
+        customer_ids = []
+        for rid in raw_ids:
+            cid, err = to_optional_int(rid, 'customer_id')
+            if cid and not err:
+                customer_ids.append(cid)
+        if not customer_ids:
+            return json_response(start_response, {'status': 'error', 'message': 'No valid customer IDs provided'}, "400 Bad Request")
 
-        del_ids = [t['id'] for t in targets]
-        del_placeholders = ','.join('?' for _ in del_ids)
+        placeholders = ','.join('?' for _ in customer_ids)
+        targets = query_db(f"SELECT id, email, full_name FROM users WHERE role = 'CLIENT' AND id IN ({placeholders});", customer_ids) or []
+        found_ids = [t['id'] for t in targets]
 
-        primary_admin = query_db("SELECT id FROM users WHERE role IN ('ADMIN', 'SUPER_ADMIN') LIMIT 1;", one=True)
-        fallback_uid = primary_admin['id'] if primary_admin else None
-
-        if fallback_uid:
-            execute_db(f"UPDATE companies SET user_id = ? WHERE user_id IN ({del_placeholders});", [fallback_uid] + del_ids)
-            execute_db(f"UPDATE orders SET user_id = ? WHERE user_id IN ({del_placeholders});", [fallback_uid] + del_ids)
-            execute_db(f"UPDATE invoices SET user_id = ? WHERE user_id IN ({del_placeholders});", [fallback_uid] + del_ids)
-            execute_db(f"UPDATE documents SET user_id = ? WHERE user_id IN ({del_placeholders});", [fallback_uid] + del_ids)
-            execute_db(f"UPDATE notifications SET user_id = ? WHERE user_id IN ({del_placeholders});", [fallback_uid] + del_ids)
-
-        execute_db(f"DELETE FROM users WHERE id IN ({del_placeholders});", del_ids)
-
-        log_activity(user, 'CLIENT_DELETED_SELECTIVE', 'users', str(del_ids), f"Selectively removed {len(del_ids)} customer account(s)")
+        if found_ids:
+            f_placeholders = ','.join('?' for _ in found_ids)
+            execute_db(f"UPDATE companies SET user_id = NULL WHERE user_id IN ({f_placeholders});", found_ids)
+            execute_db(f"UPDATE orders SET user_id = NULL WHERE user_id IN ({f_placeholders});", found_ids)
+            execute_db(f"UPDATE invoices SET user_id = NULL WHERE user_id IN ({f_placeholders});", found_ids)
+            execute_db(f"UPDATE documents SET user_id = NULL WHERE user_id IN ({f_placeholders});", found_ids)
+            execute_db(f"UPDATE notifications SET user_id = NULL WHERE user_id IN ({f_placeholders});", found_ids)
+            execute_db(f"DELETE FROM users WHERE id IN ({f_placeholders});", found_ids)
+            log_activity(user, 'CLIENTS_BULK_DELETED', 'users', ','.join(str(i) for i in found_ids), f"Bulk deleted {len(found_ids)} customer profiles")
 
         return json_response(start_response, {
             'status': 'success',
-            'message': f"Successfully removed {len(del_ids)} customer account(s).",
-            'deleted_count': len(del_ids)
+            'message': f"Successfully removed {len(found_ids)} customer(s)."
         })
 
     if path in ('/api/admin/orders', '/api/client/orders') and method == 'POST':
