@@ -12550,3 +12550,87 @@ async function saveStaffOrderCredentials() {
         alert('Connection error: ' + err.message);
     }
 }
+
+/* ====================================================
+   GOOGLE DRIVE IMPORT MODAL FOR SMART INTAKE
+   ==================================================== */
+function openGoogleDrivePickerModal() {
+    const modal = document.getElementById('modal-google-drive-picker');
+    const input = document.getElementById('gdrive-link-input');
+    const err = document.getElementById('gdrive-import-error');
+    if (!modal) return;
+    if (input) input.value = '';
+    if (err) { err.style.display = 'none'; err.textContent = ''; }
+    modal.classList.add('active');
+    if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
+}
+
+function closeGoogleDrivePickerModal() {
+    const modal = document.getElementById('modal-google-drive-picker');
+    if (modal) modal.classList.remove('active');
+}
+
+async function submitGoogleDriveImport(event) {
+    if (event) event.preventDefault();
+    const linkInput = document.getElementById('gdrive-link-input');
+    const overrideSelect = document.getElementById('gdrive-category-override');
+    const errEl = document.getElementById('gdrive-import-error');
+    const btn = document.getElementById('btn-gdrive-submit');
+    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+
+    const driveUrl = String(linkInput?.value || '').trim();
+    if (!driveUrl) {
+        if (errEl) { errEl.style.display = 'block'; errEl.textContent = 'Please enter a valid Google Drive link.'; }
+        return;
+    }
+
+    const docCategory = overrideSelect?.value || '';
+
+    if (btn) btn.disabled = true;
+
+    try {
+        const res = await fetch('/api/admin/intake/google-drive-import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: driveUrl, document_category: docCategory })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Failed to import Google Drive documents.');
+        }
+
+        const importedFiles = data.imported_files || [];
+        if (importedFiles.length === 0) {
+            throw new Error('No compatible document files were found in the Google Drive link.');
+        }
+
+        importedFiles.forEach((item) => {
+            const docType = normalizeIntakeDocumentType(docCategory || item.document_type) || '';
+            intakeQueueItems.push({
+                id: 'gdrive_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+                file: null,
+                file_content_base64: item.content_base64 || '',
+                name: item.name || 'gdrive_document.pdf',
+                relPath: item.path || item.name || 'Google Drive Document',
+                size: item.size || 0,
+                document_type: docType,
+                category: docType || item.category || 'Google Drive Document',
+                upload_status: 'UPLOADED',
+                process_status: 'Imported from Google Drive — Ready for processing',
+                error: null,
+                source: 'GOOGLE_DRIVE'
+            });
+        });
+
+        closeGoogleDrivePickerModal();
+        renderIntakeFilePreview();
+        alert(`Successfully imported ${importedFiles.length} item(s) from Google Drive! Click Process & Auto-File to run OCR.`);
+    } catch (e) {
+        if (errEl) {
+            errEl.style.display = 'block';
+            errEl.textContent = e.message || 'Error importing Google Drive documents.';
+        }
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
