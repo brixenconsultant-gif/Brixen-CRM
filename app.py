@@ -15792,8 +15792,8 @@ def application(environ, start_response):
     # ----------------------------------------------------
     if path == '/api/auth/login' and method == 'POST':
         data = parse_body(environ)
-        email = data.get('email', '').strip().lower()
-        password = data.get('password', '')
+        email = str(data.get('email') or data.get('username') or '').strip().lower()
+        password = str(data.get('password') or '')
 
         # Alias resolution for admin signin convenience (.com vs .co.uk vs short names)
         ALIAS_MAP = {
