@@ -19,19 +19,13 @@ services:
       - SMTP_PASS=${SMTP_PASS:-}
       - SMTP_FROM=${SMTP_FROM:-}
     volumes:
-      # Persist SQLite database across container restarts
-      - crm-data:/app/data
-      # Persist client uploaded documents
-      - crm-storage:/app/storage/clients
+      # The VPS database stays outside the image and Git repository.
+      - ${DATABASE_HOST_PATH:-./hypetex.db}:/app/data/hypetex.db
+      # Client uploads also remain on the VPS host.
+      - ${STORAGE_HOST_PATH:-./storage/clients}:/app/storage/clients
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5050/"]
       interval: 30s
       timeout: 5s
       start_period: 10s
       retries: 3
-
-volumes:
-  crm-data:
-    driver: local
-  crm-storage:
-    driver: local

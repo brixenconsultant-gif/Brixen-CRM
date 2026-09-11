@@ -38,10 +38,9 @@ COPY templates/ templates/
 COPY static/ static/
 COPY scripts/ scripts/
 
-# ── Seed data (database + client uploads) ──────────────────
-# These are copied into volumes on first run by the entrypoint
+# ── Runtime data directories ───────────────────────────────
+# Production database and client files are mounted from the VPS.
 RUN mkdir -p /app/seed /app/data /app/storage/clients
-COPY hypetex.db /app/seed/hypetex.db
 COPY storage/clients/ /app/seed/clients/
 
 # ── Entrypoint ─────────────────────────────────────────────
