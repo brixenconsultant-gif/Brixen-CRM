@@ -60,7 +60,6 @@ jobs:
           DEPLOY_PATH: /var/www/brixen-crm
         run: |
           SSH="ssh -i $HOME/.ssh/deploy_key -p ${VPS_PORT:-22}"
-          TAR="git archive --format=tar $GITHUB_SHA | gzip"
 
           $SSH "$VPS_USER@$VPS_HOST" "set -eu
             cd '$DEPLOY_PATH'
@@ -69,7 +68,7 @@ jobs:
             sqlite3 hypetex.db \".backup 'backups/db/hypetex-\$(date +%Y%m%d-%H%M%S).db'\"
           "
 
-          $TAR | $SSH "$VPS_USER@$VPS_HOST" "tar -xzf - -C '$DEPLOY_PATH'"
+          git archive --format=tar "$GITHUB_SHA" | gzip | $SSH "$VPS_USER@$VPS_HOST" "tar -xzf - -C '$DEPLOY_PATH'"
 
       - name: Rebuild and verify production container
         env:
