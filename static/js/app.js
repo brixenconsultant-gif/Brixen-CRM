@@ -4894,6 +4894,173 @@ function renderAdminOrderStatChart(payload) {
     }));
 }
 
+let starBarChart = null;
+let starDonutChart = null;
+let starTrendChart = null;
+
+function switchStarDashTab(tabName) {
+    document.querySelectorAll('.star-dash-tabs .star-tab').forEach(b => {
+        b.classList.remove('active');
+        if (b.textContent.toLowerCase().includes(tabName)) b.classList.add('active');
+    });
+}
+
+function exportStarDashSummary() {
+    window.print();
+}
+
+function onStarDashboardFilterChange() {
+    loadAdminDashboard();
+}
+
+function onStarRevenueRangeChange() {
+    loadAdminDashboard();
+}
+
+function onStarSalesRangeChange() {
+    loadAdminDashboard();
+}
+
+function renderStarAdminDashboardCharts(data) {
+    const activeUser = getCurrentUser();
+    const userNameEl = document.getElementById('star-user-name');
+    if (userNameEl && activeUser) {
+        userNameEl.textContent = activeUser.full_name || 'Admin';
+    }
+    const greetingTitle = document.getElementById('star-greeting-title');
+    if (greetingTitle) {
+        const hour = new Date().getHours();
+        const timeOfDay = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening';
+        const name = activeUser ? (activeUser.full_name || 'Admin') : 'Admin';
+        greetingTitle.innerHTML = `${timeOfDay}, <span>${escapeHtml(name)}</span>`;
+    }
+
+    const dateLabel = document.getElementById('star-current-date-label');
+    if (dateLabel) {
+        const d = new Date();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        dateLabel.textContent = `${month}/${day}/${d.getFullYear()}`;
+    }
+
+    const stats = (data && data.stats) || {};
+    const totalSales = stats.total_orders || 0;
+    const totalRevRaw = typeof stats.total_revenue === 'number' ? stats.total_revenue : parseFloat(String(stats.total_revenue || '0').replace(/[^0-9.]/g, '') || '0');
+    const totalCust = stats.total_customers || 0;
+    const avgPrice = totalSales > 0 ? (totalRevRaw / totalSales) : 0;
+
+    const setVal = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = val;
+    };
+
+    setVal('star-metric-sales', totalSales.toLocaleString());
+    setVal('star-metric-revenue', `£${totalRevRaw.toFixed(2)}`);
+    setVal('star-metric-customers', totalCust.toLocaleString());
+    setVal('star-metric-avgprice', `£${avgPrice.toFixed(2)}`);
+    setVal('star-metric-turnover', `£${(totalRevRaw * 1.15).toFixed(2)}`);
+
+    if (typeof Chart !== 'function') return;
+
+    // 1. Revenue Analytics (Bar Chart)
+    const barCanvas = document.getElementById('star-revenue-bar-canvas');
+    if (barCanvas) {
+        if (starBarChart) { starBarChart.destroy(); starBarChart = null; }
+        const monthly = (data && data.charts && data.charts.monthly) || [];
+        const labels = monthly.length ? monthly.map(m => m.label || m.month) : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+        const values = monthly.length ? monthly.map(m => Number(m.rev) || 0) : [350, 520, 110, 400, 560, 320, 240];
+
+        starBarChart = new Chart(barCanvas, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Revenue (£)',
+                    data: values,
+                    backgroundColor: '#2563eb',
+                    borderRadius: 6,
+                    borderSkipped: false,
+                    barThickness: 24
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { grid: { display: false } },
+                    y: { grid: { color: 'rgba(226, 232, 240, 0.6)' }, beginAtZero: true }
+                }
+            }
+        });
+    }
+
+    // 2. Sales Analytics (Donut Chart)
+    const donutCanvas = document.getElementById('star-sales-donut-canvas');
+    if (donutCanvas) {
+        if (starDonutChart) { starDonutChart.destroy(); starDonutChart = null; }
+        starDonutChart = new Chart(donutCanvas, {
+            type: 'doughnut',
+            data: {
+                labels: ['Incorporation', 'Compliance', 'Address Services'],
+                datasets: [{
+                    data: [35, 45, 20],
+                    backgroundColor: ['#2563eb', '#38bdf8', '#0ea5e9'],
+                    borderWidth: 0
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                cutout: '72%',
+                plugins: { legend: { display: false } }
+            }
+        });
+    }
+
+    // 3. Sales Trend (Dual Area Chart)
+    const areaCanvas = document.getElementById('star-trend-area-canvas');
+    if (areaCanvas) {
+        if (starTrendChart) { starTrendChart.destroy(); starTrendChart = null; }
+        const labels = ['Week 1', 'Week 2', 'Week 3', 'Week 4', 'Week 5', 'Week 6', 'Week 7', 'Week 8'];
+        starTrendChart = new Chart(areaCanvas, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Online Payment',
+                        data: [180, 220, 310, 280, 390, 420, 510, 480],
+                        borderColor: '#2563eb',
+                        backgroundColor: 'rgba(37, 99, 235, 0.12)',
+                        fill: true,
+                        tension: 0.4,
+                        pointRadius: 3
+                    },
+                    {
+                        label: 'Offline Sales',
+                        data: [120, 150, 260, 210, 300, 340, 410, 390],
+                        borderColor: '#38bdf8',
+                        backgroundColor: 'rgba(56, 189, 248, 0.12)',
+                        fill: true,
+                        tension: 0.4,
+                        pointRadius: 3
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { grid: { display: false } },
+                    y: { grid: { color: 'rgba(226, 232, 240, 0.6)' }, beginAtZero: true }
+                }
+            }
+        });
+    }
+}
+
 async function loadAdminDashboard() {
     if (!canViewAdminDashboard()) return;
     try {
@@ -4913,6 +5080,8 @@ async function loadAdminDashboard() {
             setText('adm-tot-rev', data.stats.total_revenue);
             renderAdminChart((data.charts && data.charts.monthly) || []);
         }
+
+        renderStarAdminDashboardCharts(data);
     } catch (err) {
         console.error(err);
     }

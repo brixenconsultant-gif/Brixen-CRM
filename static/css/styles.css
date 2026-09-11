@@ -6543,3 +6543,271 @@ input[type="number"], input[type="date"], input[type="search"], textarea, .selec
     border-radius: var(--radius-lg);
 }
 
+/* ====================================================
+   STARADMIN THEME DASHBOARD STYLES
+   ==================================================== */
+.star-dash-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+    gap: 16px;
+}
+
+.star-dash-welcome h1 {
+    font-size: 1.85rem;
+    font-weight: 400;
+    color: var(--color-text-primary);
+    margin: 0;
+    letter-spacing: -0.02em;
+}
+
+.star-dash-welcome h1 span {
+    font-weight: 700;
+}
+
+.star-dash-welcome p {
+    font-size: 0.85rem;
+    color: var(--color-text-muted);
+    margin-top: 4px;
+}
+
+.star-dash-header-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.star-select {
+    min-height: 40px !important;
+    font-size: 0.85rem !important;
+    padding: 8px 36px 8px 14px !important;
+    border-radius: 8px !important;
+    background-color: var(--color-surface) !important;
+    border: 1px solid var(--color-border) !important;
+}
+
+.star-date-pill {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    padding: 8px 14px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--color-text-primary);
+}
+
+.star-dash-subhead {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--color-border);
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+    gap: 16px;
+}
+
+.star-dash-tabs {
+    display: flex;
+    gap: 24px;
+}
+
+.star-tab {
+    background: none;
+    border: none;
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: var(--color-text-muted);
+    padding: 6px 0;
+    cursor: pointer;
+    position: relative;
+    transition: color 0.15s ease;
+}
+
+.star-tab:hover,
+.star-tab.active {
+    color: var(--color-primary);
+}
+
+.star-tab.active::after {
+    content: '';
+    position: absolute;
+    bottom: -15px;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: var(--color-primary);
+    border-radius: 2px;
+}
+
+.star-dash-actions {
+    display: flex;
+    gap: 10px;
+}
+
+.star-action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.82rem !important;
+    font-weight: 600 !important;
+    padding: 8px 16px !important;
+    border-radius: 8px !important;
+}
+
+/* 6-Column KPI Strip */
+.star-metrics-strip {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.star-metric-item {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.star-metric-item:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.star-metric-label {
+    font-size: 0.78rem;
+    color: var(--color-text-muted);
+    font-weight: 500;
+    margin-bottom: 8px;
+}
+
+.star-metric-value {
+    font-size: 1.5rem;
+    font-weight: 800;
+    color: var(--color-text-primary);
+    letter-spacing: -0.02em;
+}
+
+/* 2x2 Analytics Grid */
+.star-analytics-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 24px;
+}
+
+.star-card {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 16px;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+}
+
+.star-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+}
+
+.star-card-title {
+    font-size: 1.08rem;
+    font-weight: 700;
+    color: var(--color-text-primary);
+    margin: 0;
+}
+
+.star-card-select {
+    min-height: 32px !important;
+    height: 32px !important;
+    font-size: 0.78rem !important;
+    padding: 4px 28px 4px 10px !important;
+    border-radius: 6px !important;
+}
+
+.star-legend-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--color-text-secondary);
+    margin-bottom: 10px;
+}
+
+.star-legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.star-performers-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.star-performer-item {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--color-surface-soft);
+    border: 1px solid var(--color-border);
+}
+
+.star-performer-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+.star-performer-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.star-performer-name {
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: var(--color-text-primary);
+}
+
+.star-performer-email {
+    font-size: 0.78rem;
+    color: var(--color-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+@media (max-width: 1024px) {
+    .star-metrics-strip {
+        grid-template-columns: repeat(3, 1fr);
+    }
+    .star-analytics-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 640px) {
+    .star-metrics-strip {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+

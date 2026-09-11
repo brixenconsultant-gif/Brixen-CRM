@@ -66,7 +66,7 @@
             if (app) app.setAttribute('hidden', '');
         });
     </script>
-    <link rel="stylesheet" href="/static/css/styles.css?v=800.0">
+    <link rel="stylesheet" href="/static/css/styles.css?v=1300.0">
     <script src="/static/js/vendor/lucide.min.js"></script>
     <script src="/static/js/vendor/chart.umd.min.js"></script>
 </head>
@@ -994,54 +994,162 @@
                     </div>
                 </div>
 
-                <!-- 11. ADMIN DASHBOARD VIEW -->
+                <!-- 11. ADMIN DASHBOARD VIEW (STARADMIN THEME MATCH) -->
                 <div id="view-admin-dashboard" class="view-panel" style="display: none;">
-                    <div class="page-title-row">
-                        <div class="page-title-text">
-                            <h1>Admin Control Dashboard</h1>
-                            <p>Real-time analytics, order tracking, and system performance metrics.</p>
+                    <!-- Hidden elements for script backwards-compatibility -->
+                    <span id="adm-tot-cust" style="display:none;">—</span>
+                    <span id="adm-tot-ord" style="display:none;">—</span>
+                    <span id="adm-tot-rev" style="display:none;">—</span>
+                    <span id="adm-tot-tix" style="display:none;">—</span>
+                    <canvas id="admin-chart-canvas" style="display:none;"></canvas>
+
+                    <div class="star-dash-header">
+                        <div class="star-dash-welcome">
+                            <h1 id="star-greeting-title">Good Morning, <span id="star-user-name">Admin</span></h1>
+                            <p>Your performance summary this week</p>
+                        </div>
+                        <div class="star-dash-header-controls">
+                            <select class="select-filter star-select" id="star-cat-filter" onchange="onStarDashboardFilterChange()">
+                                <option value="">Select Category</option>
+                                <option value="Incorporation">Incorporation</option>
+                                <option value="Address Services">Address Services</option>
+                                <option value="Compliance">Compliance</option>
+                                <option value="Tax & Financials">Tax & Financials</option>
+                            </select>
+                            <div class="star-date-pill">
+                                <i data-lucide="calendar" style="width:14px; height:14px; color:var(--color-text-muted);"></i>
+                                <span id="star-current-date-label">09/12/2026</span>
+                            </div>
                         </div>
                     </div>
 
-                    <div class="stats-grid">
-                        <div class="stat-card">
-                            <div class="stat-info">
-                                <div class="label">Total Customers</div>
-                                <div class="value" id="adm-tot-cust">—</div>
-                            </div>
-                            <div class="stat-icon purple"><i data-lucide="users"></i></div>
+                    <div class="star-dash-subhead">
+                        <div class="star-dash-tabs">
+                            <button type="button" class="star-tab active" onclick="switchStarDashTab('overview')">Contact</button>
+                            <button type="button" class="star-tab" onclick="switchStarDashTab('lead')">Lead</button>
+                            <button type="button" class="star-tab" onclick="switchStarDashTab('account')">Account</button>
+                            <button type="button" class="star-tab" onclick="switchStarDashTab('more')">More</button>
                         </div>
-                        <div class="stat-card">
-                            <div class="stat-info">
-                                <div class="label">Total Orders</div>
-                                <div class="value" id="adm-tot-ord">—</div>
-                            </div>
-                            <div class="stat-icon blue"><i data-lucide="shopping-bag"></i></div>
-                        </div>
-                        <div class="stat-card" data-admin-revenue>
-                            <div class="stat-info">
-                                <div class="label">Total Revenue</div>
-                                <div class="value" id="adm-tot-rev">—</div>
-                            </div>
-                            <div class="stat-icon green"><i data-lucide="dollar-sign"></i></div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-info">
-                                <div class="label">Open Tickets</div>
-                                <div class="value" id="adm-tot-tix">—</div>
-                            </div>
-                            <div class="stat-icon orange"><i data-lucide="message-square"></i></div>
+                        <div class="star-dash-actions">
+                            <button type="button" class="btn-secondary star-action-btn" onclick="exportStarDashSummary()"><i data-lucide="share-2"></i> Share</button>
+                            <button type="button" class="btn-secondary star-action-btn" onclick="window.print()"><i data-lucide="printer"></i> Print</button>
+                            <button type="button" class="btn-primary star-action-btn" onclick="openUniversalOrderWizard()"><i data-lucide="plus"></i> New</button>
                         </div>
                     </div>
 
-                    <div class="revenue-chart-card" data-admin-revenue>
-                        <div class="revenue-chart-head">
-                            <h3>Revenue Trend</h3>
-                            <p id="admin-chart-caption">Last 6 months of paid order totals</p>
+                    <!-- 6-COLUMN KPI STRIP -->
+                    <div class="star-metrics-strip">
+                        <div class="star-metric-item">
+                            <div class="star-metric-label">Number of sales</div>
+                            <div class="star-metric-value" id="star-metric-sales">—</div>
                         </div>
-                        <div id="admin-chart-empty" class="revenue-chart-empty" hidden>No order revenue in the last 6 months.</div>
-                        <div class="revenue-chart-wrap">
-                            <canvas id="admin-chart-canvas" aria-label="Monthly revenue trend"></canvas>
+                        <div class="star-metric-item">
+                            <div class="star-metric-label">Sales Revenue</div>
+                            <div class="star-metric-value" id="star-metric-revenue">—</div>
+                        </div>
+                        <div class="star-metric-item">
+                            <div class="star-metric-label">Total Products</div>
+                            <div class="star-metric-value" id="star-metric-products">10</div>
+                        </div>
+                        <div class="star-metric-item">
+                            <div class="star-metric-label">Total Customers</div>
+                            <div class="star-metric-value" id="star-metric-customers">—</div>
+                        </div>
+                        <div class="star-metric-item">
+                            <div class="star-metric-label">Average Price</div>
+                            <div class="star-metric-value" id="star-metric-avgprice">—</div>
+                        </div>
+                        <div class="star-metric-item">
+                            <div class="star-metric-label">Total Turnover</div>
+                            <div class="star-metric-value" id="star-metric-turnover">—</div>
+                        </div>
+                    </div>
+
+                    <!-- 2x2 ANALYTICS GRID -->
+                    <div class="star-analytics-grid">
+                        <!-- Top Left: Revenue Analytics (Bar Chart) -->
+                        <div class="star-card">
+                            <div class="star-card-head">
+                                <h3 class="star-card-title">Revenue Analytics</h3>
+                                <select class="select-filter star-card-select" id="star-revenue-range" onchange="onStarRevenueRangeChange()">
+                                    <option value="month">This month</option>
+                                    <option value="quarter">This quarter</option>
+                                    <option value="year">This year</option>
+                                </select>
+                            </div>
+                            <div class="star-chart-container" style="height: 280px; position: relative;">
+                                <canvas id="star-revenue-bar-canvas" aria-label="Revenue Analytics Bar Chart"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- Top Right: Sales Analytics (Donut Chart) -->
+                        <div class="star-card">
+                            <div class="star-card-head">
+                                <h3 class="star-card-title">Sales Analytics</h3>
+                                <select class="select-filter star-card-select" id="star-sales-range" onchange="onStarSalesRangeChange()">
+                                    <option value="month">This month</option>
+                                    <option value="quarter">This quarter</option>
+                                </select>
+                            </div>
+                            <div class="star-donut-wrap" style="display: flex; align-items: center; justify-content: space-around; height: 280px;">
+                                <div style="width: 200px; height: 200px; position: relative;">
+                                    <canvas id="star-sales-donut-canvas" aria-label="Sales Analytics Donut Chart"></canvas>
+                                </div>
+                                <div class="star-donut-legend" id="star-donut-legend">
+                                    <div class="star-legend-row"><span class="star-legend-dot" style="background:#2563eb;"></span> Incorporation (35%)</div>
+                                    <div class="star-legend-row"><span class="star-legend-dot" style="background:#38bdf8;"></span> Compliance (45%)</div>
+                                    <div class="star-legend-row"><span class="star-legend-dot" style="background:#0ea5e9;"></span> Address (20%)</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Bottom Left: Sales Trend (Dual Smooth Area Line Chart) -->
+                        <div class="star-card">
+                            <div class="star-card-head">
+                                <div>
+                                    <h3 class="star-card-title">Sales Trend</h3>
+                                    <div class="star-trend-legend" style="display:flex; gap:16px; margin-top:6px; font-size:0.78rem; font-weight:600;">
+                                        <span style="color:#2563eb;">● Online Payment</span>
+                                        <span style="color:#38bdf8;">● Offline Sales</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="star-chart-container" style="height: 260px; position: relative; margin-top:12px;">
+                                <canvas id="star-trend-area-canvas" aria-label="Sales Trend Area Chart"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- Bottom Right: Top Performers & Team Leaders -->
+                        <div class="star-card">
+                            <div class="star-card-head">
+                                <h3 class="star-card-title">Top Performer</h3>
+                            </div>
+                            <div class="star-performers-list" id="star-performers-list">
+                                <div class="star-performer-item">
+                                    <img src="/static/img/apple-touch-icon.png" class="star-performer-avatar" alt="Eleanor Finch">
+                                    <div class="star-performer-info">
+                                        <div class="star-performer-name">Eleanor Finch</div>
+                                        <div class="star-performer-email">eleanor.finch@brixenconsultant.co.uk</div>
+                                    </div>
+                                    <span class="status-badge active">Senior Manager</span>
+                                </div>
+                                <div class="star-performer-item">
+                                    <img src="/static/img/apple-touch-icon.png" class="star-performer-avatar" alt="Marcus Sterling">
+                                    <div class="star-performer-info">
+                                        <div class="star-performer-name">Marcus Sterling</div>
+                                        <div class="star-performer-email">marcus.sterling@brixenconsultant.co.uk</div>
+                                    </div>
+                                    <span class="status-badge info">Orders Lead</span>
+                                </div>
+                                <div class="star-performer-item">
+                                    <img src="/static/img/apple-touch-icon.png" class="star-performer-avatar" alt="Sophia Montgomery">
+                                    <div class="star-performer-info">
+                                        <div class="star-performer-name">Sophia Montgomery</div>
+                                        <div class="star-performer-email">sophia.m@brixenconsultant.co.uk</div>
+                                    </div>
+                                    <span class="status-badge info">Compliance Specialist</span>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -3722,6 +3830,6 @@
     </div>
 
     <div id="global-search-results" class="global-search-results" hidden></div>
-    <script src="/static/js/app.js?v=900.0" defer></script>
+    <script src="/static/js/app.js?v=1300.0" defer></script>
 </body>
 </html>
