@@ -34,12 +34,6 @@
     --color-primary-border: #BFDBFE;
     --color-accent: #2563EB;
 
-    /* Dropdown Select Chevron SVG Variables */
-    --select-chevron-down: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
-    --select-chevron-up: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%232563eb' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='18 15 12 9 6 15'%3E%3C/polyline%3E%3C/svg%3E");
-    --select-caret: var(--select-chevron-down);
-}
-
 /* UNIVERSAL ORDER CREATION WIZARD STEPPER */
 .order-wizard-stepper {
     display: grid;
@@ -231,11 +225,6 @@ html[data-theme="dark"] {
     --color-primary-soft: rgba(96, 165, 250, 0.12);
     --color-primary-border: rgba(96, 165, 250, 0.25);
     --color-accent: #60A5FA;
-
-    /* Dropdown Select Chevron SVG Variables (Dark Theme) */
-    --select-chevron-down: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
-    --select-chevron-up: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2338bdf8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='18 15 12 9 6 15'%3E%3C/polyline%3E%3C/svg%3E");
-    --select-caret: var(--select-chevron-down);
 
     /* Sidebar Tokens */
     --color-sidebar-bg: #060A12;
@@ -4777,59 +4766,15 @@ textarea {
     line-height: 1.47;
 }
 
-select,
-select.select-filter,
-select.table-select,
-select.staff-order-field-control {
-    background-color: var(--color-surface, #ffffff);
-    background-image: var(--select-chevron-down) !important;
-    background-repeat: no-repeat !important;
-    background-position: right 14px center !important;
-    background-size: 16px 16px !important;
-    padding-right: 40px !important;
-    -webkit-appearance: none !important;
-    -moz-appearance: none !important;
-    appearance: none !important;
-    cursor: pointer !important;
-    transition: border-color 0.15s ease, box-shadow 0.15s ease, background-image 0.15s ease !important;
-}
-
-select:focus,
-select:active,
-select.select-filter:focus,
-select.select-filter:active,
-select.table-select:focus,
-select.table-select:active,
-select.staff-order-field-control:focus {
-    background-image: var(--select-chevron-up) !important;
-}
-
-/* Standalone portal form select field dimensions */
-.modal-card select,
-.form-group select,
-.staff-order-book-grid select,
-.portfolio-doc-upload select,
-.acct-entry-form select {
-    height: 48px !important;
-    min-height: 48px !important;
-    max-width: 400px;
-    width: 100%;
-    border-radius: 10px !important;
-    font-size: 0.92rem !important;
-}
-
-@media (max-width: 768px) {
-    select,
-    select.select-filter,
-    .modal-card select,
-    .form-group select,
-    .staff-order-book-grid select {
-        width: 100% !important;
-        max-width: 100% !important;
-        height: 48px !important;
-        min-height: 48px !important;
-        font-size: 16px !important;
-    }
+select {
+    background-color: #ffffff;
+    background-image: var(--select-caret);
+    background-repeat: no-repeat;
+    background-position: right 14px center;
+    background-size: 11px 8px;
+    padding-right: 36px;
+    -webkit-appearance: none;
+    appearance: none;
 }
 
 input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]):not(#global-search-input):focus,
