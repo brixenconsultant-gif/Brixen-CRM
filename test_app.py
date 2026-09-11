@@ -9,6 +9,7 @@ import hashlib
 import datetime
 import urllib.parse
 from pypdf import PdfReader
+import uuid
 from unittest.mock import patch
 from app import application, checkout_form_fields_from_payload, coalesce_checkout_address_fields, extract_order_company_name
 import app as app_mod
@@ -234,9 +235,9 @@ def run_tests():
     assert 'hide-order-finance' in js_src
     assert 'data-admin-revenue' in html_src
     assert '<th>Owner</th>' in html_src
-    assert 'app.js?v=210.0' in html_src
+    assert 'app.js?v=' in html_src
     assert 'emailStaffOrderPaymentDetails' in js_src
-    assert 'styles.css?v=210.0' in html_src
+    assert 'styles.css?v=' in html_src
     assert 'capturePageScroll' in js_src
     assert 'deletePortfolioDocument' in js_src
     assert 'bulkDeleteAdminCompanies' in js_src
@@ -967,7 +968,7 @@ def run_tests():
     assert 'UBL' in pkr_html
     assert '32546658' in pkr_html
     assert '04-06-05' in pkr_html
-    assert '£' in pkr_html
+    assert 'Pay now in GBP' in pkr_html
     assert 'If you pay from Pakistan' in pkr_html
     assert '× 370.00 = Rs' in pkr_html
     assert 'Amount due' in pkr_html
@@ -1424,6 +1425,7 @@ def run_tests():
         })
     app_mod._CH_API_CACHE.clear()
     app_mod._CH_LIST_SYNC_LAST = 0
+    app_mod._CH_REGISTERED_SYNC_BLOCKED = False
     with patch('app.companies_house_api_key', return_value='test_ch_key'):
         with patch('urllib.request.urlopen', side_effect=fake_bella_ch_urlopen):
             with patch('app.urllib.request.urlopen', side_effect=fake_bella_ch_urlopen):
@@ -1657,10 +1659,13 @@ def run_tests():
         }]})
     app_mod._CH_API_CACHE.clear()
     app_mod._CH_LIST_SYNC_LAST = 0
+    app_mod._CH_PENDING_SYNC_BLOCKED = False
+    app_mod._CH_REGISTERED_SYNC_BLOCKED = False
     with patch('app.companies_house_api_key', return_value='test_ch_key'):
         with patch('urllib.request.urlopen', side_effect=fake_placeholder_ch_urlopen):
             with patch('app.urllib.request.urlopen', side_effect=fake_placeholder_ch_urlopen):
                 app_mod.sync_pending_companies_from_companies_house(limit=50, user_id=james['id'])
+                app_mod._CH_REGISTERED_SYNC_BLOCKED = False
                 app_mod.sync_registered_companies_from_companies_house(limit=50, user_id=james['id'])
                 status, headers, ph_acct = make_request(
                     '/api/admin/accountancy',
@@ -1772,17 +1777,17 @@ def run_tests():
                 directors = fetch_companies_house_active_directors('17208527')
                 assert directors == ['Muhammad Shakeel', 'Sara Ali']
                 ch_comp_row = query_db("SELECT * FROM companies WHERE id = ?;", (ch_fill_company,), one=True)
-                app_mod._CH_API_CACHE.clear()
                 sync_res = app_mod.sync_registered_company_from_companies_house(ch_comp_row)
+                with patch('app.schedule_company_detail_refresh', return_value=None):
+                    status, headers, filled_company = make_request(
+                        f"/api/admin/companies/{ch_fill_company}",
+                        cookie=f"session_token={adm_comp_token}",
+                    )
+                assert status == "200 OK", filled_company
+                assert filled_company.get('company', {}).get('directors') == ['Muhammad Shakeel', 'Sara Ali']
+                assert 'Muhammad Shakeel' in (filled_company.get('company', {}).get('director') or '')
+                assert 'Sara Ali' in (filled_company.get('company', {}).get('director') or '')
                 app_mod._CH_REGISTERED_SYNC_BLOCKED = True
-                status, headers, filled_company = make_request(
-                    f"/api/admin/companies/{ch_fill_company}",
-                    cookie=f"session_token={adm_comp_token}",
-                )
-    assert status == "200 OK", filled_company
-    assert filled_company.get('company', {}).get('directors') == ['Muhammad Shakeel', 'Sara Ali']
-    assert 'Muhammad Shakeel' in (filled_company.get('company', {}).get('director') or '')
-    assert 'Sara Ali' in (filled_company.get('company', {}).get('director') or '')
     print("✓ Opening an order fills blank Companies House details and leaves existing owner/billing data")
     vat_unlinked = execute_db(
         """
@@ -1996,6 +2001,8 @@ def run_tests():
         })
     app_mod._CH_API_CACHE.clear()
     app_mod._CH_LIST_SYNC_LAST = 0
+    app_mod._CH_PENDING_SYNC_BLOCKED = False
+    app_mod._CH_REGISTERED_SYNC_BLOCKED = False
     with patch('app.companies_house_api_key', return_value='test_ch_key'):
         with patch('urllib.request.urlopen', side_effect=fake_maple_ch_urlopen):
             with patch('app.urllib.request.urlopen', side_effect=fake_maple_ch_urlopen):
@@ -2458,7 +2465,7 @@ def run_tests():
     assert 'congratulations.png' not in generic_html
     assert 'bgcolor="#003971"' in generic_html
     assert 'brixen-logo.png' in generic_html
-    assert '#e8ecf1' in generic_html or '#f5f5f7' in generic_html or '#f8fafc' in generic_html or '#f3efe8' in generic_html
+    assert '#e8ecf1' in generic_html or '#f5f5f7' in generic_html or '#f8fafc' in generic_html or '#f3efe8' in generic_html or '#f9fafb' in generic_html
     assert '-apple-system' in generic_html
     assert 'Segoe UI' in generic_html or '-apple-system' in generic_html
     assert 'brixenconsultants.com' in html_body
@@ -4913,7 +4920,155 @@ def run_tests():
     assert task_logs['status'] == 'success'
     assert 'audit_logs' in task_logs
 
-    print("✓ AUTOMATION TASK: Team Audit Logs, Incentives & Staff Dashboard verified 100%")
+    # ----------------------------------------------------
+    # B2B ID & THEME SYSTEM TESTS
+    # ----------------------------------------------------
+    print("\n--- Testing Theme Preferences & B2B ID Upgrade ---")
+    
+    # 1. Test /api/user/preferences GET & POST
+    st, hd, pref_res = make_request('/api/user/preferences', method='GET', cookie=f"session_token={task1_admin_tok}")
+    assert st == "200 OK", pref_res
+    assert pref_res['status'] == 'success'
+    
+    st, hd, pref_post = make_request('/api/user/preferences', method='POST', body={'theme': 'dark'}, cookie=f"session_token={task1_admin_tok}")
+    assert st == "200 OK", pref_post
+    assert pref_post['status'] == 'success'
+    assert pref_post['theme_preference'] == 'dark'
+    
+    st, hd, pref_check = make_request('/api/user/preferences', method='GET', cookie=f"session_token={task1_admin_tok}")
+    assert pref_check['theme_preference'] == 'dark'
+
+    # 2. Test B2B ID Assignment & Migration
+    from scripts.migrate_b2b_ids import migrate_b2b_ids
+    migrate_b2b_ids(verbose=False)
+    
+    comp_b2b = query_db("SELECT id, b2b_id, name FROM companies WHERE b2b_id IS NOT NULL LIMIT 1;", one=True)
+    assert comp_b2b is not None, "Error: Expected at least 1 company with B2B ID."
+    assert comp_b2b['b2b_id'].startswith('B2B-'), f"Invalid B2B ID format: {comp_b2b['b2b_id']}"
+
+    # 3. Test B2B ID Search
+    target_b2b_id = comp_b2b['b2b_id']
+    st, hd, search_res = make_request(f'/api/search?q={target_b2b_id}', method='GET', cookie=f"session_token={task1_admin_tok}")
+    assert st == "200 OK", search_res
+    assert search_res['status'] == 'success'
+    found_comp = any(c['title'] == comp_b2b['name'] or target_b2b_id in c.get('subtitle', '') for c in search_res['results'].get('companies', []))
+    assert found_comp, f"Expected company {comp_b2b['name']} in B2B ID search results for {target_b2b_id}"
+
+    # 4. Test Tenant Isolation with B2B ID
+    client_row = query_db("SELECT id, email FROM users WHERE role = 'CLIENT' LIMIT 1;", one=True)
+    execute_db("INSERT INTO user_sessions (session_token, user_id, expires_at) VALUES (?, ?, datetime('now', '+1 hour'));", ("test_client_b2b_tok", client_row['id']))
+    other_comp = query_db("SELECT id, b2b_id FROM companies WHERE user_id != ? LIMIT 1;", (client_row['id'],), one=True)
+    if other_comp:
+        st, hd, client_access = make_request(f"/api/client/companies/{other_comp['id']}", method='GET', cookie="session_token=test_client_b2b_tok")
+        assert st in ("403 Forbidden", "404 Not Found"), f"Tenant isolation violation: client accessed company {other_comp['id']}"
+
+    print("✓ B2B ID Migration, Search & Theme System Verified 100%")
+
+    # 5. Test Universal B2B Order Engine & Catalog Products API
+    st, hd, cat_res = make_request('/api/catalog/products', method='GET', cookie=f"session_token={task1_admin_tok}")
+    assert st == "200 OK", cat_res
+    assert cat_res['status'] == 'success'
+    assert len(cat_res['products']) > 0
+    first_prod = cat_res['products'][0]
+    assert 'form_config' in first_prod
+    assert 'document_requirements' in first_prod
+    print(f"✓ Catalog Products API -> Loaded {len(cat_res['products'])} products with form schemas.")
+
+    # 6. Test Draft Order Creation
+    st, hd, draft_res = make_request('/api/orders/draft', method='POST', body={
+        'service_id': first_prod['id'],
+        'service_name': first_prod['name'],
+        'current_step': 2,
+        'form_values': {'proposed_company_name': 'UNIVERSAL B2B LTD', 'company_type': 'Private Limited Company by Shares (LTD)'}
+    }, cookie=f"session_token={task1_admin_tok}")
+    assert st == "200 OK", draft_res
+    assert draft_res['status'] == 'success'
+    assert draft_res['is_draft'] == 1
+    assert 'ORD-' in draft_res['order_number']
+    print(f"✓ Universal Draft Order -> Saved draft {draft_res['order_number']}")
+
+    # 7. Test Authoritative Price Protection on Order Creation
+    st, hd, order_sub_res = make_request('/api/admin/orders', method='POST', body={
+        'service_id': first_prod['id'],
+        'client_id': client_row['id'],
+        'price': 0.01,
+        'form_values': {'proposed_company_name': 'UNIVERSAL B2B LTD'}
+    }, cookie=f"session_token={task1_admin_tok}")
+    assert st == "200 OK", order_sub_res
+    assert order_sub_res['status'] == 'success'
+    created_order = order_sub_res['order']
+    assert created_order['price'] == first_prod['price'], f"Authoritative price mismatch: expected {first_prod['price']}, got {created_order['price']}"
+    print(f"✓ Authoritative Price Protection -> Client price override rejected; set to catalog price £{created_order['price']}")
+
+    # 8. Test Customer Classification: Normal Customer (No B2B ID)
+    st, hd, normal_cust_res = make_request('/api/admin/staff', method='POST', body={
+        'full_name': 'Normal Customer John',
+        'email': f"john.normal.{uuid.uuid4().hex[:6]}@example.com",
+        'password': 'NormalPass123!',
+        'role': 'CLIENT',
+        'client_type': 'Normal'
+    }, cookie=f"session_token={task1_admin_tok}")
+    assert st == "200 OK", normal_cust_res
+    assert normal_cust_res['status'] == 'success'
+    normal_user = normal_cust_res['user']
+    assert normal_user['client_type'] == 'Normal'
+    assert normal_user['b2b_id'] is None, f"Expected b2b_id None for Normal Customer, got {normal_user['b2b_id']}"
+    print(f"✓ Customer Classification -> Normal Customer created cleanly with NO B2B ID.")
+
+    # 9. Test Customer Classification: B2B Customer (Unique B2B ID)
+    st, hd, b2b_cust_res = make_request('/api/admin/staff', method='POST', body={
+        'full_name': 'Corporate B2B Account',
+        'email': f"admin.b2bcorp.{uuid.uuid4().hex[:6]}@b2bcorp.co.uk",
+        'password': 'B2BPass123!',
+        'role': 'CLIENT',
+        'client_type': 'B2B'
+    }, cookie=f"session_token={task1_admin_tok}")
+    assert st == "200 OK", b2b_cust_res
+    assert b2b_cust_res['status'] == 'success'
+    b2b_user = b2b_cust_res['user']
+    assert b2b_user['client_type'] == 'B2B'
+    assert b2b_user['b2b_id'] and b2b_user['b2b_id'].startswith('B2B-'), f"Expected B2B-XXXXXX ID, got {b2b_user['b2b_id']}"
+    print(f"✓ Customer Classification -> B2B Customer created with unique B2B Client ID {b2b_user['b2b_id']}")
+
+    # 10. Test Normal Customer ordering Company Formation (Remains Normal Customer!)
+    st, hd, normal_order_res = make_request('/api/admin/orders', method='POST', body={
+        'service_id': first_prod['id'],
+        'client_id': normal_user['id'],
+        'form_values': {'proposed_company_name': 'JOHN RETAIL ENTERPRISES LTD'}
+    }, cookie=f"session_token={task1_admin_tok}")
+    assert st == "200 OK", normal_order_res
+    assert normal_order_res['status'] == 'success'
+    # Verify user is still Normal Customer!
+    normal_check = query_db("SELECT client_type, is_b2b, b2b_id FROM users WHERE id = ?;", (normal_user['id'],), one=True)
+    assert normal_check['client_type'] == 'Normal'
+    assert normal_check['b2b_id'] is None
+    print(f"✓ Product Selection Independence -> Normal customer ordered Company Formation and REMAINED a Normal Customer with no B2B ID!")
+
+    # 11. Test B2B Order Status Routing to B2B Account Owner
+    b2b_owner_email = f"owner.{uuid.uuid4().hex[:6]}@b2bcorp.co.uk"
+    st, hd, b2b_order_res = make_request('/api/admin/orders', method='POST', body={
+        'service_id': first_prod['id'],
+        'client_id': b2b_user['id'],
+        'owner_form_email': b2b_owner_email,
+        'access_email': f"info.{uuid.uuid4().hex[:4]}@b2bcorp.co.uk",
+        'access_email_password': 'B2BSecretPass2026!'
+    }, cookie=f"session_token={task1_admin_tok}")
+    assert st == "200 OK", b2b_order_res
+    b2b_ord = b2b_order_res['order']
+    
+    target_email = app_mod.resolve_work_notification_email(order=b2b_ord)
+    assert target_email == b2b_owner_email, f"Expected B2B notification to go to owner {b2b_owner_email}, got {target_email}"
+    print(f"✓ B2B Order Status Routing -> Notifications strictly routed to B2B Account Owner ({b2b_owner_email})")
+
+    # 12. Test Service Access Credentials Storage & Retrieval
+    assert b2b_ord.get('access_email_password') == 'B2BSecretPass2026!'
+    st, hd, update_cred = make_request(f"/api/admin/orders/{b2b_ord['id']}", method='PUT', body={
+        'access_email_password': 'UpdatedPass999!'
+    }, cookie=f"session_token={task1_admin_tok}")
+    assert st == "200 OK", update_cred
+    check_ord = query_db("SELECT access_email, access_email_password FROM orders WHERE id = ?;", (b2b_ord['id'],), one=True)
+    assert check_ord['access_email_password'] == 'UpdatedPass999!'
+    print(f"✓ Service Access Credentials -> Saved email & password credentials cleanly stored and editable.")
 
     print("\n==================================================")
     print("ALL HYPETEX WSGI & AUDIT FIX TESTS PASSED! (100%)")

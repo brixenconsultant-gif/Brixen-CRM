@@ -632,6 +632,7 @@ def render_compliance_email_template(vars_map, *, test=False, issues=None, track
         if v['whatsapp_link']
         else 'If you would like us to review this with you, simply reply to this email.'
     )
+    plain_close = contact_line
     structured += (
         f'<p style="margin:12px 0 0;font-family:{eng.EMAIL_FONT_STACK};font-size:15px;line-height:1.6;'
         f'color:#374151;text-align:left;">{html_escape(contact_line)}</p>'

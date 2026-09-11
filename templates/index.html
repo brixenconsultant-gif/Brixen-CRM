@@ -4,6 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#003971">
+    <script>
+        (function() {
+            var saved = localStorage.getItem('brixen_theme');
+            var theme = saved || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
     <title>Brixen Consultants - Corporate CMS & Client Portal</title>
     <link rel="icon" type="image/png" href="https://brixenconsultants.com/wp-content/uploads/2025/11/Brixen-Consultants.png">
     <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -59,7 +66,7 @@
             if (app) app.setAttribute('hidden', '');
         });
     </script>
-    <link rel="stylesheet" href="/static/css/styles.css?v=210.0">
+    <link rel="stylesheet" href="/static/css/styles.css?v=1300.0">
     <script src="/static/js/vendor/lucide.min.js"></script>
     <script src="/static/js/vendor/chart.umd.min.js"></script>
 </head>
@@ -77,8 +84,17 @@
              ==================================================== -->
         <aside id="client-sidebar" class="sidebar" hidden style="display: none;">
             <div class="sidebar-logo">
-                <div class="logo-container-glass">
-                    <img src="/static/img/brixen-logo.png" alt="Brixen Consultants" class="brixen-brand-logo">
+                <div class="sidebar-brand-wrap">
+                    <div class="sidebar-brand-icon">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M12 2L3 7V12C3 17.52 7.02 21.74 12 22C16.98 21.74 21 17.52 21 12V7L12 2Z" fill="#0066ff"/>
+                            <path d="M9 12L11.2 14.2L15.5 9.5" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div class="sidebar-brand-text">
+                        <span class="brand-title">Brixen Consultants</span>
+                        <span class="brand-subtitle">CLIENT PORTAL</span>
+                    </div>
                 </div>
                 <button type="button" class="sidebar-close-btn" onclick="closeMobileNav()" aria-label="Close menu"><i data-lucide="x"></i></button>
             </div>
@@ -144,8 +160,17 @@
              ==================================================== -->
         <aside id="admin-sidebar" class="sidebar" hidden style="display: none;">
             <div class="sidebar-logo">
-                <div class="logo-container-glass">
-                    <img src="/static/img/brixen-logo.png" alt="Brixen Consultants Admin" class="brixen-brand-logo">
+                <div class="sidebar-brand-wrap">
+                    <div class="sidebar-brand-icon">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M12 2L3 7V12C3 17.52 7.02 21.74 12 22C16.98 21.74 21 17.52 21 12V7L12 2Z" fill="#0066ff"/>
+                            <path d="M9 12L11.2 14.2L15.5 9.5" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div class="sidebar-brand-text">
+                        <span class="brand-title">Brixen Consultants</span>
+                        <span class="brand-subtitle">ADMIN PORTAL</span>
+                    </div>
                 </div>
                 <button type="button" class="sidebar-close-btn" onclick="closeMobileNav()" aria-label="Close menu"><i data-lucide="x"></i></button>
             </div>
@@ -189,6 +214,90 @@
 
         <div id="mobile-nav-backdrop" class="mobile-nav-backdrop" hidden onclick="closeMobileNav()"></div>
 
+    <!-- ====================================================
+         CENTRALIZED CLIENT CRM RECORD MODAL
+         ==================================================== -->
+    <div id="crm-client-modal" class="modal-overlay">
+        <div class="modal-card" style="max-width:850px;">
+            <div class="modal-header">
+                <div style="display:flex; align-items:center; gap:12px;">
+                    <div id="crm-modal-avatar" class="user-avatar" style="width:44px; height:44px; font-size:1.1rem;">JH</div>
+                    <div>
+                        <h3 id="crm-modal-name">Customer</h3>
+                        <p style="font-size:0.78rem; color:var(--text-secondary);" id="crm-modal-meta"></p>
+                    </div>
+                </div>
+                <button class="btn-close" onclick="closeCrmClientModal()"><i data-lucide="x"></i></button>
+            </div>
+
+            <!-- CRM Tabs -->
+            <div class="crm-tabs" style="display:flex; gap:8px; border-bottom:1px solid var(--border-color); padding-bottom:8px;">
+                <button class="btn-secondary active" onclick="switchCrmTab('overview')" id="crm-tab-overview" style="padding:6px 12px; font-size:0.78rem;">Overview</button>
+                <button class="btn-secondary" onclick="switchCrmTab('companies')" id="crm-tab-companies" style="padding:6px 12px; font-size:0.78rem;">Companies</button>
+                <button class="btn-secondary" onclick="switchCrmTab('orders')" id="crm-tab-orders" style="padding:6px 12px; font-size:0.78rem;">Orders</button>
+                <button class="btn-secondary" onclick="switchCrmTab('invoices')" id="crm-tab-invoices" style="padding:6px 12px; font-size:0.78rem;">Invoices</button>
+                <button class="btn-secondary" onclick="switchCrmTab('documents')" id="crm-tab-documents" style="padding:6px 12px; font-size:0.78rem;">Documents</button>
+                <button class="btn-secondary" onclick="switchCrmTab('support')" id="crm-tab-support" style="padding:6px 12px; font-size:0.78rem;">Support</button>
+                <button class="btn-secondary" onclick="switchCrmTab('logs')" id="crm-tab-logs" style="padding:6px 12px; font-size:0.78rem;">Activity</button>
+            </div>
+
+            <!-- Tab Contents -->
+            <div id="crm-tab-content-overview" class="crm-tab-pane">
+                <div class="crm-overview-grid" style="display:grid; grid-template-columns:repeat(2, 1fr); gap:14px; font-size:0.85rem;">
+                    <div><strong>B2B ID:</strong> <span id="crm-ov-b2b-id" class="b2b-badge">-</span></div>
+                    <div><strong>Login email:</strong> <span id="crm-ov-email"></span></div>
+                    <div><strong>Phone:</strong> <span id="crm-ov-phone">+44 7700 900001</span></div>
+                    <div><strong>Country:</strong> <span id="crm-ov-country">United Kingdom</span></div>
+                    <div><strong>Status:</strong> <span id="crm-ov-status" class="status-badge completed">Active</span></div>
+                    <div><strong>WordPress Sync:</strong> <span id="crm-ov-synced">Synced (12 Aug 2026)</span></div>
+                    <div><strong>Address:</strong> <span id="crm-ov-address">15 Regent Street, London</span></div>
+                    <div style="grid-column:1 / -1; border-top:1px solid var(--border-color); padding-top:12px; margin-top:4px;">
+                        <label for="crm-ov-notify-email" style="display:block; font-size:0.78rem; font-weight:700; color:var(--text-secondary); margin-bottom:6px;">Send all client notifications to</label>
+                        <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+                            <input type="email" id="crm-ov-notify-email" class="select-filter" style="flex:1; min-width:220px;" placeholder="Leave blank to use login email" autocomplete="off">
+                            <button type="button" class="btn-primary" id="crm-ov-notify-save" onclick="saveCrmClientNotificationEmail()">Save</button>
+                        </div>
+                        <p id="crm-ov-notify-hint" style="margin:6px 0 0; font-size:0.75rem; color:var(--text-muted);">Orders, documents, payments, and activity emails for this client all go here.</p>
+                        <p id="crm-ov-notify-status" style="margin:6px 0 0; font-size:0.75rem; color:var(--success); display:none;" role="status"></p>
+                    </div>
+                </div>
+            </div>
+
+            <div id="crm-tab-content-companies" class="crm-tab-pane" style="display:none;">
+                <div id="crm-companies-list"></div>
+            </div>
+
+            <div id="crm-tab-content-orders" class="crm-tab-pane" style="display:none;">
+                <div id="crm-orders-list"></div>
+            </div>
+
+            <div id="crm-tab-content-invoices" class="crm-tab-pane" style="display:none;">
+                <div id="crm-invoices-list"></div>
+            </div>
+
+            <div id="crm-tab-content-documents" class="crm-tab-pane" style="display:none;">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:12px;">
+                    <div style="font-size:0.8rem; color:var(--text-muted);">Documents stored for this customer only.</div>
+                    <button type="button" class="btn-primary staff-deliver-doc-btn" id="crm-upload-document-btn" onclick="openDeliverDocumentModal()" style="display:none;"><i data-lucide="upload"></i> Upload Document</button>
+                </div>
+                <div id="crm-deliver-doc-status" style="display:none; padding:10px; border-radius:8px; background:var(--bg-surface-subtle); color:var(--success); font-size:0.8rem; font-weight:600; margin-bottom:10px;" role="status"></div>
+                <div id="crm-documents-list"></div>
+            </div>
+
+            <div id="crm-tab-content-support" class="crm-tab-pane" style="display:none;">
+                <div id="crm-support-list"></div>
+            </div>
+
+            <div id="crm-tab-content-logs" class="crm-tab-pane" style="display:none;">
+                <div id="crm-logs-list"></div>
+            </div>
+
+            <div class="modal-footer" style="padding-top:12px; border-top:1px solid var(--border-color); text-align:right;">
+                <button class="btn-secondary" onclick="closeCrmClientModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
         <!-- ====================================================
              MAIN WRAPPER & TOP HEADER
              ==================================================== -->
@@ -197,12 +306,6 @@
                 <button type="button" id="mobile-nav-toggle" class="mobile-nav-toggle" onclick="toggleMobileNav()" aria-label="Open menu" aria-expanded="false">
                     <i data-lucide="menu"></i>
                 </button>
-                <div class="header-search-wrap" id="header-search-box" style="display: none;">
-                    <div class="search-box">
-                    <i data-lucide="search" style="width:16px; height:16px; color:#86868b;"></i>
-                    <input type="text" id="global-search-input" placeholder="Search clients, email, orders…" autocomplete="off" oninput="handleGlobalSearch(this.value)" onfocus="handleGlobalSearch(this.value)">
-                    </div>
-                </div>
 
                 <!-- ====================================================
                      TOP HORIZONTAL MENU SECTION (INSIDE TOP HEADER BAR)
@@ -275,91 +378,29 @@
                 </div>
 
                 <div class="header-right">
-                    <!-- ====================================================
-         CENTRALIZED CLIENT CRM RECORD MODAL
-         ==================================================== -->
-    <div id="crm-client-modal" class="modal-overlay">
-        <div class="modal-card" style="max-width:850px;">
-            <div class="modal-header">
-                <div style="display:flex; align-items:center; gap:12px;">
-                    <div id="crm-modal-avatar" class="user-avatar" style="width:44px; height:44px; font-size:1.1rem;">JH</div>
-                    <div>
-                        <h3 id="crm-modal-name">Customer</h3>
-                        <p style="font-size:0.78rem; color:#64748b;" id="crm-modal-meta"></p>
-                    </div>
-                </div>
-                <button class="btn-close" onclick="closeCrmClientModal()"><i data-lucide="x"></i></button>
-            </div>
+                    <!-- Theme Toggle Control -->
+                    <button type="button" id="theme-toggle-btn" class="theme-toggle-btn" onclick="toggleTheme()" aria-label="Toggle theme" title="Toggle Light or Dark Mode">
+                        <i data-lucide="sun" id="theme-toggle-icon" style="width:16px; height:16px;"></i>
+                        <span id="theme-toggle-text">Light</span>
+                    </button>
 
-            <!-- CRM Tabs -->
-            <div class="crm-tabs" style="display:flex; gap:8px; border-bottom:1px solid #e2e8f0; padding-bottom:8px;">
-                <button class="btn-secondary active" onclick="switchCrmTab('overview')" id="crm-tab-overview" style="padding:6px 12px; font-size:0.78rem;">Overview</button>
-                <button class="btn-secondary" onclick="switchCrmTab('companies')" id="crm-tab-companies" style="padding:6px 12px; font-size:0.78rem;">Companies</button>
-                <button class="btn-secondary" onclick="switchCrmTab('orders')" id="crm-tab-orders" style="padding:6px 12px; font-size:0.78rem;">Orders</button>
-                <button class="btn-secondary" onclick="switchCrmTab('invoices')" id="crm-tab-invoices" style="padding:6px 12px; font-size:0.78rem;">Invoices</button>
-                <button class="btn-secondary" onclick="switchCrmTab('documents')" id="crm-tab-documents" style="padding:6px 12px; font-size:0.78rem;">Documents</button>
-                <button class="btn-secondary" onclick="switchCrmTab('support')" id="crm-tab-support" style="padding:6px 12px; font-size:0.78rem;">Support</button>
-                <button class="btn-secondary" onclick="switchCrmTab('logs')" id="crm-tab-logs" style="padding:6px 12px; font-size:0.78rem;">Activity</button>
-            </div>
-
-            <!-- Tab Contents -->
-            <div id="crm-tab-content-overview" class="crm-tab-pane">
-                <div class="crm-overview-grid" style="display:grid; grid-template-columns:repeat(2, 1fr); gap:14px; font-size:0.85rem;">
-                    <div><strong>Login email:</strong> <span id="crm-ov-email"></span></div>
-                    <div><strong>Phone:</strong> <span id="crm-ov-phone">+44 7700 900001</span></div>
-                    <div><strong>Country:</strong> <span id="crm-ov-country">United Kingdom</span></div>
-                    <div><strong>Status:</strong> <span id="crm-ov-status" class="status-badge completed">Active</span></div>
-                    <div><strong>WordPress Sync:</strong> <span id="crm-ov-synced">Synced (12 Aug 2026)</span></div>
-                    <div><strong>Address:</strong> <span id="crm-ov-address">15 Regent Street, London</span></div>
-                    <div style="grid-column:1 / -1; border-top:1px solid #e2e8f0; padding-top:12px; margin-top:4px;">
-                        <label for="crm-ov-notify-email" style="display:block; font-size:0.78rem; font-weight:700; color:#475569; margin-bottom:6px;">Send all client notifications to</label>
-                        <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
-                            <input type="email" id="crm-ov-notify-email" class="select-filter" style="flex:1; min-width:220px;" placeholder="Leave blank to use login email" autocomplete="off">
-                            <button type="button" class="btn-primary" id="crm-ov-notify-save" onclick="saveCrmClientNotificationEmail()">Save</button>
+                    <div id="notification-bell-wrap" style="position:relative; display:none;">
+                        <button class="btn-icon-relative" title="Notifications" onclick="toggleNotificationsModal(event)" aria-label="Notifications">
+                            <i data-lucide="bell"></i>
+                            <span class="notification-badge" id="header-unread-count" style="display:none;">0</span>
+                        </button>
+                        <div id="notifications-dropdown" style="display:none; position:absolute; right:0; top:calc(100% + 8px); width:360px; max-width:min(360px, 90vw); background:var(--modal-bg); border:1px solid var(--border-color); border-radius:16px; z-index:1200; overflow:hidden;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 14px; border-bottom:1px solid var(--border-color);">
+                                <strong style="font-size:0.88rem; color:var(--text-primary);">Notifications</strong>
+                                <button type="button" class="btn-secondary" style="padding:4px 8px; font-size:0.72rem;" onclick="markNotificationsRead(event)">Mark all read</button>
+                            </div>
+                            <div id="notifications-list" style="max-height:380px; overflow-y:auto;"></div>
                         </div>
-                        <p id="crm-ov-notify-hint" style="margin:6px 0 0; font-size:0.75rem; color:#64748b;">Orders, documents, payments, and activity emails for this client all go here.</p>
-                        <p id="crm-ov-notify-status" style="margin:6px 0 0; font-size:0.75rem; color:#047857; display:none;" role="status"></p>
                     </div>
-                </div>
-            </div>
 
-            <div id="crm-tab-content-companies" class="crm-tab-pane" style="display:none;">
-                <div id="crm-companies-list"></div>
-            </div>
-
-            <div id="crm-tab-content-orders" class="crm-tab-pane" style="display:none;">
-                <div id="crm-orders-list"></div>
-            </div>
-
-            <div id="crm-tab-content-invoices" class="crm-tab-pane" style="display:none;">
-                <div id="crm-invoices-list"></div>
-            </div>
-
-            <div id="crm-tab-content-documents" class="crm-tab-pane" style="display:none;">
-                <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:12px;">
-                    <div style="font-size:0.8rem; color:#64748b;">Documents stored for this customer only.</div>
-                    <button type="button" class="btn-primary staff-deliver-doc-btn" id="crm-upload-document-btn" onclick="openDeliverDocumentModal()" style="display:none;"><i data-lucide="upload"></i> Upload Document</button>
-                </div>
-                <div id="crm-deliver-doc-status" style="display:none; padding:10px; border-radius:8px; background:#ecfdf5; color:#047857; font-size:0.8rem; font-weight:600; margin-bottom:10px;" role="status"></div>
-                <div id="crm-documents-list"></div>
-            </div>
-
-            <div id="crm-tab-content-support" class="crm-tab-pane" style="display:none;">
-                <div id="crm-support-list"></div>
-            </div>
-
-            <div id="crm-tab-content-logs" class="crm-tab-pane" style="display:none;">
-                <div id="crm-logs-list"></div>
-            </div>
-
-            <div class="modal-footer" style="padding-top:12px; border-top:1px solid #e2e8f0; text-align:right;">
-                <button class="btn-secondary" onclick="closeCrmClientModal()">Close</button>
-            </div>
-        </div>
-    </div>
                     <!-- Glass Client View / Account Control -->
                     <div id="header-account-wrap" style="position:relative; display:none;">
-                        <button type="button" class="glass-account-control" id="header-account-control" title="Account menu" onclick="toggleAccountMenu(event)" style="border: none; font: inherit; text-align: left;">
+                        <button type="button" class="glass-account-control" id="header-account-control" title="Account menu" onclick="toggleAccountMenu(event)" style="border: none; font: inherit; text-align: left;" aria-label="Account menu">
                             <div class="account-avatar" id="header-user-avatar"></div>
                             <div class="account-details">
                                 <span class="account-name" id="header-user-name"></span>
@@ -375,20 +416,6 @@
                             </div>
                             <button type="button" id="account-menu-profile" class="account-dropdown-item" style="display:none;" onclick="openAccountProfile(event)">Profile &amp; Password</button>
                             <button type="button" class="account-dropdown-item" onclick="handleLogout()">Sign out</button>
-                        </div>
-                    </div>
-
-                    <div id="notification-bell-wrap" style="position:relative; display:none;">
-                        <button class="btn-icon-relative" title="Notifications" onclick="toggleNotificationsModal(event)">
-                            <i data-lucide="bell"></i>
-                            <span class="notification-badge" id="header-unread-count" style="display:none;">0</span>
-                        </button>
-                        <div id="notifications-dropdown" style="display:none; position:absolute; right:0; top:calc(100% + 8px); width:360px; max-width:min(360px, 90vw); background:#ffffff; border:1px solid #e2e8f0; border-radius:16px; z-index:1200; overflow:hidden;">
-                            <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 14px; border-bottom:1px solid #e2e8f0;">
-                                <strong style="font-size:0.88rem; color:#0f172a;">Notifications</strong>
-                                <button type="button" class="btn-secondary" style="padding:4px 8px; font-size:0.72rem;" onclick="markNotificationsRead(event)">Mark all read</button>
-                            </div>
-                            <div id="notifications-list" style="max-height:380px; overflow-y:auto;"></div>
                         </div>
                     </div>
                 </div>
@@ -432,7 +459,7 @@
                             <p>Track your orders and view purchase history.</p>
                         </div>
                         <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                            <button class="btn-primary" onclick="openManualOrderModal()">
+                            <button class="btn-primary" onclick="openUniversalOrderWizard()">
                                 <i data-lucide="plus-circle"></i> Create New Order
                             </button>
                             <button class="btn-secondary" onclick="loadClientOrders()">
@@ -967,54 +994,162 @@
                     </div>
                 </div>
 
-                <!-- 11. ADMIN DASHBOARD VIEW -->
+                <!-- 11. ADMIN DASHBOARD VIEW (STARADMIN THEME MATCH) -->
                 <div id="view-admin-dashboard" class="view-panel" style="display: none;">
-                    <div class="page-title-row">
-                        <div class="page-title-text">
-                            <h1>Admin Control Dashboard</h1>
-                            <p>Real-time analytics, order tracking, and system performance metrics.</p>
+                    <!-- Hidden elements for script backwards-compatibility -->
+                    <span id="adm-tot-cust" style="display:none;">—</span>
+                    <span id="adm-tot-ord" style="display:none;">—</span>
+                    <span id="adm-tot-rev" style="display:none;">—</span>
+                    <span id="adm-tot-tix" style="display:none;">—</span>
+                    <canvas id="admin-chart-canvas" style="display:none;"></canvas>
+
+                    <div class="star-dash-header">
+                        <div class="star-dash-welcome">
+                            <h1 id="star-greeting-title">Good Morning, <span id="star-user-name">Admin</span></h1>
+                            <p>Your performance summary this week</p>
+                        </div>
+                        <div class="star-dash-header-controls">
+                            <select class="select-filter star-select" id="star-cat-filter" onchange="onStarDashboardFilterChange()">
+                                <option value="">Select Category</option>
+                                <option value="Incorporation">Incorporation</option>
+                                <option value="Address Services">Address Services</option>
+                                <option value="Compliance">Compliance</option>
+                                <option value="Tax & Financials">Tax & Financials</option>
+                            </select>
+                            <div class="star-date-pill">
+                                <i data-lucide="calendar" style="width:14px; height:14px; color:var(--color-text-muted);"></i>
+                                <span id="star-current-date-label">09/12/2026</span>
+                            </div>
                         </div>
                     </div>
 
-                    <div class="stats-grid">
-                        <div class="stat-card">
-                            <div class="stat-info">
-                                <div class="label">Total Customers</div>
-                                <div class="value" id="adm-tot-cust">—</div>
-                            </div>
-                            <div class="stat-icon purple"><i data-lucide="users"></i></div>
+                    <div class="star-dash-subhead">
+                        <div class="star-dash-tabs">
+                            <button type="button" class="star-tab active" onclick="switchStarDashTab('overview')">Contact</button>
+                            <button type="button" class="star-tab" onclick="switchStarDashTab('lead')">Lead</button>
+                            <button type="button" class="star-tab" onclick="switchStarDashTab('account')">Account</button>
+                            <button type="button" class="star-tab" onclick="switchStarDashTab('more')">More</button>
                         </div>
-                        <div class="stat-card">
-                            <div class="stat-info">
-                                <div class="label">Total Orders</div>
-                                <div class="value" id="adm-tot-ord">—</div>
-                            </div>
-                            <div class="stat-icon blue"><i data-lucide="shopping-bag"></i></div>
-                        </div>
-                        <div class="stat-card" data-admin-revenue>
-                            <div class="stat-info">
-                                <div class="label">Total Revenue</div>
-                                <div class="value" id="adm-tot-rev">—</div>
-                            </div>
-                            <div class="stat-icon green"><i data-lucide="dollar-sign"></i></div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-info">
-                                <div class="label">Open Tickets</div>
-                                <div class="value" id="adm-tot-tix">—</div>
-                            </div>
-                            <div class="stat-icon orange"><i data-lucide="message-square"></i></div>
+                        <div class="star-dash-actions">
+                            <button type="button" class="btn-secondary star-action-btn" onclick="exportStarDashSummary()"><i data-lucide="share-2"></i> Share</button>
+                            <button type="button" class="btn-secondary star-action-btn" onclick="window.print()"><i data-lucide="printer"></i> Print</button>
+                            <button type="button" class="btn-primary star-action-btn" onclick="openUniversalOrderWizard()"><i data-lucide="plus"></i> New</button>
                         </div>
                     </div>
 
-                    <div class="revenue-chart-card" data-admin-revenue>
-                        <div class="revenue-chart-head">
-                            <h3>Revenue Trend</h3>
-                            <p id="admin-chart-caption">Last 6 months of paid order totals</p>
+                    <!-- 6-COLUMN KPI STRIP -->
+                    <div class="star-metrics-strip">
+                        <div class="star-metric-item">
+                            <div class="star-metric-label">Number of sales</div>
+                            <div class="star-metric-value" id="star-metric-sales">—</div>
                         </div>
-                        <div id="admin-chart-empty" class="revenue-chart-empty" hidden>No order revenue in the last 6 months.</div>
-                        <div class="revenue-chart-wrap">
-                            <canvas id="admin-chart-canvas" aria-label="Monthly revenue trend"></canvas>
+                        <div class="star-metric-item">
+                            <div class="star-metric-label">Sales Revenue</div>
+                            <div class="star-metric-value" id="star-metric-revenue">—</div>
+                        </div>
+                        <div class="star-metric-item">
+                            <div class="star-metric-label">Total Products</div>
+                            <div class="star-metric-value" id="star-metric-products">10</div>
+                        </div>
+                        <div class="star-metric-item">
+                            <div class="star-metric-label">Total Customers</div>
+                            <div class="star-metric-value" id="star-metric-customers">—</div>
+                        </div>
+                        <div class="star-metric-item">
+                            <div class="star-metric-label">Average Price</div>
+                            <div class="star-metric-value" id="star-metric-avgprice">—</div>
+                        </div>
+                        <div class="star-metric-item">
+                            <div class="star-metric-label">Total Turnover</div>
+                            <div class="star-metric-value" id="star-metric-turnover">—</div>
+                        </div>
+                    </div>
+
+                    <!-- 2x2 ANALYTICS GRID -->
+                    <div class="star-analytics-grid">
+                        <!-- Top Left: Revenue Analytics (Bar Chart) -->
+                        <div class="star-card">
+                            <div class="star-card-head">
+                                <h3 class="star-card-title">Revenue Analytics</h3>
+                                <select class="select-filter star-card-select" id="star-revenue-range" onchange="onStarRevenueRangeChange()">
+                                    <option value="month">This month</option>
+                                    <option value="quarter">This quarter</option>
+                                    <option value="year">This year</option>
+                                </select>
+                            </div>
+                            <div class="star-chart-container" style="height: 280px; position: relative;">
+                                <canvas id="star-revenue-bar-canvas" aria-label="Revenue Analytics Bar Chart"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- Top Right: Sales Analytics (Donut Chart) -->
+                        <div class="star-card">
+                            <div class="star-card-head">
+                                <h3 class="star-card-title">Sales Analytics</h3>
+                                <select class="select-filter star-card-select" id="star-sales-range" onchange="onStarSalesRangeChange()">
+                                    <option value="month">This month</option>
+                                    <option value="quarter">This quarter</option>
+                                </select>
+                            </div>
+                            <div class="star-donut-wrap" style="display: flex; align-items: center; justify-content: space-around; height: 280px;">
+                                <div style="width: 200px; height: 200px; position: relative;">
+                                    <canvas id="star-sales-donut-canvas" aria-label="Sales Analytics Donut Chart"></canvas>
+                                </div>
+                                <div class="star-donut-legend" id="star-donut-legend">
+                                    <div class="star-legend-row"><span class="star-legend-dot" style="background:#2563eb;"></span> Incorporation (35%)</div>
+                                    <div class="star-legend-row"><span class="star-legend-dot" style="background:#38bdf8;"></span> Compliance (45%)</div>
+                                    <div class="star-legend-row"><span class="star-legend-dot" style="background:#0ea5e9;"></span> Address (20%)</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Bottom Left: Sales Trend (Dual Smooth Area Line Chart) -->
+                        <div class="star-card">
+                            <div class="star-card-head">
+                                <div>
+                                    <h3 class="star-card-title">Sales Trend</h3>
+                                    <div class="star-trend-legend" style="display:flex; gap:16px; margin-top:6px; font-size:0.78rem; font-weight:600;">
+                                        <span style="color:#2563eb;">● Online Payment</span>
+                                        <span style="color:#38bdf8;">● Offline Sales</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="star-chart-container" style="height: 260px; position: relative; margin-top:12px;">
+                                <canvas id="star-trend-area-canvas" aria-label="Sales Trend Area Chart"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- Bottom Right: Top Performers & Team Leaders -->
+                        <div class="star-card">
+                            <div class="star-card-head">
+                                <h3 class="star-card-title">Top Performer</h3>
+                            </div>
+                            <div class="star-performers-list" id="star-performers-list">
+                                <div class="star-performer-item">
+                                    <img src="/static/img/apple-touch-icon.png" class="star-performer-avatar" alt="Eleanor Finch">
+                                    <div class="star-performer-info">
+                                        <div class="star-performer-name">Eleanor Finch</div>
+                                        <div class="star-performer-email">eleanor.finch@brixenconsultant.co.uk</div>
+                                    </div>
+                                    <span class="status-badge active">Senior Manager</span>
+                                </div>
+                                <div class="star-performer-item">
+                                    <img src="/static/img/apple-touch-icon.png" class="star-performer-avatar" alt="Marcus Sterling">
+                                    <div class="star-performer-info">
+                                        <div class="star-performer-name">Marcus Sterling</div>
+                                        <div class="star-performer-email">marcus.sterling@brixenconsultant.co.uk</div>
+                                    </div>
+                                    <span class="status-badge info">Orders Lead</span>
+                                </div>
+                                <div class="star-performer-item">
+                                    <img src="/static/img/apple-touch-icon.png" class="star-performer-avatar" alt="Sophia Montgomery">
+                                    <div class="star-performer-info">
+                                        <div class="star-performer-name">Sophia Montgomery</div>
+                                        <div class="star-performer-email">sophia.m@brixenconsultant.co.uk</div>
+                                    </div>
+                                    <span class="status-badge info">Compliance Specialist</span>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1026,9 +1161,14 @@
                             <h1>Admin Orders Manager</h1>
                             <p>Every website and CRM order is here. After a customer asks for a change, open that order and update company name, email, director, address, package, or price.</p>
                         </div>
-                        <button class="btn-primary" onclick="openManualOrderModal()">
-                            <i data-lucide="plus-circle"></i> Create manual order
-                        </button>
+                        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                            <button class="btn-primary" onclick="openUniversalOrderWizard()">
+                                <i data-lucide="plus-circle"></i> Create Order
+                            </button>
+                            <button class="btn-secondary" onclick="openManualOrderModal()">
+                                <i data-lucide="file-plus"></i> Quick CRM Order
+                            </button>
+                        </div>
                     </div>
 
                     <div class="stats-grid orders-stats" id="adm-orders-stats">
@@ -1037,7 +1177,12 @@
                         <div class="stat-card"><div class="stat-info"><div class="label">In Progress</div><div class="value" id="adm-ord-stat-progress">—</div></div></div>
                         <div class="stat-card"><div class="stat-info"><div class="label">Completed</div><div class="value" id="adm-ord-stat-completed">—</div></div></div>
                         <div class="stat-card" data-admin-revenue hidden><div class="stat-info"><div class="label">Total Revenue</div><div class="value" id="adm-ord-stat-revenue">—</div></div></div>
-                        <div class="stat-card"><div class="stat-info"><div class="label">This Month</div><div class="value" id="adm-ord-stat-month">—</div></div></div>
+                    </div>
+
+                    <div style="display:flex; gap:8px; margin:16px 0 12px 0;" id="admin-orders-client-type-tabs">
+                        <button type="button" class="badge active" id="tab-orders-all" onclick="setAdminOrderClientTypeFilter('All')" style="cursor:pointer; border:1px solid var(--color-border); padding:8px 16px; font-size:0.82rem; font-weight:700; background:var(--color-primary); color:#FFFFFF;">All Orders</button>
+                        <button type="button" class="badge" id="tab-orders-customer" onclick="setAdminOrderClientTypeFilter('Customer')" style="cursor:pointer; border:1px solid var(--color-border); padding:8px 16px; font-size:0.82rem; font-weight:700; background:var(--color-surface); color:var(--color-text-primary);">Customers</button>
+                        <button type="button" class="badge" id="tab-orders-b2b" onclick="setAdminOrderClientTypeFilter('B2B')" style="cursor:pointer; border:1px solid var(--color-border); padding:8px 16px; font-size:0.82rem; font-weight:700; background:var(--color-surface); color:var(--color-text-primary);">B2B Clients</button>
                     </div>
 
                     <div class="orders-filter-row orders-filter-toolbar">
@@ -1185,9 +1330,9 @@
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>Customers &amp; New Signups</h1>
-                            <p>Website registrations appear here automatically. Newest accounts are listed first. Use Create User for a CRM-only account.</p>
+                            <p>Website registrations appear here automatically. Newest accounts are listed first. Use Create Customer for a CRM account.</p>
                         </div>
-                        <button type="button" class="btn-primary btn-create-user" onclick="openCreateUserModal()" style="display:none;"><i data-lucide="user-plus"></i> Create User</button>
+                        <button type="button" class="btn-primary btn-create-user" id="btn-create-customer-page" onclick="openCreateCustomerModal()"><i data-lucide="user-plus"></i> Create Customer</button>
                     </div>
                     <div class="orders-filter-row orders-filter-toolbar">
                         <div class="filter-group" style="flex-wrap:wrap; width:100%;">
@@ -1203,12 +1348,14 @@
                                 <option value="30">Last 30 days</option>
                             </select>
                             <span id="adm-customers-count" style="font-size:0.8rem; color:#64748b; font-weight:600;"></span>
+                            <button type="button" id="btn-delete-selected-customers" class="btn-secondary" style="display:none; color:#dc2626; border-color:#fca5a5; background:#fef2f2; font-weight:600; padding:6px 12px; font-size:0.85rem;" onclick="deleteSelectedCustomers()"><i data-lucide="trash-2"></i> Delete Selected (<span id="selected-customers-count">0</span>)</button>
                         </div>
                     </div>
                     <div class="data-table-container customers-table-wrap">
                         <table class="data-table">
                             <thead>
                                 <tr>
+                                    <th style="width:40px; text-align:center;"><input type="checkbox" id="chk-select-all-customers" onchange="toggleSelectAllCustomers(this)"></th>
                                     <th>Customer Name</th>
                                     <th>Email</th>
                                     <th>Signed up</th>
@@ -1352,20 +1499,58 @@
                     <!-- UPLOAD CONTAINER CARD -->
                     <div class="modal-card" style="max-width:100%; margin:0 0 24px 0; padding:24px;">
                         <form id="intake-upload-form" onsubmit="submitSmartIntakeForm(event)">
-                            <div id="intake-drop-zone" class="intake-drop-zone" ondragover="onIntakeDragOver(event)" ondragleave="onIntakeDragLeave(event)" ondrop="onIntakeDrop(event)" onclick="document.getElementById('intake-files-input').click()">
+                            <!-- DOCUMENT CATEGORY FILTER CHECKBOXES BAR -->
+                            <div style="margin-bottom:16px; padding:14px 18px; background:var(--color-surface-soft, #f8fafc); border:1px solid var(--border-color, #e2e8f0); border-radius:10px;">
+                                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:10px;">
+                                    <label style="font-size:0.85rem; font-weight:700; color:var(--text-primary, #0f172a); display:flex; align-items:center; gap:6px;">
+                                        <i data-lucide="filter" style="width:16px; height:16px; color:var(--color-primary, #2563eb);"></i>
+                                        Document Category Filter
+                                    </label>
+                                    <span id="intake-type-hint" style="font-size:0.75rem; color:var(--text-muted, #64748b); font-weight:500;">Tick target document categories to process, or leave all checked to auto-detect.</span>
+                                </div>
+                                <div id="intake-type-checkboxes" style="display:flex; gap:16px; flex-wrap:wrap; align-items:center;">
+                                    <label style="font-size:0.85rem; font-weight:600; color:var(--text-secondary, #334155); display:flex; align-items:center; gap:6px; cursor:pointer;">
+                                        <input type="checkbox" name="intake-doc-type" value="ID Card" checked onchange="onIntakeTypeCheckboxChange()">
+                                        <i data-lucide="user-check" style="width:16px; height:16px; color:#2563eb;"></i> Passports &amp; IDs
+                                    </label>
+                                    <label style="font-size:0.85rem; font-weight:600; color:var(--text-secondary, #334155); display:flex; align-items:center; gap:6px; cursor:pointer;">
+                                        <input type="checkbox" name="intake-doc-type" value="Bank Statement" checked onchange="onIntakeTypeCheckboxChange()">
+                                        <i data-lucide="landmark" style="width:16px; height:16px; color:#0284c7;"></i> Bank Statements
+                                    </label>
+                                    <label style="font-size:0.85rem; font-weight:600; color:var(--text-secondary, #334155); display:flex; align-items:center; gap:6px; cursor:pointer;">
+                                        <input type="checkbox" name="intake-doc-type" value="Company Document" checked onchange="onIntakeTypeCheckboxChange()">
+                                        <i data-lucide="building-2" style="width:16px; height:16px; color:#059669;"></i> Company Docs
+                                    </label>
+                                    <label style="font-size:0.85rem; font-weight:600; color:var(--text-secondary, #334155); display:flex; align-items:center; gap:6px; cursor:pointer;">
+                                        <input type="checkbox" name="intake-doc-type" value="Invoice" checked onchange="onIntakeTypeCheckboxChange()">
+                                        <i data-lucide="receipt" style="width:16px; height:16px; color:#d97706;"></i> Invoices &amp; Bills
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div id="intake-drop-zone" class="intake-drop-zone" ondragover="onIntakeDragOver(event)" ondragleave="onIntakeDragLeave(event)" ondrop="onIntakeDrop(event)">
                                 <div id="intake-drop-zone-empty">
                                     <i data-lucide="file-up" style="width:48px; height:48px; color:#475569; margin-bottom:12px;"></i>
-                                    <h3 style="margin:0 0 8px 0; font-size:1.1rem; font-weight:700; color:#1e293b;">Drag &amp; Drop Unorganized Files Here</h3>
+                                    <h3 style="margin:0 0 8px 0; font-size:1.1rem; font-weight:700; color:#1e293b;">Drag &amp; Drop Unorganized Files or Folders Here</h3>
                                     <p style="margin:0 0 16px 0; color:#64748b; font-size:0.875rem;">Supports bank statements, passports, CNIC, utility bills, company docs (PDF, PNG, JPG, DOCX).</p>
-                                    <button type="button" class="btn-secondary" style="pointer-events:none;"><i data-lucide="folder-open"></i> Browse Files</button>
+                                    <div style="display:flex; justify-content:center; gap:10px; flex-wrap:wrap;">
+                                        <button type="button" class="btn-secondary" onclick="event.stopPropagation(); document.getElementById('intake-files-input').click()"><i data-lucide="file"></i> Browse Files</button>
+                                        <button type="button" class="btn-secondary" onclick="event.stopPropagation(); document.getElementById('intake-folder-input').click()"><i data-lucide="folder-open"></i> Browse Folder</button>
+                                        <button type="button" class="btn-primary" onclick="event.stopPropagation(); openGoogleDrivePickerModal()"><i data-lucide="cloud"></i> Browse Google Drive</button>
+                                    </div>
                                 </div>
                                 <div id="intake-drop-zone-ready" style="display:none;">
                                     <i data-lucide="check-circle-2" style="width:48px; height:48px; color:#16a34a; margin-bottom:12px;"></i>
-                                    <h3 id="intake-drop-zone-ready-title" style="margin:0 0 8px 0; font-size:1.1rem; font-weight:700; color:#166534;">Documents uploaded successfully</h3>
-                                    <p style="margin:0 0 16px 0; color:#166534; font-size:0.875rem;">Files are queued in the browser. Click Process to OCR and file each document one-by-one (avoids gateway timeouts).</p>
-                                    <button type="button" class="btn-secondary" style="pointer-events:none; border-color:#86efac; color:#166534;"><i data-lucide="plus"></i> Add More Files</button>
+                                    <h3 id="intake-drop-zone-ready-title" style="margin:0 0 8px 0; font-size:1.1rem; font-weight:700; color:#166534;">Documents queued successfully</h3>
+                                    <p style="margin:0 0 16px 0; color:#166534; font-size:0.875rem;">Files are queued in the browser. Click Process to OCR and file each document one-by-one.</p>
+                                    <div style="display:flex; justify-content:center; gap:10px; flex-wrap:wrap;">
+                                        <button type="button" class="btn-secondary" style="border-color:#86efac; color:#166534;" onclick="event.stopPropagation(); document.getElementById('intake-files-input').click()"><i data-lucide="plus"></i> Add Files</button>
+                                        <button type="button" class="btn-secondary" style="border-color:#86efac; color:#166534;" onclick="event.stopPropagation(); document.getElementById('intake-folder-input').click()"><i data-lucide="folder-plus"></i> Add Folder</button>
+                                        <button type="button" class="btn-primary" onclick="event.stopPropagation(); openGoogleDrivePickerModal()"><i data-lucide="cloud"></i> Add Google Drive</button>
+                                    </div>
                                 </div>
                                 <input type="file" id="intake-files-input" multiple accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.zip,.txt" style="display:none;" onchange="onIntakeFilesSelected(event)">
+                                <input type="file" id="intake-folder-input" webkitdirectory directory multiple style="display:none;" onchange="onIntakeFilesSelected(event)">
                             </div>
 
                             <!-- UPLOADED DOCUMENTS QUEUE TABLE -->
@@ -1464,6 +1649,124 @@
                                     </tr>
                                 </thead>
                                 <tbody id="intake-filed-docs-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 14B. TEAM INCENTIVES & GRADES VIEW -->
+                <div id="view-admin-incentives" class="view-panel" style="display: none;">
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>Team Incentives &amp; Grades</h1>
+                            <div class="page-kicker">Admin Management</div>
+                            <p>Monthly staff performance leaderboard, SLA compliance, and incentive bonus eligibility.</p>
+                        </div>
+                        <div style="display:flex; align-items:center; gap:10px;">
+                            <input type="month" id="admin-incentives-month" class="select-filter" onchange="loadTeamIncentivesReport()" style="padding:6px 12px; font-size:0.85rem;">
+                            <button type="button" class="btn-secondary" onclick="loadTeamIncentivesReport()"><i data-lucide="rotate-cw"></i> Refresh</button>
+                        </div>
+                    </div>
+
+                    <div class="data-table-container" style="margin-top:16px;">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Rank</th>
+                                    <th>Team Member</th>
+                                    <th>Department</th>
+                                    <th>Assigned</th>
+                                    <th>Completed</th>
+                                    <th>SLA On-Time</th>
+                                    <th>Overdue</th>
+                                    <th>Grade</th>
+                                    <th>Incentive Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="admin-incentives-table">
+                                <tr><td colspan="9" style="text-align:center; padding:24px; color:var(--text-muted);">Loading team incentives report...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 14C. MY PERFORMANCE DASHBOARD VIEW -->
+                <div id="view-staff-dashboard" class="view-panel" style="display: none;">
+                    <div class="page-title-row">
+                        <div class="page-title-text">
+                            <h1>My Performance Dashboard</h1>
+                            <div class="page-kicker">Staff Portal</div>
+                            <p>Track your assigned tasks, monthly SLA, incentive grade, and performance metrics.</p>
+                        </div>
+                        <button type="button" class="btn-secondary" onclick="loadStaffDashboard()"><i data-lucide="rotate-cw"></i> Refresh</button>
+                    </div>
+
+                    <div class="stats-grid" style="margin-top:16px;">
+                        <div class="stat-card">
+                            <div class="stat-info">
+                                <div class="label">Incentive Grade</div>
+                                <div class="value" id="staff-metric-grade" style="color:var(--brand-primary);">Grade --</div>
+                                <span class="stat-chip success" id="staff-grade-status">Calculating performance...</span>
+                            </div>
+                            <div class="stat-icon purple"><i data-lucide="award"></i></div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-info">
+                                <div class="label">Pending Tasks</div>
+                                <div class="value" id="staff-metric-pending">0</div>
+                                <span class="stat-chip warning">Action required</span>
+                            </div>
+                            <div class="stat-icon orange"><i data-lucide="clock"></i></div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-info">
+                                <div class="label">In Progress</div>
+                                <div class="value" id="staff-metric-in-progress">0</div>
+                                <span class="stat-chip info">Active work</span>
+                            </div>
+                            <div class="stat-icon blue"><i data-lucide="loader"></i></div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-info">
+                                <div class="label">Completed (This Month)</div>
+                                <div class="value" id="staff-metric-completed">0</div>
+                                <span class="stat-chip success" id="staff-sla-rate">100% On-Time</span>
+                            </div>
+                            <div class="stat-icon green"><i data-lucide="check-circle-2"></i></div>
+                        </div>
+                    </div>
+
+                    <div id="staff-bonus-badge-wrap" style="margin:16px 0; padding:14px 18px; border-radius:10px; background:var(--color-primary-soft, #eff6ff); border:1px solid var(--color-primary-border, #bfdbfe); color:var(--text-primary);">
+                        <div style="font-weight:700; font-size:0.9rem; color:var(--color-primary, #2563eb); display:flex; align-items:center; gap:8px;">
+                            <i data-lucide="zap"></i> Incentive Eligibility &amp; SLA Status
+                        </div>
+                        <div id="staff-bonus-badge" style="font-size:0.85rem; color:var(--text-secondary); margin-top:4px; font-weight:600;">
+                            Standard Incentive Bonus Tier • Monthly SLA On-Time completion
+                        </div>
+                    </div>
+
+                    <div style="margin-top:20px;">
+                        <div class="tracker-section-header">
+                            <div>
+                                <h2>My Assigned Active Tasks</h2>
+                                <p>Tasks assigned to you requiring action or completion.</p>
+                            </div>
+                        </div>
+                        <div class="data-table-container" style="margin-top:12px;">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Task Title</th>
+                                        <th>Priority</th>
+                                        <th>Department</th>
+                                        <th>Due Date</th>
+                                        <th>Status</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="staff-my-tasks-table">
+                                    <tr><td colspan="6" style="text-align:center; padding:24px; color:var(--text-muted);">Loading your active tasks...</td></tr>
+                                </tbody>
                             </table>
                         </div>
                     </div>
@@ -2068,6 +2371,87 @@
         </div>
     </div>
 
+    <!-- DEDICATED CREATE CUSTOMER MODAL -->
+    <div id="modal-create-customer" class="modal-overlay" style="z-index:1150; display:none;" onclick="if(event.target===this) closeCreateCustomerModal()">
+        <div class="modal-card" style="max-width:540px; width:92%; padding:28px 32px; border-radius:18px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--color-border); padding-bottom:14px; margin-bottom:18px;">
+                <div>
+                    <h3 style="font-size:1.25rem; font-weight:800; color:var(--color-text-primary); margin:0;">Create Customer</h3>
+                    <p style="font-size:0.82rem; color:var(--color-text-muted); margin:4px 0 0 0;">Create a new customer account (Normal Customer or B2B Account).</p>
+                </div>
+                <button type="button" class="btn-close" onclick="closeCreateCustomerModal()"><i data-lucide="x"></i></button>
+            </div>
+
+            <div id="create-customer-error-banner" style="display:none; padding:10px 14px; border-radius:8px; background:var(--color-danger-soft); color:var(--color-danger); border:1px solid var(--color-danger-border); font-size:0.83rem; font-weight:600; margin-bottom:14px;" role="alert"></div>
+
+            <form id="form-create-customer" onsubmit="submitCreateCustomerForm(event)">
+                <div style="display:flex; flex-direction:column; gap:16px;">
+                    
+                    <!-- Customer Type Selection -->
+                    <div>
+                        <label style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary); display:block; margin-bottom:8px;">Customer Type *</label>
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                            <label style="background:var(--color-surface-soft); border:2px solid var(--color-primary); border-radius:10px; padding:12px; cursor:pointer; display:flex; flex-direction:column; gap:4px;" id="cust-type-card-normal">
+                                <div style="display:flex; align-items:center; gap:8px;">
+                                    <input type="radio" name="create_cust_type" value="Normal" checked onchange="onCustomerTypeCardChange('Normal')" style="accent-color:var(--color-primary);">
+                                    <strong style="font-size:0.88rem; color:var(--color-text-primary);">Normal Customer</strong>
+                                </div>
+                                <span style="font-size:0.75rem; color:var(--color-text-muted); margin-left:22px;">Standard retail/individual client. No B2B Client ID generated.</span>
+                            </label>
+
+                            <label style="background:var(--color-surface-soft); border:2px solid var(--color-border); border-radius:10px; padding:12px; cursor:pointer; display:flex; flex-direction:column; gap:4px;" id="cust-type-card-b2b">
+                                <div style="display:flex; align-items:center; gap:8px;">
+                                    <input type="radio" name="create_cust_type" value="B2B" onchange="onCustomerTypeCardChange('B2B')" style="accent-color:var(--color-primary);">
+                                    <strong style="font-size:0.88rem; color:var(--color-text-primary);">B2B Customer</strong>
+                                </div>
+                                <span style="font-size:0.75rem; color:var(--color-text-muted); margin-left:22px;">Corporate client. Generates unique B2B-XXXXXX ID.</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label for="create-cust-name" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Full Name *</label>
+                        <input type="text" id="create-cust-name" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 14px;" placeholder="e.g. Muhammad Ahmed" required>
+                    </div>
+
+                    <div>
+                        <label for="create-cust-email" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Email Address *</label>
+                        <input type="email" id="create-cust-email" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 14px;" placeholder="customer@example.com" required>
+                    </div>
+
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <div>
+                            <label for="create-cust-phone" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Phone Number</label>
+                            <input type="tel" id="create-cust-phone" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 14px;" placeholder="+44 7911 123456">
+                        </div>
+                        <div>
+                            <label for="create-cust-country" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Country</label>
+                            <input type="text" id="create-cust-country" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 14px;" value="United Kingdom">
+                        </div>
+                    </div>
+
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <div>
+                            <label for="create-cust-password" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Password *</label>
+                            <input type="password" id="create-cust-password" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 14px;" minlength="10" placeholder="Minimum 10 chars" required autocomplete="new-password">
+                        </div>
+                        <div>
+                            <label for="create-cust-password-confirm" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Confirm Password *</label>
+                            <input type="password" id="create-cust-password-confirm" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 14px;" minlength="10" placeholder="Repeat password" required autocomplete="new-password">
+                        </div>
+                    </div>
+                </div>
+
+                <div style="border-top:1px solid var(--color-border); padding-top:16px; margin-top:20px; display:flex; justify-content:flex-end; gap:10px;">
+                    <button type="button" class="btn-secondary" onclick="closeCreateCustomerModal()">Cancel</button>
+                    <button type="submit" class="btn-primary" id="btn-submit-create-cust">
+                        <i data-lucide="user-plus" style="width:16px; height:16px; margin-right:4px;"></i> Create Customer
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <div id="modal-staff-order" class="modal-overlay">
         <div class="modal-card" style="max-width:820px;">
             <div class="modal-header">
@@ -2140,6 +2524,52 @@
                     <div><span class="staff-order-field-label">Portal login</span><strong id="staff-order-portal-email">—</strong></div>
                 </div>
             </div>
+            <!-- SERVICE ACCESS CREDENTIALS CARD -->
+            <div id="staff-order-credentials-card" style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:14px; padding:18px; margin:16px 0;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                    <h4 class="staff-order-section-title" style="margin:0; display:flex; align-items:center; gap:6px;">
+                        <i data-lucide="key" style="width:16px; height:16px; color:var(--color-primary);"></i> Service Access Credentials
+                    </h4>
+                    <button type="button" class="btn-ghost" style="padding:2px 8px; font-size:0.75rem;" onclick="toggleStaffOrderCredentialsEdit()" id="btn-edit-credentials">Edit Credentials</button>
+                </div>
+
+                <!-- Display Mode -->
+                <div id="staff-order-credentials-display" style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                    <div>
+                        <span class="staff-order-field-label">Service Account Email</span>
+                        <div style="display:flex; align-items:center; gap:6px; margin-top:2px;">
+                            <strong id="disp-access-email" style="font-size:0.88rem; color:var(--color-text-primary);">None recorded</strong>
+                            <button type="button" class="icon-edit-btn" title="Copy Email" onclick="copyTextToClipboard(document.getElementById('disp-access-email').textContent)"><i data-lucide="copy" style="width:12px; height:12px;"></i></button>
+                        </div>
+                    </div>
+
+                    <div>
+                        <span class="staff-order-field-label">Email Password / Access Code</span>
+                        <div style="display:flex; align-items:center; gap:6px; margin-top:2px;">
+                            <span id="disp-access-password" style="font-family:monospace; font-size:0.9rem; font-weight:700; color:var(--color-text-primary);">••••••••</span>
+                            <button type="button" class="icon-edit-btn" title="Show / Hide Password" onclick="toggleDisplayPasswordVisibility('disp-access-password')"><i data-lucide="eye" id="eye-disp-access-password" style="width:12px; height:12px;"></i></button>
+                            <button type="button" class="icon-edit-btn" title="Copy Password" onclick="copyTextToClipboard(this.getAttribute('data-pass'))" id="btn-copy-pass"><i data-lucide="copy" style="width:12px; height:12px;"></i></button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Edit Mode -->
+                <div id="staff-order-credentials-editor" style="display:none; margin-top:10px;">
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <div>
+                            <label style="font-size:0.78rem; font-weight:700; color:var(--color-text-muted);">Service Email</label>
+                            <input type="email" id="edit-access-email" class="select-filter" style="width:100%; margin-top:4px;" placeholder="e.g. info@clientcompany.co.uk">
+                        </div>
+                        <div>
+                            <label style="font-size:0.78rem; font-weight:700; color:var(--color-text-muted);">Email Password</label>
+                            <input type="text" id="edit-access-password" class="select-filter" style="width:100%; margin-top:4px;" placeholder="Enter password / access code">
+                        </div>
+                    </div>
+                    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:10px;">
+                        <button type="button" class="btn-secondary" style="font-size:0.8rem; padding:6px 12px;" onclick="toggleStaffOrderCredentialsEdit(false)">Cancel</button>
+                        <button type="button" class="btn-primary" style="font-size:0.8rem; padding:6px 12px;" onclick="saveStaffOrderCredentials()">Save Credentials</button>
+                    </div>
+                </div>
             <div class="staff-order-section-head">
                 <div>
                     <h4 class="staff-order-section-title">Checkout form details</h4>
@@ -2166,6 +2596,7 @@
                 </div>
             </details>
         </div>
+    </div>
     </div>
 
     <div id="modal-delete-order" class="modal-overlay" style="z-index:1100;">
@@ -2439,80 +2870,441 @@
         </div>
     </div>
 
+    <!-- UNIVERSAL B2B ORDER CREATION WIZARD MODAL -->
+    <div id="modal-universal-order-wizard" class="modal-overlay" style="z-index:1150; display:none;" onclick="if(event.target===this) closeUniversalOrderWizard()">
+        <div class="modal-card" style="max-width:960px; width:94%; max-height:92vh; padding:28px 34px; border-radius:20px; display:flex; flex-direction:column; overflow:hidden;">
+            
+            <!-- WIZARD HEADER & PROGRESS STEPPER -->
+            <div style="border-bottom:1px solid var(--color-border); padding-bottom:16px; margin-bottom:16px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <div>
+                        <h3 style="font-size:1.3rem; font-weight:800; color:var(--color-text-primary); margin:0;" id="wizard-header-title">Create New Order</h3>
+                        <p style="font-size:0.82rem; color:var(--color-text-muted); margin:4px 0 0 0;" id="wizard-header-subtitle">Select customer, choose product, and configure order specifications.</p>
+                    </div>
+                    <button type="button" class="btn-close" onclick="closeUniversalOrderWizard()"><i data-lucide="x"></i></button>
+                </div>
+
+                <!-- 5-STEP WIZARD PROGRESS BAR -->
+                <div class="order-wizard-stepper" style="display:grid; grid-template-columns:repeat(5, 1fr); gap:8px; margin-top:16px;">
+                    <div class="wizard-step-pill active" id="wizard-step-pill-1" onclick="jumpToWizardStep(1)">
+                        <span class="step-num">1</span>
+                        <span class="step-text">Customer</span>
+                    </div>
+                    <div class="wizard-step-pill" id="wizard-step-pill-2" onclick="jumpToWizardStep(2)">
+                        <span class="step-num">2</span>
+                        <span class="step-text">Service</span>
+                    </div>
+                    <div class="wizard-step-pill" id="wizard-step-pill-3" onclick="jumpToWizardStep(3)">
+                        <span class="step-num">3</span>
+                        <span class="step-text">Details</span>
+                    </div>
+                    <div class="wizard-step-pill" id="wizard-step-pill-4" onclick="jumpToWizardStep(4)">
+                        <span class="step-num">4</span>
+                        <span class="step-text">Documents</span>
+                    </div>
+                    <div class="wizard-step-pill" id="wizard-step-pill-5" onclick="jumpToWizardStep(5)">
+                        <span class="step-num">5</span>
+                        <span class="step-text">Review</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ERROR ALERT -->
+            <div id="wizard-error-banner" style="display:none; padding:12px 16px; border-radius:10px; background:var(--color-danger-soft); color:var(--color-danger); border:1px solid var(--color-danger-border); font-size:0.85rem; font-weight:600; margin-bottom:14px;" role="alert"></div>
+
+            <!-- WIZARD STEP CONTAINER -->
+            <div style="flex:1; overflow-y:auto; padding-right:4px;" id="wizard-steps-body">
+                
+                <!-- STEP 1: SELECT CUSTOMER -->
+                <div id="wizard-step-1" class="wizard-step-pane">
+                    <div style="margin-bottom:14px;">
+                        <h4 style="font-size:1.05rem; font-weight:700; color:var(--color-text-primary); margin:0;">Select Customer</h4>
+                        <p style="font-size:0.82rem; color:var(--color-text-muted); margin:4px 0 0 0;">Search or select the customer placing this order.</p>
+                    </div>
+
+                    <div id="wizard-admin-customer-select-pane">
+                        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
+                            <div style="position:relative; flex:1; min-width:240px;">
+                                <input type="text" id="wizard-customer-search" class="select-filter" style="width:100%; padding-left:36px;" placeholder="Search customer by name, email, phone..." oninput="filterWizardCustomers()">
+                                <i data-lucide="search" style="position:absolute; left:12px; top:50%; transform:translateY(-50%); width:16px; height:16px; color:var(--color-placeholder);"></i>
+                            </div>
+                            <div id="wizard-customer-type-pills" style="display:flex; gap:6px;">
+                                <button type="button" class="badge active" id="pill-cust-all" onclick="setWizardCustomerTypeFilter('All')">All Customers</button>
+                                <button type="button" class="badge" id="pill-cust-normal" onclick="setWizardCustomerTypeFilter('Normal')">Normal Customers</button>
+                                <button type="button" class="badge" id="pill-cust-b2b" onclick="setWizardCustomerTypeFilter('B2B')">B2B Accounts</button>
+                            </div>
+                        </div>
+
+                        <div id="wizard-customers-grid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(270px, 1fr)); gap:14px; max-height:420px; overflow-y:auto; padding-right:4px;">
+                            <div style="text-align:center; padding:40px; color:var(--color-text-muted); grid-column:1/-1;">Loading Customers...</div>
+                        </div>
+                    </div>
+
+                    <div id="wizard-client-customer-summary-pane" style="display:none;">
+                        <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:14px; padding:20px; display:flex; align-items:center; justify-content:space-between;">
+                            <div>
+                                <span style="font-size:0.75rem; font-weight:700; text-transform:uppercase; color:var(--color-text-muted);" id="wizard-client-self-type-label">AUTHENTICATED CUSTOMER</span>
+                                <h4 style="font-size:1.15rem; font-weight:800; color:var(--color-text-primary); margin:4px 0 2px 0;" id="wizard-client-self-name">John Smith</h4>
+                                <div style="font-size:0.85rem; color:var(--color-text-secondary);" id="wizard-client-self-email">john@example.com</div>
+                            </div>
+                            <div id="wizard-client-self-b2b-wrap" style="display:none;">
+                                <span class="status-badge active" id="wizard-client-self-b2b-badge">B2B-000123</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- STEP 2: SELECT PRODUCT / SERVICE FROM CATALOG -->
+                <div id="wizard-step-2" class="wizard-step-pane" style="display:none;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
+                        <div style="position:relative; flex:1; min-width:240px;">
+                            <input type="text" id="wizard-product-search" class="select-filter" style="width:100%; padding-left:36px;" placeholder="Search products or services..." oninput="filterWizardCatalogProducts()">
+                            <i data-lucide="search" style="position:absolute; left:12px; top:50%; transform:translateY(-50%); width:16px; height:16px; color:var(--color-placeholder);"></i>
+                        </div>
+                        <div id="wizard-category-pills" style="display:flex; gap:6px; flex-wrap:wrap;">
+                            <!-- Category filter buttons injected via JS -->
+                        </div>
+                    </div>
+
+                    <div id="wizard-products-grid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:16px;">
+                        <div style="text-align:center; padding:40px; color:var(--color-text-muted); grid-column:1/-1;">Loading Services Catalog...</div>
+                    </div>
+                </div>
+
+                <!-- STEP 3: DYNAMIC PRODUCT ORDER FORM -->
+                <div id="wizard-step-3" class="wizard-step-pane" style="display:none;">
+                    
+                    <!-- Selected Product & Customer Header Card -->
+                    <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:14px; padding:16px 20px; margin-bottom:20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+                        <div>
+                            <span class="status-badge info" id="wizard-selected-cat">Incorporation</span>
+                            <h4 style="font-size:1.1rem; font-weight:800; color:var(--color-text-primary); margin:6px 0 2px 0;" id="wizard-selected-title">Company Formation Package</h4>
+                            <div style="font-size:0.82rem; color:var(--color-text-muted); margin:2px 0 0 0;" id="wizard-selected-customer-summary">Customer: John Smith (john@example.com)</div>
+                        </div>
+                        <div style="text-align:right;">
+                            <div style="font-size:1.35rem; font-weight:800; color:var(--color-primary);" id="wizard-selected-price">£45.00</div>
+                            <div style="font-size:0.75rem; color:var(--color-text-muted);" id="wizard-selected-est">Est: 24-48 Hours</div>
+                            <button type="button" class="btn-ghost" style="padding:2px 8px; font-size:0.75rem; margin-top:4px;" onclick="jumpToWizardStep(2)">Change Product</button>
+                        </div>
+                    </div>
+
+                    <!-- Dynamic Form Fields Container -->
+                    <div id="wizard-dynamic-fields-container" style="display:flex; flex-direction:column; gap:18px;">
+                        <!-- Dynamic fields rendered here -->
+                    </div>
+
+                    <!-- Repeatable Sections Container (Directors, Shareholders, etc. - ONLY if product config specifies it) -->
+                    <div id="wizard-repeatable-sections-container" style="display:flex; flex-direction:column; gap:20px; margin-top:20px;">
+                        <!-- Repeatable section cards rendered here -->
+                    </div>
+
+                    <!-- Service Access Credentials Section (Email & Password) -->
+                    <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:14px; padding:18px; margin-top:20px;">
+                        <h5 style="font-size:0.88rem; font-weight:700; color:var(--color-text-primary); margin:0 0 10px 0; display:flex; align-items:center; gap:6px;">
+                            <i data-lucide="key" style="width:16px; height:16px; color:var(--color-primary);"></i> Service Access Credentials (Email &amp; Password)
+                        </h5>
+                        <p style="font-size:0.78rem; color:var(--color-text-muted); margin:0 0 12px 0;">Record the service account email and password credentials for this order.</p>
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                            <div>
+                                <label for="wizard-access-email" style="font-size:0.8rem; font-weight:700; color:var(--color-text-primary);">Service Account Email</label>
+                                <input type="email" id="wizard-access-email" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 14px;" placeholder="e.g. info@clientcompany.co.uk" oninput="universalOrderWizardState.formValues['access_email'] = this.value">
+                            </div>
+                            <div>
+                                <label for="wizard-access-email-password" style="font-size:0.8rem; font-weight:700; color:var(--color-text-primary);">Email Password / Access Code</label>
+                                <div style="position:relative;">
+                                    <input type="password" id="wizard-access-email-password" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 38px 10px 14px;" placeholder="Enter password / access code" autocomplete="new-password" oninput="universalOrderWizardState.formValues['access_email_password'] = this.value">
+                                    <button type="button" class="btn-ghost" style="position:absolute; right:6px; top:50%; transform:translateY(-50%); padding:4px 6px;" onclick="toggleAccessPasswordVisibility('wizard-access-email-password')">
+                                        <i data-lucide="eye" id="eye-wizard-access-email-password" style="width:14px; height:14px;"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+
+                <!-- STEP 4: DOCUMENT REQUIREMENTS & UPLOADS -->
+                <div id="wizard-step-4" class="wizard-step-pane" style="display:none;">
+                    <div style="margin-bottom:16px;">
+                        <h4 style="font-size:1.05rem; font-weight:700; color:var(--color-text-primary); margin:0;">Upload Required &amp; Supporting Documents</h4>
+                        <p style="font-size:0.82rem; color:var(--color-text-muted); margin:4px 0 0 0;">Upload identity, address, or specification files required for this service.</p>
+                    </div>
+
+                    <div id="wizard-documents-checklist" style="display:flex; flex-direction:column; gap:14px;">
+                        <!-- Document checklists injected via JS -->
+                    </div>
+                </div>
+
+                <!-- STEP 5: ORDER REVIEW & AUTHORITATIVE SUMMARY -->
+                <div id="wizard-step-5" class="wizard-step-pane" style="display:none;">
+                    <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:16px; padding:24px; margin-bottom:20px;">
+                        <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:16px; border-bottom:1px solid var(--color-border); padding-bottom:16px; margin-bottom:16px;">
+                            <div>
+                                <span style="font-size:0.75rem; font-weight:700; text-transform:uppercase; color:var(--color-primary);" id="review-service-category">INCORPORATION</span>
+                                <h3 style="font-size:1.4rem; font-weight:800; color:var(--color-text-primary); margin:4px 0 2px 0;" id="review-service-name">UK Company Formation Package</h3>
+                                <p style="font-size:0.85rem; color:var(--color-text-muted); margin:0;" id="review-customer-identity">Customer: John Smith (john@example.com)</p>
+                            </div>
+                            <div style="text-align:right;">
+                                <div style="font-size:0.8rem; color:var(--color-text-muted); font-weight:600;">AUTHORITATIVE TOTAL</div>
+                                <div style="font-size:1.6rem; font-weight:800; color:var(--color-text-primary);" id="review-total-price">£54.00</div>
+                                <div style="font-size:0.75rem; color:var(--color-text-muted);" id="review-vat-breakdown">Subtotal £45.00 + VAT (20%) £9.00</div>
+                            </div>
+                        </div>
+
+                        <!-- Verification Checks Summary -->
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:18px;">
+                            <div style="background:var(--color-surface); border:1px solid var(--color-border); border-radius:10px; padding:12px 16px; display:flex; align-items:center; gap:10px;">
+                                <i data-lucide="check-circle" style="width:20px; height:20px; color:var(--color-success);" id="review-fields-check-icon"></i>
+                                <div>
+                                    <strong style="font-size:0.85rem; color:var(--color-text-primary);" id="review-fields-check-title">Product Information Complete</strong>
+                                    <div style="font-size:0.75rem; color:var(--color-text-muted);" id="review-fields-check-sub">All required specifications entered</div>
+                                </div>
+                            </div>
+                            <div style="background:var(--color-surface); border:1px solid var(--color-border); border-radius:10px; padding:12px 16px; display:flex; align-items:center; gap:10px;">
+                                <i data-lucide="check-circle" style="width:20px; height:20px; color:var(--color-success);" id="review-docs-check-icon"></i>
+                                <div>
+                                    <strong style="font-size:0.85rem; color:var(--color-text-primary);" id="review-docs-check-title">Required Documents Uploaded</strong>
+                                    <div style="font-size:0.75rem; color:var(--color-text-muted);" id="review-docs-check-sub">2 of 2 required files attached</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Form Field Summary List -->
+                        <div style="background:var(--color-surface); border:1px solid var(--color-border); border-radius:12px; padding:16px;">
+                            <h5 style="font-size:0.85rem; font-weight:700; color:var(--color-text-primary); margin:0 0 12px 0;">Order Specifications Summary</h5>
+                            <div id="review-form-values-summary" style="display:grid; grid-template-columns:1fr 1fr; gap:10px; font-size:0.84rem;">
+                                <!-- Form values rendered here -->
+                            </div>
+                        </div>
+
+                        <div style="margin-top:16px;">
+                            <label for="wizard-order-notes" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Order Notes &amp; Special Instructions</label>
+                            <textarea id="wizard-order-notes" class="select-filter" style="width:100%; margin-top:4px; min-height:60px;" placeholder="Add any special instructions or staff notes..."></textarea>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- WIZARD FOOTER ACTIONS -->
+            <div style="border-top:1px solid var(--color-border); padding-top:16px; margin-top:16px; display:flex; justify-content:space-between; align-items:center;">
+                <button type="button" class="btn-ghost" id="wizard-btn-draft" onclick="saveUniversalOrderDraft()">
+                    <i data-lucide="bookmark" style="width:14px; height:14px; margin-right:4px;"></i> Save Draft
+                </button>
+                <div style="display:flex; gap:10px;">
+                    <button type="button" class="btn-secondary" id="wizard-btn-back" onclick="navigateWizardStep(-1)" style="display:none;">Back</button>
+                    <button type="button" class="btn-primary" id="wizard-btn-next" onclick="navigateWizardStep(1)">
+                        Continue <i data-lucide="arrow-right" style="width:14px; height:14px; margin-left:4px;"></i>
+                    </button>
+                    <button type="button" class="btn-primary" id="wizard-btn-submit" onclick="submitUniversalOrder()" style="display:none; background-color:var(--color-success) !important;">
+                        <i data-lucide="check" style="width:16px; height:16px; margin-right:6px;"></i> Submit Order
+                    </button>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
     <div id="modal-manual-order" class="modal-overlay" style="z-index:1100;">
-        <div class="modal-card" style="max-width:640px;">
-            <div class="modal-header">
+        <div class="modal-card" style="max-width:920px; width:94%; max-height:92vh; padding:32px 36px; border-radius:20px;">
+            <div class="modal-header" style="border-bottom:1px solid var(--color-border); padding-bottom:16px; margin-bottom:20px;">
                 <div>
-                    <h3>Create manual order</h3>
-                    <p style="font-size:0.8rem; color:#64748b;">For clients who did not sign up on the website. Portal login stays on the customer; company emails get the work notifications.</p>
+                    <h3 style="font-size:1.35rem; font-weight:800; color:var(--color-text-primary);">Create Manual Order &amp; Company Registration</h3>
+                    <p style="font-size:0.85rem; color:var(--color-text-muted); margin-top:4px;">Complete official company formation and registration details. Portal login stays on the client; work notifications go to the company email.</p>
                 </div>
                 <button type="button" class="btn-close" onclick="closeManualOrderModal()"><i data-lucide="x"></i></button>
             </div>
-            <form id="manual-order-form" onsubmit="submitManualOrderForm(event)">
-                <div id="manual-order-error" style="display:none; padding:10px; border-radius:8px; background:#fef2f2; color:#dc2626; font-size:0.8rem; font-weight:600;" role="alert"></div>
-                <div style="display:flex; flex-direction:column; gap:12px; margin-top:10px;">
-                    <div id="manual-order-client-section">
-                        <label style="font-size:0.8rem; font-weight:700;">Client</label>
-                        <div style="display:flex; gap:12px; margin-top:6px; flex-wrap:wrap;">
-                            <label style="font-size:0.8rem;"><input type="radio" name="manual-order-client-mode" value="existing" checked onchange="syncManualOrderClientMode()"> Existing client</label>
-                            <label style="font-size:0.8rem;"><input type="radio" name="manual-order-client-mode" value="new" onchange="syncManualOrderClientMode()"> New client</label>
-                        </div>
-                    </div>
-                    <div id="manual-order-existing-wrap">
-                        <label style="font-size:0.8rem; font-weight:700;">Select client</label>
-                        <select id="manual-order-client" class="select-filter" style="width:100%; margin-top:4px;" onchange="onManualOrderClientChange()"></select>
-                    </div>
-                    <div id="manual-order-new-wrap" hidden>
-                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
-                            <div>
-                                <label style="font-size:0.8rem; font-weight:700;">Client full name</label>
-                                <input type="text" id="manual-order-new-name" class="select-filter" style="width:100%; margin-top:4px;" autocomplete="off">
-                            </div>
-                            <div>
-                                <label style="font-size:0.8rem; font-weight:700;">Portal login email</label>
-                                <input type="email" id="manual-order-new-email" class="select-filter" style="width:100%; margin-top:4px;" autocomplete="off">
+            <form id="manual-order-form" onsubmit="submitManualOrderForm(event)" style="overflow-y:auto; max-height:calc(92vh - 140px); padding-right:6px;">
+                <div id="manual-order-error" style="display:none; padding:12px 16px; border-radius:10px; background:var(--color-danger-soft); color:var(--color-danger); border:1px solid var(--color-danger-border); font-size:0.85rem; font-weight:600; margin-bottom:16px;" role="alert"></div>
+
+                <div style="display:flex; flex-direction:column; gap:22px;">
+                    
+                    <!-- SECTION 1: CLIENT ACCOUNT & CONTACT DETAILS -->
+                    <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:14px; padding:20px;">
+                        <h4 style="font-size:0.95rem; font-weight:700; color:var(--color-text-primary); margin-bottom:12px; display:flex; align-items:center; gap:8px;">
+                            <i data-lucide="user-check" style="width:18px; height:18px; color:var(--color-primary);"></i> 1. Client Account &amp; Contact Details
+                        </h4>
+                        
+                        <div id="manual-order-client-section" style="margin-bottom:14px;">
+                            <label style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Client Type</label>
+                            <div style="display:flex; gap:18px; margin-top:8px;">
+                                <label style="font-size:0.85rem; font-weight:600; cursor:pointer; color:var(--color-text-primary);">
+                                    <input type="radio" name="manual-order-client-mode" value="existing" checked onchange="syncManualOrderClientMode()" style="accent-color:var(--color-primary);"> Existing client
+                                </label>
+                                <label style="font-size:0.85rem; font-weight:600; cursor:pointer; color:var(--color-text-primary);">
+                                    <input type="radio" name="manual-order-client-mode" value="new" onchange="syncManualOrderClientMode()" style="accent-color:var(--color-primary);"> New client signup
+                                </label>
                             </div>
                         </div>
-                    </div>
-                    <div>
-                        <label style="font-size:0.8rem; font-weight:700;">Company (optional)</label>
-                        <select id="manual-order-company" class="select-filter" style="width:100%; margin-top:4px;">
-                            <option value="">No company / create with name below</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label style="font-size:0.8rem; font-weight:700;">New company name (if needed)</label>
-                        <input type="text" id="manual-order-company-name" class="select-filter" style="width:100%; margin-top:4px;" placeholder="Leave blank if using an existing company" autocomplete="off">
-                    </div>
-                    <div>
-                        <label style="font-size:0.8rem; font-weight:700;">Company notification email *</label>
-                        <input type="email" id="manual-order-company-email" class="select-filter" style="width:100%; margin-top:4px;" required placeholder="Where all work emails for this company go" autocomplete="off">
-                    </div>
-                    <div>
-                        <div style="display:flex; justify-content:space-between; align-items:center;">
-                            <label style="font-size:0.8rem; font-weight:700;">Products / Services *</label>
-                            <button type="button" class="btn-secondary" style="padding:4px 8px; font-size:0.75rem;" onclick="addManualOrderProductLine()"><i data-lucide="plus" style="width:12px; height:12px; margin-right:4px;"></i>Add item</button>
+
+                        <div id="manual-order-existing-wrap">
+                            <label for="manual-order-client" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Select Client Account *</label>
+                            <select id="manual-order-client" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;" onchange="onManualOrderClientChange()"></select>
                         </div>
-                        <div id="manual-order-products-container" style="display:flex; flex-direction:column; gap:8px; margin-top:8px;">
+
+                        <div id="manual-order-new-wrap" hidden>
+                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+                                <div>
+                                    <label for="manual-order-new-name" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Client Full Name *</label>
+                                    <input type="text" id="manual-order-new-name" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;" placeholder="e.g. Alexander Vance" autocomplete="off">
+                                </div>
+                                <div>
+                                    <label for="manual-order-new-email" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Portal Login Email *</label>
+                                    <input type="email" id="manual-order-new-email" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;" placeholder="client@example.com" autocomplete="off">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- SECTION 2: COMPANY FORMATION & REGISTRATION DETAILS -->
+                    <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:14px; padding:20px;">
+                        <h4 style="font-size:0.95rem; font-weight:700; color:var(--color-text-primary); margin-bottom:14px; display:flex; align-items:center; gap:8px;">
+                            <i data-lucide="building-2" style="width:18px; height:18px; color:var(--color-primary);"></i> 2. Company Formation &amp; Registration Details
+                        </h4>
+
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:14px;">
+                            <div>
+                                <label for="manual-order-company" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Existing Company (Optional)</label>
+                                <select id="manual-order-company" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;">
+                                    <option value="">No company / create with details below</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="manual-order-company-name" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Company Registered Name</label>
+                                <input type="text" id="manual-order-company-name" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;" placeholder="e.g. BRIXEN CONSULTANTS LTD" autocomplete="off">
+                            </div>
+                        </div>
+
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:14px;">
+                            <div>
+                                <label for="manual-order-company-type" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Company Entity Type</label>
+                                <select id="manual-order-company-type" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;">
+                                    <option value="Private Limited Company by Shares (LTD)">Private Limited Company by Shares (LTD)</option>
+                                    <option value="Limited Liability Partnership (LLP)">Limited Liability Partnership (LLP)</option>
+                                    <option value="Public Limited Company (PLC)">Public Limited Company (PLC)</option>
+                                    <option value="Company Limited by Guarantee">Company Limited by Guarantee</option>
+                                    <option value="Sole Trader / Business Partnership">Sole Trader / Business Partnership</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="manual-order-sic-code" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">SIC Code / Business Activity</label>
+                                <select id="manual-order-sic-code" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;">
+                                    <option value="62020 - Information technology consultancy activities">62020 - Information technology consultancy activities</option>
+                                    <option value="70229 - Management consultancy activities other than financial management">70229 - Management consultancy activities</option>
+                                    <option value="68209 - Letting and operating of own or leased real estate">68209 - Real estate &amp; property letting</option>
+                                    <option value="47910 - Retail sale via mail order houses or via Internet">47910 - E-Commerce / Online Retail</option>
+                                    <option value="82990 - Other business support service activities n.e.c.">82990 - General Business Support Services</option>
+                                    <option value="Other">Other Business Activity</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:14px;">
+                            <div>
+                                <label for="manual-order-company-email" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Company Work Notification Email *</label>
+                                <input type="email" id="manual-order-company-email" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;" required placeholder="contact@company.co.uk" autocomplete="off">
+                            </div>
+                            <div>
+                                <label for="manual-order-company-phone" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Company Contact Phone</label>
+                                <input type="text" id="manual-order-company-phone" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;" placeholder="+44 20 7946 0912" autocomplete="off">
+                            </div>
+                        </div>
+
+                        <div>
+                            <label style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Registered Office Address</label>
+                            <div style="display:grid; grid-template-columns:2fr 1fr 1fr; gap:12px; margin-top:6px;">
+                                <input type="text" id="manual-order-reg-address" class="select-filter" style="font-size:0.88rem; padding:10px 14px;" placeholder="Address Line 1 (e.g. 128 City Road)" autocomplete="off">
+                                <input type="text" id="manual-order-reg-city" class="select-filter" style="font-size:0.88rem; padding:10px 14px;" placeholder="City (e.g. London)" autocomplete="off">
+                                <input type="text" id="manual-order-reg-postcode" class="select-filter" style="font-size:0.88rem; padding:10px 14px;" placeholder="Postcode (e.g. EC1V 2NX)" autocomplete="off">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- SECTION 3: DIRECTOR & OWNER DETAILS -->
+                    <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:14px; padding:20px;">
+                        <h4 style="font-size:0.95rem; font-weight:700; color:var(--color-text-primary); margin-bottom:14px; display:flex; align-items:center; gap:8px;">
+                            <i data-lucide="shield-check" style="width:18px; height:18px; color:var(--color-primary);"></i> 3. Director &amp; Officer Information
+                        </h4>
+
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:14px;">
+                            <div>
+                                <label for="manual-order-owner-name" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Director / Owner Full Name</label>
+                                <input type="text" id="manual-order-owner-name" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;" placeholder="e.g. Eleanor Finch" autocomplete="off">
+                            </div>
+                            <div>
+                                <label for="manual-order-director-phone" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Director Direct Phone</label>
+                                <input type="text" id="manual-order-director-phone" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;" placeholder="+44 7700 900077" autocomplete="off">
+                            </div>
+                        </div>
+
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+                            <div>
+                                <label for="manual-order-director-nationality" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Director Nationality</label>
+                                <input type="text" id="manual-order-director-nationality" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;" placeholder="e.g. British" value="British" autocomplete="off">
+                            </div>
+                            <div>
+                                <label for="manual-order-director-residence" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Country of Residence</label>
+                                <input type="text" id="manual-order-director-residence" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;" placeholder="e.g. United Kingdom" value="United Kingdom" autocomplete="off">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- SECTION 4: PRODUCTS, PRICING & PAYMENT -->
+                    <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:14px; padding:20px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+                            <h4 style="font-size:0.95rem; font-weight:700; color:var(--color-text-primary); display:flex; align-items:center; gap:8px;">
+                                <i data-lucide="shopping-bag" style="width:18px; height:18px; color:var(--color-primary);"></i> 4. Ordered Products, Pricing &amp; Payment Mode *
+                            </h4>
+                            <button type="button" class="btn-secondary" style="padding:6px 12px; font-size:0.82rem; display:flex; align-items:center; gap:6px;" onclick="addManualOrderProductLine()">
+                                <i data-lucide="plus" style="width:14px; height:14px;"></i> Add Product / Service
+                            </button>
+                        </div>
+
+                        <div id="manual-order-products-container" style="display:flex; flex-direction:column; gap:10px; margin-bottom:16px;">
                             <!-- Products injected here via JS -->
                         </div>
-                        <div style="text-align:right; margin-top:8px; font-weight:700; font-size:0.9rem; color:#0f172a;">
-                            Total: £<span id="manual-order-total-price">0.00</span>
-                        </div>
                         <datalist id="manual-order-service-list"></datalist>
+
+                        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; align-items:center; margin-top:14px; padding-top:14px; border-top:1px solid var(--color-border);">
+                            <div>
+                                <label for="manual-order-payment-mode" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Payment Channel</label>
+                                <select id="manual-order-payment-mode" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:8px 12px;">
+                                    <option value="Website Checkout">Website Checkout</option>
+                                    <option value="Bank Transfer">Bank Transfer</option>
+                                    <option value="Invoice">Invoice</option>
+                                    <option value="Manual CRM" selected>Manual CRM Entry</option>
+                                    <option value="Card Payment">Card Payment</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="manual-order-initial-status" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Initial Status</label>
+                                <select id="manual-order-initial-status" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:8px 12px;">
+                                    <option value="Processing" selected>Processing</option>
+                                    <option value="Pending Verification">Pending Verification</option>
+                                    <option value="Pending">Pending</option>
+                                    <option value="In Progress">In Progress</option>
+                                    <option value="Completed">Completed</option>
+                                </select>
+                            </div>
+                            <div style="text-align:right;">
+                                <div style="font-size:0.8rem; color:var(--color-text-muted); font-weight:600; text-transform:uppercase;">Total Amount Inc. VAT</div>
+                                <div style="font-size:1.4rem; font-weight:800; color:var(--color-text-primary); margin-top:2px;">
+                                    £<span id="manual-order-total-price">0.00</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style="margin-top:14px;">
+                            <label for="manual-order-notes" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Internal Notes &amp; Special Instructions</label>
+                            <textarea id="manual-order-notes" class="select-filter" style="width:100%; margin-top:6px; min-height:64px; font-size:0.88rem; padding:10px 14px;" placeholder="Add internal notes or special customer instructions..."></textarea>
+                        </div>
                     </div>
-                    <div>
-                        <label style="font-size:0.8rem; font-weight:700;">Owner / director name</label>
-                        <input type="text" id="manual-order-owner-name" class="select-filter" style="width:100%; margin-top:4px;" autocomplete="off">
-                    </div>
-                    <div>
-                        <label style="font-size:0.8rem; font-weight:700;">Notes</label>
-                        <textarea id="manual-order-notes" class="select-filter" style="width:100%; margin-top:4px; min-height:60px;" placeholder="Optional staff notes"></textarea>
-                    </div>
+
                 </div>
-                <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:16px;">
-                    <button type="button" class="btn-secondary" onclick="closeManualOrderModal()">Cancel</button>
-                    <button type="submit" class="btn-primary" id="manual-order-submit">Create order</button>
+
+                <div style="display:flex; justify-content:flex-end; gap:12px; margin-top:24px; padding-top:16px; border-top:1px solid var(--color-border);">
+                    <button type="button" class="btn-secondary" style="padding:10px 20px; font-size:0.9rem;" onclick="closeManualOrderModal()">Cancel</button>
+                    <button type="submit" class="btn-primary" id="manual-order-submit" style="padding:10px 28px; font-size:0.9rem; font-weight:700;">Create Order &amp; Record Registration</button>
                 </div>
             </form>
         </div>
@@ -2999,7 +3791,45 @@
         </div>
     </div>
 
+    <!-- GOOGLE DRIVE IMPORT MODAL -->
+    <div id="modal-google-drive-picker" class="modal-overlay" style="z-index:1100;">
+        <div class="modal-card" style="max-width:540px;">
+            <div class="modal-header">
+                <div>
+                    <h3 style="display:flex; align-items:center; gap:8px; margin:0;">
+                        <i data-lucide="cloud" style="color:var(--color-primary, #2563eb);"></i> Import from Google Drive
+                    </h3>
+                    <p style="font-size:0.8rem; color:var(--text-muted, #64748b); margin-top:4px;">Paste a Google Drive folder or file share link to import documents into Smart Intake.</p>
+                </div>
+                <button type="button" class="btn-close" onclick="closeGoogleDrivePickerModal()"><i data-lucide="x"></i></button>
+            </div>
+            <form onsubmit="submitGoogleDriveImport(event)">
+                <div id="gdrive-import-error" class="dash-banner-error" style="display:none; margin-bottom:12px;" role="alert"></div>
+                <div style="display:flex; flex-direction:column; gap:12px;">
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700; color:var(--text-primary);">Google Drive Shared URL / Link *</label>
+                        <input type="url" id="gdrive-link-input" class="select-filter" style="width:100%; margin-top:4px;" placeholder="https://drive.google.com/drive/folders/... or file link" required autocomplete="off">
+                    </div>
+                    <div>
+                        <label style="font-size:0.8rem; font-weight:700; color:var(--text-primary);">Document Category Override (Optional)</label>
+                        <select id="gdrive-category-override" class="select-filter" style="width:100%; margin-top:4px;">
+                            <option value="">Auto-Detect Category</option>
+                            <option value="ID Card">Passports &amp; IDs</option>
+                            <option value="Bank Statement">Bank Statements</option>
+                            <option value="Company Document">Company Docs</option>
+                            <option value="Invoice">Invoices &amp; Bills</option>
+                        </select>
+                    </div>
+                </div>
+                <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:20px;">
+                    <button type="button" class="btn-secondary" onclick="closeGoogleDrivePickerModal()">Cancel</button>
+                    <button type="submit" class="btn-primary" id="btn-gdrive-submit"><i data-lucide="download-cloud"></i> Import Documents</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <div id="global-search-results" class="global-search-results" hidden></div>
-    <script src="/static/js/app.js?v=210.0" defer></script>
+    <script src="/static/js/app.js?v=1300.0" defer></script>
 </body>
 </html>

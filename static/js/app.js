@@ -3,6 +3,18 @@
    ==================================================== */
 
 let currentUser = null;
+function getCurrentUser() {
+    if (typeof currentUser !== 'undefined' && currentUser) return currentUser;
+    if (typeof window !== 'undefined' && window.currentUser) return window.currentUser;
+    if (typeof readCachedAuthUser === 'function') {
+        const cached = readCachedAuthUser();
+        if (cached) {
+            currentUser = cached;
+            return cached;
+        }
+    }
+    return null;
+}
 let activeView = 'login';
 let activeTicketId = null;
 let adminChart = null;
@@ -405,10 +417,103 @@ function safeCreateIcons() {
     }
 })();
 
+let currentTheme = localStorage.getItem('brixen_theme') || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+
+function initThemeSystem() {
+    applyThemeUI(currentTheme);
+    if (window.matchMedia) {
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+            if (!localStorage.getItem('brixen_theme')) {
+                setTheme(e.matches ? 'dark' : 'light', false);
+            }
+        });
+    }
+}
+
+function applyThemeUI(theme) {
+    currentTheme = theme;
+    document.documentElement.setAttribute('data-theme', theme);
+    const btn = document.getElementById('theme-toggle-btn');
+    const icon = document.getElementById('theme-toggle-icon');
+    const text = document.getElementById('theme-toggle-text');
+    
+    if (theme === 'dark') {
+        if (text) text.textContent = 'Dark';
+        if (icon) icon.setAttribute('data-lucide', 'moon');
+        if (btn) btn.setAttribute('title', 'Switch to Light mode (currently Dark)');
+    } else {
+        if (text) text.textContent = 'Light';
+        if (icon) icon.setAttribute('data-lucide', 'sun');
+        if (btn) btn.setAttribute('title', 'Switch to Dark mode (currently Light)');
+    }
+    requestAnimationFrame(() => safeCreateIcons());
+    updateChartsTheme(theme);
+}
+
+async function setTheme(theme, save = true) {
+    if (!['light', 'dark'].includes(theme)) return;
+    applyThemeUI(theme);
+    if (save) {
+        localStorage.setItem('brixen_theme', theme);
+        if (currentUser) {
+            try {
+                fetch('/api/user/preferences', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'same-origin',
+                    body: JSON.stringify({ theme: theme })
+                }).catch(() => {});
+            } catch (e) {}
+        }
+    }
+}
+
+function toggleTheme() {
+    const nextTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    setTheme(nextTheme, true);
+}
+
+function updateChartsTheme(theme) {
+    if (typeof Chart === 'undefined') return;
+    const isDark = theme === 'dark';
+    const gridColor = isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)';
+    const textColor = isDark ? '#94a3b8' : '#64748b';
+
+    try {
+        Chart.defaults.color = textColor;
+        if (Chart.defaults.scale && Chart.defaults.scale.grid) {
+            Chart.defaults.scale.grid.color = gridColor;
+        }
+        if (Chart.instances) {
+            Object.keys(Chart.instances).forEach(key => {
+                const chart = Chart.instances[key];
+                if (!chart || !chart.options) return;
+                if (chart.options.scales) {
+                    Object.keys(chart.options.scales).forEach(scaleKey => {
+                        const scale = chart.options.scales[scaleKey];
+                        if (scale.grid) scale.grid.color = gridColor;
+                        if (scale.ticks) scale.ticks.color = textColor;
+                    });
+                }
+                if (chart.options.plugins && chart.options.plugins.legend && chart.options.plugins.legend.labels) {
+                    chart.options.plugins.legend.labels.color = textColor;
+                }
+                chart.update('none');
+            });
+        }
+    } catch (err) {}
+}
+
 // Initialize Application on Page Load
 document.addEventListener('DOMContentLoaded', async () => {
+    initThemeSystem();
     try {
         await checkAuth();
+        if (currentUser && currentUser.theme_preference && ['light', 'dark'].includes(currentUser.theme_preference)) {
+            if (!localStorage.getItem('brixen_theme')) {
+                setTheme(currentUser.theme_preference, false);
+            }
+        }
     } catch (err) {
         console.error('Auth check error:', err);
         // Keep any cached session on boot errors — never force logout on refresh.
@@ -2045,7 +2150,10 @@ function renderRegisteredCompanyCard(company, isAdmin) {
                 <div class="portfolio-card-icon" aria-hidden="true"><i data-lucide="building-2"></i></div>
                 <div class="portfolio-card-titles">
                     <h3>${escapeHtml(company.name || 'Company')}</h3>
-                    <p>${escapeHtml(company.company_number || '—')}</p>
+                    <p style="display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:2px;">
+                        <span>#${escapeHtml(company.company_number || '—')}</span>
+                        ${company.b2b_id ? `<span class="b2b-badge">${escapeHtml(company.b2b_id)}</span>` : ''}
+                    </p>
                     ${(() => {
                         const names = portfolioDirectorNames(company);
                         if (!isRegisteredCompany(company) || !names.length) return '';
@@ -2117,6 +2225,8 @@ function companyMatchesAdminSearch(company, query) {
     const hay = [
         company && company.name,
         company && company.company_number,
+        company && company.b2b_id,
+        company && company.client_type,
         company && company.director,
         company && company.reg_office,
         company && company.package,
@@ -4784,6 +4894,173 @@ function renderAdminOrderStatChart(payload) {
     }));
 }
 
+let starBarChart = null;
+let starDonutChart = null;
+let starTrendChart = null;
+
+function switchStarDashTab(tabName) {
+    document.querySelectorAll('.star-dash-tabs .star-tab').forEach(b => {
+        b.classList.remove('active');
+        if (b.textContent.toLowerCase().includes(tabName)) b.classList.add('active');
+    });
+}
+
+function exportStarDashSummary() {
+    window.print();
+}
+
+function onStarDashboardFilterChange() {
+    loadAdminDashboard();
+}
+
+function onStarRevenueRangeChange() {
+    loadAdminDashboard();
+}
+
+function onStarSalesRangeChange() {
+    loadAdminDashboard();
+}
+
+function renderStarAdminDashboardCharts(data) {
+    const activeUser = getCurrentUser();
+    const userNameEl = document.getElementById('star-user-name');
+    if (userNameEl && activeUser) {
+        userNameEl.textContent = activeUser.full_name || 'Admin';
+    }
+    const greetingTitle = document.getElementById('star-greeting-title');
+    if (greetingTitle) {
+        const hour = new Date().getHours();
+        const timeOfDay = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening';
+        const name = activeUser ? (activeUser.full_name || 'Admin') : 'Admin';
+        greetingTitle.innerHTML = `${timeOfDay}, <span>${escapeHtml(name)}</span>`;
+    }
+
+    const dateLabel = document.getElementById('star-current-date-label');
+    if (dateLabel) {
+        const d = new Date();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        dateLabel.textContent = `${month}/${day}/${d.getFullYear()}`;
+    }
+
+    const stats = (data && data.stats) || {};
+    const totalSales = stats.total_orders || 0;
+    const totalRevRaw = typeof stats.total_revenue === 'number' ? stats.total_revenue : parseFloat(String(stats.total_revenue || '0').replace(/[^0-9.]/g, '') || '0');
+    const totalCust = stats.total_customers || 0;
+    const avgPrice = totalSales > 0 ? (totalRevRaw / totalSales) : 0;
+
+    const setVal = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = val;
+    };
+
+    setVal('star-metric-sales', totalSales.toLocaleString());
+    setVal('star-metric-revenue', `£${totalRevRaw.toFixed(2)}`);
+    setVal('star-metric-customers', totalCust.toLocaleString());
+    setVal('star-metric-avgprice', `£${avgPrice.toFixed(2)}`);
+    setVal('star-metric-turnover', `£${(totalRevRaw * 1.15).toFixed(2)}`);
+
+    if (typeof Chart !== 'function') return;
+
+    // 1. Revenue Analytics (Bar Chart)
+    const barCanvas = document.getElementById('star-revenue-bar-canvas');
+    if (barCanvas) {
+        if (starBarChart) { starBarChart.destroy(); starBarChart = null; }
+        const monthly = (data && data.charts && data.charts.monthly) || [];
+        const labels = monthly.length ? monthly.map(m => m.label || m.month) : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+        const values = monthly.length ? monthly.map(m => Number(m.rev) || 0) : [350, 520, 110, 400, 560, 320, 240];
+
+        starBarChart = new Chart(barCanvas, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Revenue (£)',
+                    data: values,
+                    backgroundColor: '#2563eb',
+                    borderRadius: 6,
+                    borderSkipped: false,
+                    barThickness: 24
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { grid: { display: false } },
+                    y: { grid: { color: 'rgba(226, 232, 240, 0.6)' }, beginAtZero: true }
+                }
+            }
+        });
+    }
+
+    // 2. Sales Analytics (Donut Chart)
+    const donutCanvas = document.getElementById('star-sales-donut-canvas');
+    if (donutCanvas) {
+        if (starDonutChart) { starDonutChart.destroy(); starDonutChart = null; }
+        starDonutChart = new Chart(donutCanvas, {
+            type: 'doughnut',
+            data: {
+                labels: ['Incorporation', 'Compliance', 'Address Services'],
+                datasets: [{
+                    data: [35, 45, 20],
+                    backgroundColor: ['#2563eb', '#38bdf8', '#0ea5e9'],
+                    borderWidth: 0
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                cutout: '72%',
+                plugins: { legend: { display: false } }
+            }
+        });
+    }
+
+    // 3. Sales Trend (Dual Area Chart)
+    const areaCanvas = document.getElementById('star-trend-area-canvas');
+    if (areaCanvas) {
+        if (starTrendChart) { starTrendChart.destroy(); starTrendChart = null; }
+        const labels = ['Week 1', 'Week 2', 'Week 3', 'Week 4', 'Week 5', 'Week 6', 'Week 7', 'Week 8'];
+        starTrendChart = new Chart(areaCanvas, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Online Payment',
+                        data: [180, 220, 310, 280, 390, 420, 510, 480],
+                        borderColor: '#2563eb',
+                        backgroundColor: 'rgba(37, 99, 235, 0.12)',
+                        fill: true,
+                        tension: 0.4,
+                        pointRadius: 3
+                    },
+                    {
+                        label: 'Offline Sales',
+                        data: [120, 150, 260, 210, 300, 340, 410, 390],
+                        borderColor: '#38bdf8',
+                        backgroundColor: 'rgba(56, 189, 248, 0.12)',
+                        fill: true,
+                        tension: 0.4,
+                        pointRadius: 3
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { grid: { display: false } },
+                    y: { grid: { color: 'rgba(226, 232, 240, 0.6)' }, beginAtZero: true }
+                }
+            }
+        });
+    }
+}
+
 async function loadAdminDashboard() {
     if (!canViewAdminDashboard()) return;
     try {
@@ -4803,6 +5080,8 @@ async function loadAdminDashboard() {
             setText('adm-tot-rev', data.stats.total_revenue);
             renderAdminChart((data.charts && data.charts.monthly) || []);
         }
+
+        renderStarAdminDashboardCharts(data);
     } catch (err) {
         console.error(err);
     }
@@ -4965,6 +5244,28 @@ function adminOrderProgressRange() {
     return { min, max };
 }
 
+let adminOrderClientTypeFilter = 'All';
+
+function setAdminOrderClientTypeFilter(type) {
+    adminOrderClientTypeFilter = type;
+    ['All', 'Customer', 'B2B'].forEach(t => {
+        const btn = document.getElementById(`tab-orders-${t.toLowerCase()}`);
+        if (btn) {
+            if (t === type) {
+                btn.classList.add('active');
+                btn.style.background = 'var(--color-primary)';
+                btn.style.color = '#FFFFFF';
+            } else {
+                btn.classList.remove('active');
+                btn.style.background = 'var(--color-surface)';
+                btn.style.color = 'var(--color-text-primary)';
+            }
+        }
+    });
+    resetAdminOrdersPage();
+    loadAdminOrders();
+}
+
 function buildAdminOrderQuery(page) {
     const qs = new URLSearchParams();
     const search = document.getElementById('filter-admin-order-search')?.value.trim() || '';
@@ -4987,6 +5288,9 @@ function buildAdminOrderQuery(page) {
     if (status) qs.set('status', status);
     if (canViewRevenue() && payment) qs.set('payment_status', payment);
     if (customer) qs.set('customer_id', customer);
+    if (adminOrderClientTypeFilter && adminOrderClientTypeFilter !== 'All') {
+        qs.set('client_type', adminOrderClientTypeFilter);
+    }
     if (preset && preset !== 'custom') qs.set('date_preset', preset);
     if (preset === 'custom' && dateFrom) qs.set('date_from', dateFrom);
     if (preset === 'custom' && dateTo) qs.set('date_to', dateTo);
@@ -5882,6 +6186,22 @@ async function openStaffOrderWorkspace(orderId, options) {
         setPortfolioText('staff-order-owner-email', owner.form_email || '—');
         setPortfolioText('staff-order-owner-phone', owner.phone || '—');
         setPortfolioText('staff-order-portal-email', order.portal_login_email || order.client_email || '—');
+
+        const dispEmail = document.getElementById('disp-access-email');
+        const dispPass = document.getElementById('disp-access-password');
+        const btnCopyPass = document.getElementById('btn-copy-pass');
+        const accEmail = order.access_email || '';
+        const accPass = order.access_email_password || '';
+        if (dispEmail) dispEmail.textContent = accEmail || 'None recorded';
+        if (dispPass) {
+            dispPass.setAttribute('data-actual-password', accPass);
+            dispPass.textContent = '••••••••';
+        }
+        if (btnCopyPass) btnCopyPass.setAttribute('data-pass', accPass);
+        if (typeof toggleStaffOrderCredentialsEdit === 'function') {
+            toggleStaffOrderCredentialsEdit(false);
+        }
+
         const productSummary = order.products_summary || order.service_name || '—';
         const productEl = document.getElementById('staff-order-product');
         if (productEl) productEl.innerHTML = renderProductPills(productSummary, order.category_name);
@@ -6944,7 +7264,8 @@ function renderAdminCustomers() {
         countEl.textContent = `${rows.length} of ${adminCustomersCache.length} accounts`;
     }
     if (!rows.length) {
-        tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:#64748b; padding:28px;">No customer signups match the current filters.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; color:#64748b; padding:28px;">No customer signups match the current filters.</td></tr>`;
+        updateCustomerSelectionState();
         return;
     }
     tbody.innerHTML = rows.map((c) => {
@@ -6956,6 +7277,7 @@ function renderAdminCustomers() {
         const portalLabel = portalReady ? 'Can sign in' : 'Needs password';
         return `
             <tr>
+                <td style="text-align:center;"><input type="checkbox" class="chk-customer-item" value="${c.id}" onchange="updateCustomerSelectionState()"></td>
                 <td style="font-weight:700;">${escapeHtml(c.full_name || '')}${isNew ? ' <span class="signup-new-badge">New</span>' : ''}</td>
                 <td>${escapeHtml(c.email || '')}</td>
                 <td>${escapeHtml(formatDateTime(c.created_at) || formatDate(c.created_at) || '—')}</td>
@@ -6967,11 +7289,84 @@ function renderAdminCustomers() {
                     <div class="table-action-btns">
                         <button type="button" class="btn-primary btn-table" data-customer-action="profile" data-customer-id="${c.id}">View profile</button>
                         ${portalReady ? '' : `<button type="button" class="btn-secondary btn-table" data-customer-action="password" data-customer-id="${c.id}" data-customer-email="${escapeHtml(c.email || '')}">Set password</button>`}
+                        <button type="button" class="btn-secondary btn-table" style="color:#dc2626; border-color:#fca5a5; background:#fef2f2;" onclick="deleteCustomerSingle(${c.id}, '${escapeJsString(c.full_name || c.email)}')"><i data-lucide="trash-2"></i> Delete</button>
                     </div>
                 </td>
             </tr>
         `;
     }).join('');
+    updateCustomerSelectionState();
+    if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
+}
+
+function toggleSelectAllCustomers(masterChk) {
+    const isChecked = Boolean(masterChk && masterChk.checked);
+    document.querySelectorAll('.chk-customer-item').forEach((chk) => {
+        chk.checked = isChecked;
+    });
+    updateCustomerSelectionState();
+}
+
+function updateCustomerSelectionState() {
+    const selected = Array.from(document.querySelectorAll('.chk-customer-item:checked'));
+    const bulkBtn = document.getElementById('btn-delete-selected-customers');
+    const countEl = document.getElementById('selected-customers-count');
+    const masterChk = document.getElementById('chk-select-all-customers');
+    
+    if (countEl) countEl.textContent = selected.length;
+    if (bulkBtn) bulkBtn.style.display = selected.length > 0 ? 'inline-flex' : 'none';
+    
+    const all = document.querySelectorAll('.chk-customer-item');
+    if (masterChk && all.length > 0) {
+        masterChk.checked = selected.length === all.length;
+    }
+}
+
+async function deleteCustomerSingle(customerId, customerName) {
+    if (!customerId) return;
+    if (!confirm(`Are you sure you want to delete customer account "${customerName}"?`)) return;
+    try {
+        const res = await fetch('/api/admin/customers/delete', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ customer_id: customerId })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Could not delete customer.');
+        }
+        alert(data.message || 'Customer account removed.');
+        await loadAdminCustomers();
+    } catch (err) {
+        alert(err.message || 'Could not delete customer.');
+    }
+}
+
+async function deleteSelectedCustomers() {
+    const selectedBoxes = Array.from(document.querySelectorAll('.chk-customer-item:checked'));
+    const selectedIds = selectedBoxes.map((chk) => parseInt(chk.value, 10)).filter(Boolean);
+    if (!selectedIds.length) {
+        alert('Please select at least one customer to delete.');
+        return;
+    }
+    if (!confirm(`Are you sure you want to delete ${selectedIds.length} selected customer account(s)?`)) return;
+    try {
+        const res = await fetch('/api/admin/customers/bulk-delete', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ customer_ids: selectedIds })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Could not delete selected customers.');
+        }
+        alert(data.message || 'Selected customer accounts removed.');
+        await loadAdminCustomers();
+    } catch (err) {
+        alert(err.message || 'Could not delete selected customers.');
+    }
 }
 
 function filterAdminCustomers() {
@@ -7046,6 +7441,8 @@ async function openCrmClientModal(clientId) {
         document.getElementById('crm-modal-name').textContent = displayName;
         document.getElementById('crm-modal-meta').textContent = `WP User ID: ${c.wordpress_user_id || 'N/A'} | ${c.email || ''}`;
         document.getElementById('crm-modal-avatar').textContent = initials;
+        const b2bElem = document.getElementById('crm-ov-b2b-id');
+        if (b2bElem) b2bElem.textContent = c.b2b_id || 'B2B-000001';
         document.getElementById('crm-ov-email').textContent = c.email || 'N/A';
         document.getElementById('crm-ov-phone').textContent = c.phone || 'N/A';
         document.getElementById('crm-ov-country').textContent = c.country || 'United Kingdom';
@@ -7057,11 +7454,11 @@ async function openCrmClientModal(clientId) {
         if (compBox) {
             const companies = data.companies || [];
             compBox.innerHTML = companies.length ? companies.map((comp) => `
-                <div style="padding:10px; border:1px solid #e2e8f0; border-radius:8px; margin-bottom:8px;">
-                    <strong>${escapeHtml(comp.name || '')}</strong> (#${escapeHtml(comp.company_number || '')}) • ${escapeHtml(comp.package || '')}
-                    <div style="font-size:0.78rem; color:#64748b;">Office: ${escapeHtml(comp.reg_office || '—')} | Status: ${escapeHtml(comp.status || '')}</div>
+                <div style="padding:10px; border:1px solid var(--border-color); border-radius:8px; margin-bottom:8px;">
+                    <strong>${escapeHtml(comp.name || '')}</strong> ${comp.b2b_id ? `<span class="b2b-badge">${escapeHtml(comp.b2b_id)}</span>` : ''} (#${escapeHtml(comp.company_number || '')}) • ${escapeHtml(comp.package || '')}
+                    <div style="font-size:0.78rem; color:var(--text-muted);">Office: ${escapeHtml(comp.reg_office || '—')} | Status: ${escapeHtml(comp.status || '')}</div>
                 </div>
-            `).join('') : '<p style="color:#64748b;">No registered companies for this client.</p>';
+            `).join('') : '<p style="color:var(--text-muted);">No registered companies for this client.</p>';
         }
 
         const ordBox = document.getElementById('crm-orders-list');
@@ -9679,7 +10076,14 @@ function getCheckedIntakeDocumentTypes() {
     const types = [];
     boxes.forEach((box) => {
         const normalized = normalizeIntakeDocumentType(box.value);
-        if (normalized && !types.includes(normalized)) types.push(normalized);
+        if (normalized) {
+            if (!types.includes(normalized)) types.push(normalized);
+            if (normalized === 'Identity Card' || normalized === 'Passport') {
+                if (!types.includes('Passport')) types.push('Passport');
+                if (!types.includes('Identity Card')) types.push('Identity Card');
+                if (!types.includes('Driving Licence')) types.push('Driving Licence');
+            }
+        }
     });
     return types;
 }
@@ -9773,28 +10177,29 @@ function assessIntakeFileRelevance(file, relPath, mode, options) {
 
     const kind = classifyIntakeDocumentKind(`${lowerPath} ${lowerBase}`);
 
-    // Hard filter: when boxes are ticked, only those types enter the queue.
+    // Filter: when category boxes are ticked
     if (selectedTypes.length) {
-        if (kind && selectedTypes.includes(kind)) {
-            if (sourceMode === 'ID_ONLY_DISCOVERY' && !INTAKE_ID_KINDS.has(kind)) {
-                return { ok: false, reason: 'ID-Only mode: passport / ID card / driving licence only' };
-            }
-            return { ok: true, reason: kind, document_type: kind, allowed_types: selectedTypes.slice() };
-        }
-        // Browse Files (not folder): one type ticked + user picked the file → assign that type.
-        if (!fromFolder && selectedTypes.length === 1 && !kind) {
-            const only = selectedTypes[0];
-            if (sourceMode === 'ID_ONLY_DISCOVERY' && !INTAKE_ID_KINDS.has(only)) {
-                return { ok: false, reason: 'ID-Only mode: passport / ID card / driving licence only' };
-            }
-            return { ok: true, reason: only, document_type: only, allowed_types: selectedTypes.slice() };
-        }
         if (kind) {
-            return { ok: false, reason: `Skipped (${kind}) — not in selected options` };
+            const matchesAllowed = selectedTypes.includes(kind) ||
+                (INTAKE_ID_KINDS.has(kind) && selectedTypes.some((t) => INTAKE_ID_KINDS.has(t)));
+            if (matchesAllowed) {
+                if (sourceMode === 'ID_ONLY_DISCOVERY' && !INTAKE_ID_KINDS.has(kind)) {
+                    return { ok: false, reason: 'ID-Only mode: passport / ID card / driving licence only' };
+                }
+                return { ok: true, reason: kind, document_type: kind, allowed_types: selectedTypes.slice() };
+            } else {
+                return { ok: false, reason: `Skipped (${kind}) — not in selected options` };
+            }
+        }
+        // Generic camera photo or PDF (PHOTO-*.jpg, IMG_*.jpg, scan.pdf) with unclassified filename:
+        // Accept into queue so high-quality OCR reads and confirms the document content!
+        if (['pdf', 'png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff'].includes(ext)) {
+            const defaultDocType = (selectedTypes.length === 1) ? selectedTypes[0] : '';
+            return { ok: true, reason: 'Scan queued — high-quality OCR will confirm type', document_type: defaultDocType, allowed_types: selectedTypes.slice() };
         }
         return {
             ok: false,
-            reason: `Skipped — filename does not match selected: ${selectedTypes.join(', ')}`,
+            reason: `Skipped — file format unsupported for selected options: ${selectedTypes.join(', ')}`,
         };
     }
 
@@ -10565,9 +10970,11 @@ function renderIntakeResults(data) {
 
     function renderTopCandidates(list) {
         if (!candidatesEl || !list || !list.length) return;
-        candidatesEl.innerHTML = `<div style="margin-top:10px; font-size:0.8rem; color:#475569;">
-            <div style="font-weight:700; margin-bottom:6px;">Top candidates</div>
-            ${list.slice(0, 3).map(c => {
+        candidatesEl.innerHTML = `<div style="margin-top:12px; padding:10px 12px; background:var(--color-surface-soft, #f8fafc); border:1px solid var(--border-color, #e2e8f0); border-radius:8px;">
+            <div style="font-size:0.8rem; font-weight:700; color:var(--text-primary, #0f172a); margin-bottom:8px; display:flex; align-items:center; gap:6px;">
+                <i data-lucide="building-2" style="width:14px; height:14px; color:var(--color-primary, #2563eb);"></i> Companies House Suggested Matches for Staff Review:
+            </div>
+            ${list.slice(0, 4).map((c, idx) => {
                 const score = c.score != null ? `${c.score}%` : '';
                 const label = escapeHtml(c.name || 'Candidate');
                 const num = escapeHtml(c.company_number || '—');
@@ -10579,11 +10986,27 @@ function renderIntakeResults(data) {
                         : ` · CH birth year ${dob.year}`;
                 }
                 const why = (c.reasons || []).some(r => String(r).includes('Incompatible DOB'))
-                    ? ' <span style="color:#b45309;">(different person — DOB mismatch)</span>'
+                    ? ' <span style="color:#b45309; font-weight:600;">(DOB mismatch)</span>'
                     : '';
-                return `<div style="padding:6px 0; border-top:1px solid #f1f5f9;"><strong>${label}</strong> — ${escapeHtml(String(score))} <span style="color:#64748b;">(#${num}${escapeHtml(dobTxt)})</span>${why}</div>`;
+                const compNumStr = String(c.company_number || '');
+                return `
+                    <div style="padding:8px 0; border-top:${idx > 0 ? '1px solid var(--border-color, #e2e8f0)' : 'none'}; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                        <div>
+                            <div style="font-weight:700; font-size:0.85rem; color:var(--text-primary, #0f172a);">${label}</div>
+                            <div style="font-size:0.75rem; color:var(--text-secondary, #475569);">
+                                Score: <strong>${escapeHtml(String(score))}</strong> · Company #${num}${escapeHtml(dobTxt)}${why}
+                            </div>
+                        </div>
+                        ${compNumStr ? `
+                            <button type="button" class="btn-secondary" style="padding:4px 10px; font-size:0.75rem;" onclick="assignIntakeCompanyCandidate('${escapeJsString(compNumStr)}', '${escapeJsString(c.name || '')}', '${escapeJsString(c.company_id || '')}')">
+                                <i data-lucide="check" style="width:12px; height:12px;"></i> Select Company
+                            </button>
+                        ` : ''}
+                    </div>
+                `;
             }).join('')}
         </div>`;
+        if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
     }
 
     if (chStatus === 'matched') {
@@ -10781,7 +11204,7 @@ async function loadStaffDashboard() {
 
         const tbody = document.getElementById('staff-my-tasks-table');
         if (tbody) {
-            const tasks = data.my_tasks || [];
+            const tasks = data.my_tasks || data.active_tasks || [];
             if (tasks.length === 0) {
                 tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding:24px; color:#15803d; font-weight:600;">🎉 All caught up! Zero pending tasks.</td></tr>`;
             } else {
@@ -10958,6 +11381,9 @@ async function openManualOrderModal(prefillData) {
     const err = document.getElementById('manual-order-error');
     if (!modal) return;
 
+    modal.style.display = 'flex';
+    modal.classList.add('active');
+
     if (form) form.reset();
     if (err) {
         err.style.display = 'none';
@@ -11064,11 +11490,21 @@ async function loadAdminClientsForManualOrderSelect() {
 async function onManualOrderClientChange() {
     const clientSelect = document.getElementById('manual-order-client');
     const companySelect = document.getElementById('manual-order-company');
+    const companyEmail = document.getElementById('manual-order-company-email');
     if (!clientSelect || !companySelect) return;
 
     const clientId = clientSelect.value;
     companySelect.innerHTML = '<option value="">No company / create with name below</option>';
     if (!clientId) return;
+
+    // Auto-fill B2B client account owner email for notification routing
+    const selectedOpt = clientSelect.options[clientSelect.selectedIndex];
+    if (selectedOpt && selectedOpt.textContent && companyEmail) {
+        const match = selectedOpt.textContent.match(/\(([^)]+)\)/);
+        if (match && match[1]) {
+            companyEmail.value = match[1];
+        }
+    }
 
     try {
         const res = await fetch(`/api/admin/companies?client_id=${clientId}`, { credentials: 'same-origin' });
@@ -11188,8 +11624,24 @@ async function submitManualOrderForm(event) {
     const payload = {
         company_id: document.getElementById('manual-order-company')?.value || '',
         company_name: document.getElementById('manual-order-company-name')?.value || '',
+        company_type: document.getElementById('manual-order-company-type')?.value || 'Private Limited Company by Shares (LTD)',
+        sic_code: document.getElementById('manual-order-sic-code')?.value || '',
         company_email: document.getElementById('manual-order-company-email')?.value || '',
+        company_phone: document.getElementById('manual-order-company-phone')?.value || '',
+        reg_office: [
+            document.getElementById('manual-order-reg-address')?.value || '',
+            document.getElementById('manual-order-reg-city')?.value || '',
+            document.getElementById('manual-order-reg-postcode')?.value || ''
+        ].filter(Boolean).join(', '),
+        registered_address_line1: document.getElementById('manual-order-reg-address')?.value || '',
+        registered_city: document.getElementById('manual-order-reg-city')?.value || '',
+        registered_postcode: document.getElementById('manual-order-reg-postcode')?.value || '',
         owner_name: document.getElementById('manual-order-owner-name')?.value || '',
+        director_phone: document.getElementById('manual-order-director-phone')?.value || '',
+        director_nationality: document.getElementById('manual-order-director-nationality')?.value || 'British',
+        director_residence: document.getElementById('manual-order-director-residence')?.value || 'United Kingdom',
+        payment_mode: document.getElementById('manual-order-payment-mode')?.value || 'Manual CRM',
+        status: document.getElementById('manual-order-initial-status')?.value || 'Processing',
         notes: document.getElementById('manual-order-notes')?.value || '',
         line_items: line_items
     };
@@ -11256,5 +11708,1263 @@ async function submitManualOrderForm(event) {
         }
     } finally {
         if (submitBtn) submitBtn.disabled = false;
+    }
+}
+
+/* ====================================================
+   UNIVERSAL CUSTOMER-CENTRIC ORDER CREATION ENGINE (5-STEP WIZARD)
+   ==================================================== */
+let universalOrderWizardState = {
+    currentStep: 1,
+    selectedCustomer: null,
+    selectedProduct: null,
+    customersList: [],
+    catalogProducts: [],
+    activeCustomerTypeFilter: 'All',
+    activeCategory: 'All',
+    formValues: {},
+    repeatableData: {},
+    uploadedDocs: {},
+    draftOrderId: null,
+    draftOrderNumber: null
+};
+
+async function openUniversalOrderWizard(prefillData = null) {
+    const modal = document.getElementById('modal-universal-order-wizard');
+    if (!modal) {
+        if (typeof openManualOrderModal === 'function') openManualOrderModal(prefillData);
+        return;
+    }
+
+    // Show modal instantly on click (0ms latency)
+    modal.style.display = 'flex';
+    modal.classList.add('active');
+    hideWizardError();
+
+    let activeUser = getCurrentUser();
+    if (!activeUser) {
+        try {
+            const res = await fetch('/api/auth/me', { credentials: 'same-origin' });
+            const data = await res.json().catch(() => ({}));
+            if (data.status === 'success' && data.user) {
+                currentUser = data.user;
+                if (typeof writeCachedAuthUser === 'function') writeCachedAuthUser(data.user);
+                activeUser = data.user;
+            }
+        } catch (_) {}
+    }
+
+    const isClient = !!(activeUser && activeUser.role === 'CLIENT');
+
+    universalOrderWizardState = {
+        currentStep: 1,
+        selectedCustomer: isClient ? activeUser : null,
+        selectedProduct: null,
+        customersList: [],
+        catalogProducts: [],
+        activeCustomerTypeFilter: 'All',
+        activeCategory: 'All',
+        formValues: {},
+        repeatableData: {},
+        uploadedDocs: {},
+        draftOrderId: null,
+        draftOrderNumber: null
+    };
+
+    const adminCustomerPane = document.getElementById('wizard-admin-customer-select-pane');
+    const clientCustomerPane = document.getElementById('wizard-client-customer-summary-pane');
+
+    if (isClient) {
+        if (adminCustomerPane) adminCustomerPane.style.display = 'none';
+        if (clientCustomerPane) {
+            clientCustomerPane.style.display = 'block';
+            const nameEl = document.getElementById('wizard-client-self-name');
+            const emailEl = document.getElementById('wizard-client-self-email');
+            if (nameEl) nameEl.textContent = (activeUser && activeUser.full_name) || 'Customer';
+            if (emailEl) emailEl.textContent = (activeUser && activeUser.email) || '';
+
+            const isB2B = !!(activeUser && (activeUser.is_b2b === 1 || activeUser.client_type === 'B2B'));
+            const b2bWrap = document.getElementById('wizard-client-self-b2b-wrap');
+            const b2bBadge = document.getElementById('wizard-client-self-b2b-badge');
+            const typeLabel = document.getElementById('wizard-client-self-type-label');
+
+            if (isB2B && activeUser.b2b_id) {
+                if (typeLabel) typeLabel.textContent = 'B2B CORPORATE ACCOUNT';
+                if (b2bBadge) b2bBadge.textContent = activeUser.b2b_id;
+                if (b2bWrap) b2bWrap.style.display = 'block';
+            } else {
+                if (typeLabel) typeLabel.textContent = 'NORMAL CUSTOMER ACCOUNT';
+                if (b2bWrap) b2bWrap.style.display = 'none';
+            }
+        }
+        universalOrderWizardState.selectedCustomer = activeUser;
+    } else {
+        if (adminCustomerPane) adminCustomerPane.style.display = 'block';
+        if (clientCustomerPane) clientCustomerPane.style.display = 'none';
+    }
+
+    // Open target step immediately so UI is responsive
+    jumpToWizardStep(isClient ? 2 : 1);
+    safeCreateIcons();
+
+    // Fetch data asynchronously
+    try {
+        const promises = [fetchWizardCatalogProducts()];
+        if (!isClient) promises.push(fetchWizardCustomersList());
+        await Promise.all(promises);
+    } catch (err) {
+        console.error('Wizard initialization fetch error:', err);
+    }
+
+    if (prefillData && (prefillData.service_name || prefillData.id)) {
+        const match = universalOrderWizardState.catalogProducts.find(p => 
+            p.id == prefillData.id || 
+            (p.name && prefillData.service_name && p.name.toLowerCase() === prefillData.service_name.toLowerCase())
+        );
+        if (match) {
+            universalOrderWizardState.selectedProduct = match;
+            jumpToWizardStep(3);
+        }
+    }
+
+    safeCreateIcons();
+}
+
+function closeUniversalOrderWizard() {
+    const modal = document.getElementById('modal-universal-order-wizard');
+    if (modal) {
+        modal.style.display = 'none';
+        modal.classList.remove('active');
+    }
+}
+
+async function fetchWizardCustomersList() {
+    const grid = document.getElementById('wizard-customers-grid');
+    if (grid) grid.innerHTML = '<div style="text-align:center; padding:40px; color:var(--color-text-muted); grid-column:1/-1;">Loading Customers...</div>';
+
+    try {
+        const res = await fetch('/api/admin/customers?limit=500', { credentials: 'same-origin' });
+        const data = await res.json().catch(() => ({}));
+        universalOrderWizardState.customersList = data.customers || data.users || [];
+    } catch (err) {
+        console.error('Customer fetch error:', err);
+    }
+
+    renderWizardCustomersGrid();
+}
+
+function setWizardCustomerTypeFilter(type) {
+    universalOrderWizardState.activeCustomerTypeFilter = type;
+    
+    ['all', 'normal', 'b2b'].forEach(t => {
+        const pill = document.getElementById(`pill-cust-${t}`);
+        if (pill) {
+            if ((t === 'all' && type === 'All') || (t === 'normal' && type === 'Normal') || (t === 'b2b' && type === 'B2B')) {
+                pill.classList.add('active');
+            } else {
+                pill.classList.remove('active');
+            }
+        }
+    });
+
+    renderWizardCustomersGrid();
+}
+
+function filterWizardCustomers() {
+    renderWizardCustomersGrid();
+}
+
+function renderWizardCustomersGrid() {
+    const grid = document.getElementById('wizard-customers-grid');
+    if (!grid) return;
+
+    const search = (document.getElementById('wizard-customer-search')?.value || '').toLowerCase().trim();
+    const typeFilter = universalOrderWizardState.activeCustomerTypeFilter;
+
+    const filtered = universalOrderWizardState.customersList.filter(c => {
+        const isB2B = (c.is_b2b === 1 || c.client_type === 'B2B');
+        const matchesType = (typeFilter === 'All') ||
+            (typeFilter === 'B2B' && isB2B) ||
+            (typeFilter === 'Normal' && !isB2B);
+
+        const nameMatch = (c.full_name || '').toLowerCase().includes(search);
+        const emailMatch = (c.email || '').toLowerCase().includes(search);
+        const phoneMatch = (c.phone || '').toLowerCase().includes(search);
+        const b2bMatch = isB2B && (c.b2b_id || '').toLowerCase().includes(search);
+
+        return matchesType && (!search || nameMatch || emailMatch || phoneMatch || b2bMatch);
+    });
+
+    if (filtered.length === 0) {
+        grid.innerHTML = '<div style="text-align:center; padding:30px; color:var(--color-text-muted); grid-column:1/-1;">No matching customers found.</div>';
+        return;
+    }
+
+    grid.innerHTML = filtered.map(c => {
+        const isB2B = (c.is_b2b === 1 || c.client_type === 'B2B');
+        const isSelected = (universalOrderWizardState.selectedCustomer && universalOrderWizardState.selectedCustomer.id === c.id);
+
+        return `
+            <div style="background:var(--color-surface); border:2px solid ${isSelected ? 'var(--color-primary)' : 'var(--color-border)'}; border-radius:12px; padding:16px; display:flex; flex-direction:column; justify-content:space-between; cursor:pointer; transition:all 0.15s ease;"
+                 class="card-hover-effect" onclick="selectWizardCustomer(${c.id})">
+                <div>
+                    <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px;">
+                        <span class="status-badge ${isB2B ? 'active' : 'info'}" style="font-size:0.72rem;">
+                            ${isB2B ? 'B2B Account' : 'Normal Customer'}
+                        </span>
+                        ${isB2B && c.b2b_id ? `<span style="font-weight:700; font-size:0.75rem; color:var(--color-success);">${escapeHtml(c.b2b_id)}</span>` : ''}
+                    </div>
+                    <h4 style="font-size:1.02rem; font-weight:700; color:var(--color-text-primary); margin:4px 0 2px 0;">${escapeHtml(c.full_name || 'Client')}</h4>
+                    <div style="font-size:0.8rem; color:var(--color-text-secondary);">${escapeHtml(c.email)}</div>
+                    ${c.phone ? `<div style="font-size:0.78rem; color:var(--color-text-muted); margin-top:2px;">📞 ${escapeHtml(c.phone)}</div>` : ''}
+                </div>
+                <div style="margin-top:12px; text-align:right;">
+                    <button type="button" class="btn-${isSelected ? 'primary' : 'secondary'}" style="padding:4px 12px; font-size:0.78rem;">
+                        ${isSelected ? 'Selected ✓' : 'Select Customer'}
+                    </button>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    safeCreateIcons();
+}
+
+function selectWizardCustomer(customerId) {
+    const cust = universalOrderWizardState.customersList.find(c => c.id == customerId);
+    if (!cust) return;
+
+    universalOrderWizardState.selectedCustomer = cust;
+    renderWizardCustomersGrid();
+    jumpToWizardStep(2);
+}
+
+async function fetchWizardCatalogProducts() {
+    const grid = document.getElementById('wizard-products-grid');
+    if (grid) grid.innerHTML = '<div style="text-align:center; padding:40px; color:var(--color-text-muted); grid-column:1/-1;">Loading Services Catalog...</div>';
+
+    try {
+        const res = await fetch('/api/catalog/products', { credentials: 'same-origin' });
+        const data = await res.json().catch(() => ({}));
+        if (data.status === 'success' && Array.isArray(data.products)) {
+            universalOrderWizardState.catalogProducts = data.products;
+        } else {
+            const res2 = await fetch('/api/client/services', { credentials: 'same-origin' });
+            const data2 = await res2.json().catch(() => ({}));
+            universalOrderWizardState.catalogProducts = data2.services || [];
+        }
+    } catch (err) {
+        console.error('Catalog fetch error:', err);
+    }
+
+    renderWizardCategoryPills();
+    renderWizardCatalogGrid();
+}
+
+function renderWizardCategoryPills() {
+    const container = document.getElementById('wizard-category-pills');
+    if (!container) return;
+
+    const cats = ['All'];
+    universalOrderWizardState.catalogProducts.forEach(p => {
+        if (p.category && !cats.includes(p.category)) cats.push(p.category);
+    });
+
+    container.innerHTML = cats.map(cat => `
+        <button type="button" class="badge ${universalOrderWizardState.activeCategory === cat ? 'active' : ''}" 
+                style="cursor:pointer; border:1px solid var(--color-border); padding:6px 12px; font-size:0.78rem; ${universalOrderWizardState.activeCategory === cat ? 'background:var(--color-primary) !important; color:#FFFFFF !important;' : 'background:var(--color-surface); color:var(--color-text-primary);'}"
+                onclick="setWizardCategoryFilter('${escapeJsString(cat)}')">
+            ${escapeHtml(cat)}
+        </button>
+    `).join('');
+}
+
+function setWizardCategoryFilter(cat) {
+    universalOrderWizardState.activeCategory = cat;
+    renderWizardCategoryPills();
+    renderWizardCatalogGrid();
+}
+
+function filterWizardCatalogProducts() {
+    renderWizardCatalogGrid();
+}
+
+function renderWizardCatalogGrid() {
+    const grid = document.getElementById('wizard-products-grid');
+    if (!grid) return;
+
+    const searchTerm = (document.getElementById('wizard-product-search')?.value || '').toLowerCase().trim();
+    const cat = universalOrderWizardState.activeCategory;
+    const selectedCust = universalOrderWizardState.selectedCustomer;
+    const activeUser = getCurrentUser();
+    const isB2BCust = (selectedCust && (selectedCust.is_b2b === 1 || selectedCust.client_type === 'B2B')) || (activeUser && (activeUser.is_b2b === 1 || activeUser.client_type === 'B2B'));
+
+    const filtered = universalOrderWizardState.catalogProducts.filter(p => {
+        const matchesCat = (cat === 'All' || p.category === cat);
+        const matchesSearch = !searchTerm || 
+            (p.name && p.name.toLowerCase().includes(searchTerm)) || 
+            (p.description && p.description.toLowerCase().includes(searchTerm)) ||
+            (p.category && p.category.toLowerCase().includes(searchTerm));
+        return matchesCat && matchesSearch;
+    });
+
+    if (filtered.length === 0) {
+        grid.innerHTML = '<div style="text-align:center; padding:40px; color:var(--color-text-muted); grid-column:1/-1;">No products found matching your search.</div>';
+        return;
+    }
+
+    grid.innerHTML = filtered.map(p => `
+        <div style="background:var(--color-surface); border:1px solid var(--color-border); border-radius:14px; padding:18px; display:flex; flex-direction:column; justify-content:space-between; transition:all 0.15s ease;" class="card-hover-effect">
+            <div>
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px;">
+                    <span class="status-badge info">${escapeHtml(p.category || 'Service')}</span>
+                    ${isB2BCust 
+                        ? `<span style="font-weight:700; font-size:0.8rem; color:var(--color-primary); background:var(--color-primary-soft); padding:4px 8px; border-radius:6px;">Custom B2B Rate</span>`
+                        : `<span style="font-weight:800; font-size:1.15rem; color:var(--color-primary);">£${parseFloat(p.price || 0).toFixed(2)}</span>`
+                    }
+                </div>
+                <h4 style="font-size:1.02rem; font-weight:700; color:var(--color-text-primary); margin:4px 0 6px 0;">${escapeHtml(p.name)}</h4>
+                <p style="font-size:0.8rem; color:var(--color-text-muted); line-height:1.4; margin-bottom:12px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;">
+                    ${escapeHtml(p.description || 'Professional service package.')}
+                </p>
+            </div>
+            <div>
+                <div style="font-size:0.75rem; color:var(--color-text-secondary); margin-bottom:12px; display:flex; gap:12px;">
+                    <span><i data-lucide="clock" style="width:12px; height:12px; margin-right:2px;"></i> ${escapeHtml(p.estimated_delivery_time || '24-48 Hours')}</span>
+                    <span><i data-lucide="file-text" style="width:12px; height:12px; margin-right:2px;"></i> ${p.document_requirements && p.document_requirements.length ? p.document_requirements.length + ' Docs' : 'Online Specs'}</span>
+                </div>
+                <button type="button" class="btn-primary" style="width:100%; justify-content:center; padding:8px 14px; font-size:0.84rem;" onclick="selectWizardProduct(${p.id})">
+                    Select &amp; Configure <i data-lucide="arrow-right" style="width:14px; height:14px; margin-left:4px;"></i>
+                </button>
+            </div>
+        </div>
+    `).join('');
+
+    safeCreateIcons();
+}
+
+function selectWizardProduct(productId) {
+    const product = universalOrderWizardState.catalogProducts.find(p => p.id == productId);
+    if (!product) return;
+
+    universalOrderWizardState.selectedProduct = product;
+    universalOrderWizardState.formValues = {};
+    universalOrderWizardState.repeatableData = {};
+
+    if (product.repeatable_sections && Array.isArray(product.repeatable_sections)) {
+        product.repeatable_sections.forEach(sec => {
+            universalOrderWizardState.repeatableData[sec.id] = [];
+            const minEntries = sec.min_entries || 1;
+            for (let i = 0; i < minEntries; i++) {
+                addWizardRepeatableEntry(sec.id, false);
+            }
+        });
+    }
+
+    const cust = universalOrderWizardState.selectedCustomer;
+    if (cust) {
+        universalOrderWizardState.formValues['full_name'] = cust.full_name || '';
+        universalOrderWizardState.formValues['email'] = cust.email || '';
+        universalOrderWizardState.formValues['phone'] = cust.phone || '';
+    }
+
+    jumpToWizardStep(3);
+}
+
+function jumpToWizardStep(stepNum) {
+    hideWizardError();
+    const activeUser = getCurrentUser();
+    const isClient = !!(activeUser && activeUser.role === 'CLIENT');
+    if (isClient && stepNum === 1) {
+        stepNum = 2;
+    }
+
+    const pill1 = document.getElementById('wizard-step-pill-1');
+    if (pill1) {
+        pill1.style.display = isClient ? 'none' : 'flex';
+    }
+
+    if (isClient && activeUser) {
+        universalOrderWizardState.selectedCustomer = activeUser;
+    }
+
+    // Guard Step Navigation
+    if (stepNum > 1 && !universalOrderWizardState.selectedCustomer) {
+        if (isClient && activeUser) {
+            universalOrderWizardState.selectedCustomer = activeUser;
+        } else {
+            showWizardError('Please select a customer first.');
+            return;
+        }
+    }
+    if (stepNum > 2 && !universalOrderWizardState.selectedProduct) {
+        showWizardError('Please select a service/product first.');
+        return;
+    }
+    if (stepNum === 4) {
+        const valErr = validateWizardStep3Fields();
+        if (valErr) {
+            showWizardError(valErr);
+            return;
+        }
+    }
+
+    universalOrderWizardState.currentStep = stepNum;
+
+    for (let i = 1; i <= 5; i++) {
+        const pill = document.getElementById(`wizard-step-pill-${i}`);
+        const pane = document.getElementById(`wizard-step-${i}`);
+        if (pill) {
+            if (i === stepNum) pill.classList.add('active');
+            else if (i < stepNum) pill.classList.add('completed');
+            else pill.classList.remove('active', 'completed');
+        }
+        if (pane) {
+            pane.style.display = (i === stepNum) ? 'block' : 'none';
+        }
+    }
+
+    const btnBack = document.getElementById('wizard-btn-back');
+    const btnNext = document.getElementById('wizard-btn-next');
+    const btnSubmit = document.getElementById('wizard-btn-submit');
+
+    const minStep = isClient ? 2 : 1;
+    if (btnBack) btnBack.style.display = (stepNum > minStep) ? 'inline-flex' : 'none';
+    if (btnNext) btnNext.style.display = (stepNum < 5) ? 'inline-flex' : 'none';
+    if (btnSubmit) btnSubmit.style.display = (stepNum === 5) ? 'inline-flex' : 'none';
+
+    if (stepNum === 3) {
+        renderWizardStep3Form();
+    } else if (stepNum === 4) {
+        renderWizardStep4Documents();
+    } else if (stepNum === 5) {
+        renderWizardStep5Review();
+    }
+
+    safeCreateIcons();
+}
+
+function navigateWizardStep(delta) {
+    const target = universalOrderWizardState.currentStep + delta;
+    if (target >= 1 && target <= 5) {
+        jumpToWizardStep(target);
+    }
+}
+
+function renderWizardStep3Form() {
+    const p = universalOrderWizardState.selectedProduct;
+    const cust = universalOrderWizardState.selectedCustomer;
+    if (!p) return;
+
+    const activeUser = getCurrentUser();
+    const isB2B = (cust && (cust.is_b2b === 1 || cust.client_type === 'B2B')) || (activeUser && (activeUser.is_b2b === 1 || activeUser.client_type === 'B2B'));
+    document.getElementById('wizard-selected-cat').textContent = p.category || 'Service';
+    document.getElementById('wizard-selected-title').textContent = p.name;
+    document.getElementById('wizard-selected-price').textContent = isB2B ? 'Custom B2B Rate' : `£${parseFloat(p.price || 0).toFixed(2)}`;
+    document.getElementById('wizard-selected-est').textContent = `Est: ${p.estimated_delivery_time || '24-48 Hours'}`;
+    const custSummary = document.getElementById('wizard-selected-customer-summary');
+    if (custSummary) {
+        if (isB2B && cust.b2b_id) {
+            custSummary.innerHTML = `Customer: <strong>${escapeHtml(cust.full_name || 'Client')}</strong> (${escapeHtml(cust.email)}) • <span style="color:var(--color-success); font-weight:700;">${escapeHtml(cust.b2b_id)}</span>`;
+        } else {
+            custSummary.innerHTML = `Customer: <strong>${escapeHtml((cust || {}).full_name || 'Client')}</strong> (${escapeHtml((cust || {}).email || '')})`;
+        }
+    }
+
+    const fieldsContainer = document.getElementById('wizard-dynamic-fields-container');
+    if (fieldsContainer) {
+        const fields = p.form_config || [];
+        if (fields.length === 0) {
+            fieldsContainer.innerHTML = '<div style="font-size:0.85rem; color:var(--color-text-muted);">No specific custom fields required for this product. Click Continue to proceed.</div>';
+        } else {
+            fieldsContainer.innerHTML = fields.map(f => renderSingleWizardFieldHTML(f)).join('');
+        }
+    }
+
+    renderWizardRepeatableSections();
+}
+
+function renderSingleWizardFieldHTML(f) {
+    const val = universalOrderWizardState.formValues[f.id] !== undefined ? universalOrderWizardState.formValues[f.id] : (f.default_value || '');
+    const isHidden = shouldHideWizardConditionalField(f);
+
+    let inputHTML = '';
+    const fieldType = (f.type || 'text').toLowerCase();
+
+    if (fieldType === 'textarea' || fieldType === 'long text') {
+        inputHTML = `<textarea id="wfield-${f.id}" class="select-filter" style="width:100%; margin-top:4px; min-height:70px; font-size:0.88rem; padding:10px 14px;" placeholder="${escapeHtml(f.placeholder || '')}" onchange="updateWizardFieldValue('${f.id}', this.value)">${escapeHtml(val)}</textarea>`;
+    } else if (fieldType === 'dropdown' || fieldType === 'select') {
+        const opts = f.options || [];
+        inputHTML = `
+            <select id="wfield-${f.id}" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 14px;" onchange="updateWizardFieldValue('${f.id}', this.value)">
+                ${opts.map(o => `<option value="${escapeHtml(o)}" ${val === o ? 'selected' : ''}>${escapeHtml(o)}</option>`).join('')}
+            </select>`;
+    } else if (fieldType === 'radio') {
+        const opts = f.options || ['YES', 'NO'];
+        inputHTML = `
+            <div style="display:flex; gap:16px; margin-top:6px;">
+                ${opts.map(o => `
+                    <label style="font-size:0.85rem; font-weight:600; cursor:pointer; color:var(--color-text-primary);">
+                        <input type="radio" name="wfield-${f.id}" value="${escapeHtml(o)}" ${val === o ? 'checked' : ''} onchange="updateWizardFieldValue('${f.id}', this.value)" style="accent-color:var(--color-primary);"> ${escapeHtml(o)}
+                    </label>
+                `).join('')}
+            </div>`;
+    } else {
+        const inputType = (fieldType === 'email') ? 'email' : (fieldType === 'phone') ? 'tel' : (fieldType === 'number') ? 'number' : (fieldType === 'date') ? 'date' : 'text';
+        inputHTML = `<input type="${inputType}" id="wfield-${f.id}" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 14px;" value="${escapeHtml(val)}" placeholder="${escapeHtml(f.placeholder || '')}" autocomplete="off" oninput="updateWizardFieldValue('${f.id}', this.value)">`;
+    }
+
+    return `
+        <div id="wfield-wrap-${f.id}" style="${isHidden ? 'display:none;' : ''}">
+            <label for="wfield-${f.id}" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">
+                ${escapeHtml(f.label)} ${f.required ? '<span style="color:var(--color-danger);">*</span>' : ''}
+            </label>
+            ${inputHTML}
+            ${f.help_text ? `<div style="font-size:0.75rem; color:var(--color-text-muted); margin-top:4px;">${escapeHtml(f.help_text)}</div>` : ''}
+        </div>
+    `;
+}
+
+function shouldHideWizardConditionalField(f) {
+    if (!f.depends_on) return false;
+    const parentVal = universalOrderWizardState.formValues[f.depends_on];
+    if (f.condition === 'equals') {
+        return parentVal !== f.condition_value;
+    }
+    return false;
+}
+
+function updateWizardFieldValue(fieldId, value) {
+    universalOrderWizardState.formValues[fieldId] = value;
+    
+    const p = universalOrderWizardState.selectedProduct;
+    if (p && p.form_config) {
+        p.form_config.forEach(f => {
+            if (f.depends_on === fieldId) {
+                const wrap = document.getElementById(`wfield-wrap-${f.id}`);
+                if (wrap) {
+                    const hide = shouldHideWizardConditionalField(f);
+                    wrap.style.display = hide ? 'none' : 'block';
+                }
+            }
+        });
+    }
+}
+
+function renderWizardRepeatableSections() {
+    const container = document.getElementById('wizard-repeatable-sections-container');
+    if (!container) return;
+
+    const p = universalOrderWizardState.selectedProduct;
+    const sections = p.repeatable_sections || [];
+    if (sections.length === 0) {
+        container.innerHTML = '';
+        return;
+    }
+
+    container.innerHTML = sections.map(sec => {
+        const entries = universalOrderWizardState.repeatableData[sec.id] || [];
+        return `
+            <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:14px; padding:20px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+                    <h5 style="font-size:0.92rem; font-weight:700; color:var(--color-text-primary); margin:0;">${escapeHtml(sec.title)} (${entries.length})</h5>
+                    <button type="button" class="btn-secondary" style="padding:6px 12px; font-size:0.8rem;" onclick="addWizardRepeatableEntry('${sec.id}')">
+                        <i data-lucide="plus" style="width:14px; height:14px; margin-right:4px;"></i> ${escapeHtml(sec.button_label || 'Add Entry')}
+                    </button>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:12px;">
+                    ${entries.map((entry, idx) => `
+                        <div style="background:var(--color-surface); border:1px solid var(--color-border); border-radius:10px; padding:14px; position:relative;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                                <strong style="font-size:0.82rem; color:var(--color-primary);">${sec.title.slice(0, -1) || 'Entry'} #${idx + 1}</strong>
+                                ${entries.length > (sec.min_entries || 1) ? `
+                                    <button type="button" class="btn-ghost" style="color:var(--color-danger); padding:2px 8px; font-size:0.75rem;" onclick="removeWizardRepeatableEntry('${sec.id}', ${idx})">Remove</button>
+                                ` : ''}
+                            </div>
+                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                                ${(sec.fields || []).map(sf => `
+                                    <div>
+                                        <label style="font-size:0.78rem; font-weight:700; color:var(--color-text-primary);">${escapeHtml(sf.label)}</label>
+                                        <input type="${sf.type === 'email' ? 'email' : sf.type === 'number' ? 'number' : sf.type === 'date' ? 'date' : 'text'}" 
+                                               class="select-filter" style="width:100%; margin-top:2px; font-size:0.82rem; padding:8px 10px;" 
+                                               value="${escapeHtml(entry[sf.id] || '')}" 
+                                               oninput="updateWizardRepeatableFieldValue('${sec.id}', ${idx}, '${sf.id}', this.value)">
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    safeCreateIcons();
+}
+
+function addWizardRepeatableEntry(sectionId, render = true) {
+    if (!universalOrderWizardState.repeatableData[sectionId]) {
+        universalOrderWizardState.repeatableData[sectionId] = [];
+    }
+    universalOrderWizardState.repeatableData[sectionId].push({});
+    if (render) renderWizardRepeatableSections();
+}
+
+function removeWizardRepeatableEntry(sectionId, idx) {
+    if (universalOrderWizardState.repeatableData[sectionId]) {
+        universalOrderWizardState.repeatableData[sectionId].splice(idx, 1);
+        renderWizardRepeatableSections();
+    }
+}
+
+function updateWizardRepeatableFieldValue(sectionId, idx, fieldId, value) {
+    if (universalOrderWizardState.repeatableData[sectionId] && universalOrderWizardState.repeatableData[sectionId][idx]) {
+        universalOrderWizardState.repeatableData[sectionId][idx][fieldId] = value;
+    }
+}
+
+function validateWizardStep3Fields() {
+    const p = universalOrderWizardState.selectedProduct;
+    if (!p || !p.form_config) return null;
+
+    for (let f of p.form_config) {
+        if (f.required && !shouldHideWizardConditionalField(f)) {
+            const val = (universalOrderWizardState.formValues[f.id] || '').toString().trim();
+            if (!val) {
+                return `Please complete required field: ${f.label}`;
+            }
+        }
+    }
+    return null;
+}
+
+function renderWizardStep4Documents() {
+    const container = document.getElementById('wizard-documents-checklist');
+    if (!container) return;
+
+    const p = universalOrderWizardState.selectedProduct;
+    const reqs = p.document_requirements || [];
+
+    if (reqs.length === 0) {
+        container.innerHTML = '<div style="font-size:0.85rem; color:var(--color-text-muted); text-align:center; padding:30px;">No document uploads required for this product. Click Continue to review your order.</div>';
+        return;
+    }
+
+    container.innerHTML = reqs.map(doc => {
+        const uploaded = universalOrderWizardState.uploadedDocs[doc.id];
+        const statusText = uploaded ? uploaded.status : (doc.required ? 'Required' : 'Optional');
+        const statusClass = uploaded ? 'completed' : (doc.required ? 'pending' : 'info');
+
+        return `
+            <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:12px; padding:16px 20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+                <div>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <strong style="font-size:0.9rem; color:var(--color-text-primary);">${escapeHtml(doc.name)}</strong>
+                        <span class="status-badge ${statusClass}">${statusText}</span>
+                    </div>
+                    <p style="font-size:0.8rem; color:var(--color-text-muted); margin:4px 0 0 0;">${escapeHtml(doc.description || '')}</p>
+                    ${uploaded ? `<div style="font-size:0.78rem; color:var(--color-success); font-weight:600; margin-top:4px;">✓ ${escapeHtml(uploaded.file_name)}</div>` : ''}
+                </div>
+                <div>
+                    <input type="file" id="doc-file-input-${doc.id}" style="display:none;" onchange="handleWizardFileUpload('${doc.id}', this)">
+                    <button type="button" class="btn-secondary" style="font-size:0.82rem; padding:8px 14px;" onclick="document.getElementById('doc-file-input-${doc.id}').click()">
+                        <i data-lucide="upload-cloud" style="width:14px; height:14px; margin-right:4px;"></i> ${uploaded ? 'Replace Document' : 'Upload File'}
+                    </button>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    safeCreateIcons();
+}
+
+async function handleWizardFileUpload(docReqId, fileInput) {
+    if (!fileInput.files || !fileInput.files[0]) return;
+    const file = fileInput.files[0];
+
+    showWizardError(`Uploading ${file.name}...`, false);
+
+    const formData = new FormData();
+    formData.append('document', file);
+    formData.append('document_type', docReqId);
+
+    try {
+        const res = await fetch('/api/client/documents/upload', {
+            method: 'POST',
+            credentials: 'same-origin',
+            body: formData
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && (data.status === 'success' || data.document_id)) {
+            hideWizardError();
+            universalOrderWizardState.uploadedDocs[docReqId] = {
+                document_id: data.document_id || data.id,
+                file_name: file.name,
+                file_path: data.file_path || '',
+                status: 'Uploaded'
+            };
+            renderWizardStep4Documents();
+        } else {
+            showWizardError(data.message || 'File upload failed. Please try again.');
+        }
+    } catch (err) {
+        showWizardError('Document upload error: ' + err.message);
+    }
+}
+
+function renderWizardStep5Review() {
+    const p = universalOrderWizardState.selectedProduct;
+    const cust = universalOrderWizardState.selectedCustomer;
+    if (!p) return;
+
+    const price = parseFloat(p.price || 0);
+    const vat = roundToTwo(price * 0.20);
+    const total = roundToTwo(price + vat);
+
+    const activeUser = getCurrentUser();
+    const isB2B = (cust && (cust.is_b2b === 1 || cust.client_type === 'B2B')) || (activeUser && (activeUser.is_b2b === 1 || activeUser.client_type === 'B2B'));
+    document.getElementById('review-service-category').textContent = (p.category || 'Service').toUpperCase();
+    document.getElementById('review-service-name').textContent = p.name;
+    if (isB2B) {
+        document.getElementById('review-total-price').textContent = 'Custom B2B Rate';
+        document.getElementById('review-vat-breakdown').textContent = 'Admin will assign custom rate upon order review.';
+    } else {
+        document.getElementById('review-total-price').textContent = `£${total.toFixed(2)}`;
+        document.getElementById('review-vat-breakdown').textContent = `Subtotal £${price.toFixed(2)} + VAT (20%) £${vat.toFixed(2)}`;
+    }
+    const custIdentity = document.getElementById('review-customer-identity');
+    if (custIdentity) {
+        if (isB2B && cust.b2b_id) {
+            custIdentity.innerHTML = `Customer: <strong>${escapeHtml(cust.full_name || 'Client')}</strong> (${escapeHtml(cust.email)}) • <span class="status-badge active">${escapeHtml(cust.b2b_id)}</span>`;
+        } else {
+            custIdentity.innerHTML = `Customer: <strong>${escapeHtml((cust || {}).full_name || 'Client')}</strong> (${escapeHtml((cust || {}).email || '')})`;
+        }
+    }
+
+    const fieldsErr = validateWizardStep3Fields();
+    const fieldsIcon = document.getElementById('review-fields-check-icon');
+    const fieldsTitle = document.getElementById('review-fields-check-title');
+
+    if (fieldsErr) {
+        if (fieldsIcon) { fieldsIcon.setAttribute('data-lucide', 'alert-circle'); fieldsIcon.style.color = 'var(--color-danger)'; }
+        if (fieldsTitle) fieldsTitle.textContent = 'Missing Product Information';
+    } else {
+        if (fieldsIcon) { fieldsIcon.setAttribute('data-lucide', 'check-circle'); fieldsIcon.style.color = 'var(--color-success)'; }
+        if (fieldsTitle) fieldsTitle.textContent = 'Product Information Complete';
+    }
+
+    const summaryContainer = document.getElementById('review-form-values-summary');
+    if (summaryContainer) {
+        const entries = Object.entries(universalOrderWizardState.formValues);
+        if (entries.length === 0) {
+            summaryContainer.innerHTML = '<div style="color:var(--color-text-muted);">Standard catalog order specifications.</div>';
+        } else {
+            summaryContainer.innerHTML = entries.map(([k, v]) => `
+                <div><span style="color:var(--color-text-muted);">${escapeHtml(k)}:</span> <strong>${escapeHtml(v)}</strong></div>
+            `).join('');
+        }
+    }
+
+    safeCreateIcons();
+}
+
+async function saveUniversalOrderDraft() {
+    const p = universalOrderWizardState.selectedProduct;
+    const cust = universalOrderWizardState.selectedCustomer;
+    if (!p) {
+        showWizardError('Please select a product first.');
+        return;
+    }
+
+    const payload = {
+        service_id: p.id,
+        service_name: p.name,
+        client_id: (cust || {}).id,
+        current_step: universalOrderWizardState.currentStep,
+        form_values: universalOrderWizardState.formValues,
+        repeatable_data: universalOrderWizardState.repeatableData,
+        order_id: universalOrderWizardState.draftOrderId,
+        notes: document.getElementById('wizard-order-notes')?.value || ''
+    };
+
+    try {
+        const res = await fetch('/api/orders/draft', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.status === 'success') {
+            universalOrderWizardState.draftOrderId = data.order_id;
+            universalOrderWizardState.draftOrderNumber = data.order_number;
+            showWizardError(`✓ Draft saved as ${data.order_number}.`, false);
+        } else {
+            showWizardError(data.message || 'Could not save draft.');
+        }
+    } catch (err) {
+        showWizardError('Draft save error: ' + err.message);
+    }
+}
+
+async function submitUniversalOrder() {
+    const p = universalOrderWizardState.selectedProduct;
+    const cust = universalOrderWizardState.selectedCustomer;
+
+    if (!cust) {
+        showWizardError('Please select a customer.');
+        jumpToWizardStep(1);
+        return;
+    }
+    if (!p) {
+        showWizardError('Please select a product.');
+        jumpToWizardStep(2);
+        return;
+    }
+
+    const fieldsErr = validateWizardStep3Fields();
+    if (fieldsErr) {
+        showWizardError(fieldsErr);
+        jumpToWizardStep(3);
+        return;
+    }
+
+    const submitBtn = document.getElementById('wizard-btn-submit');
+    if (submitBtn) submitBtn.disabled = true;
+
+    const isClient = currentUser && currentUser.role === 'CLIENT';
+    const clientId = cust.id;
+
+    const payload = {
+        service_id: p.id,
+        service_name: p.name,
+        client_id: clientId,
+        company_email: cust.email,
+        form_values: universalOrderWizardState.formValues,
+        repeatable_data: universalOrderWizardState.repeatableData,
+        uploaded_docs: universalOrderWizardState.uploadedDocs,
+        notes: document.getElementById('wizard-order-notes')?.value || '',
+        order_id: universalOrderWizardState.draftOrderId
+    };
+
+    try {
+        const endpoint = isClient ? '/api/client/orders' : '/api/admin/orders';
+        const res = await fetch(endpoint, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.status === 'success') {
+            closeUniversalOrderWizard();
+            alert(`🎉 Order ${data.order?.order_number || data.order_number || 'created'} submitted successfully!`);
+            if (typeof loadAdminOrders === 'function') loadAdminOrders();
+            if (typeof loadClientOrders === 'function') loadClientOrders();
+        } else {
+            throw new Error(data.message || 'Order submission failed.');
+        }
+    } catch (err) {
+        showWizardError(err.message);
+    } finally {
+        if (submitBtn) submitBtn.disabled = false;
+    }
+}
+
+async function loadWizardAdminClientsSelect() {
+    const select = document.getElementById('wizard-client-id');
+    if (!select) return;
+    select.innerHTML = '<option value="">-- Select Client --</option>';
+    try {
+        const res = await fetch('/api/admin/customers?limit=500', { credentials: 'same-origin' });
+        const data = await res.json().catch(() => ({}));
+        const customers = data.customers || data.users || [];
+        if (Array.isArray(customers)) {
+            customers.forEach(c => {
+                const opt = document.createElement('option');
+                opt.value = c.id;
+                opt.textContent = `${c.full_name || 'Client'} (${c.email}) • ${c.b2b_id || 'B2B'}`;
+                select.appendChild(opt);
+            });
+        }
+    } catch (err) { console.error(err); }
+}
+
+function onWizardClientChange() {
+    const select = document.getElementById('wizard-client-id');
+    const emailInput = document.getElementById('wizard-owner-email');
+    if (!select || !emailInput) return;
+
+    const selectedOpt = select.options[select.selectedIndex];
+    if (selectedOpt && selectedOpt.textContent) {
+        const match = selectedOpt.textContent.match(/\(([^)]+)\)/);
+        if (match && match[1]) {
+            emailInput.value = match[1];
+        }
+    }
+}
+
+function showWizardError(msg, isError = true) {
+    const banner = document.getElementById('wizard-error-banner');
+    if (!banner) return;
+    banner.style.display = 'block';
+    banner.textContent = msg;
+    if (isError) {
+        banner.style.background = 'var(--color-danger-soft)';
+        banner.style.color = 'var(--color-danger)';
+        banner.style.borderColor = 'var(--color-danger-border)';
+    } else {
+        banner.style.background = 'var(--color-success-soft)';
+        banner.style.color = 'var(--color-success)';
+        banner.style.borderColor = 'var(--color-success-border)';
+    }
+}
+
+function hideWizardError() {
+    const banner = document.getElementById('wizard-error-banner');
+    if (banner) banner.style.display = 'none';
+}
+
+function roundToTwo(num) {
+    return +(Math.round(num + "e+2")  + "e-2");
+}
+
+/* ====================================================
+   DEDICATED CREATE CUSTOMER ENGINE
+   ==================================================== */
+function openCreateCustomerModal() {
+    const modal = document.getElementById('modal-create-customer');
+    if (!modal) return;
+
+    const form = document.getElementById('form-create-customer');
+    if (form) form.reset();
+    onCustomerTypeCardChange('Normal');
+    
+    const errBanner = document.getElementById('create-customer-error-banner');
+    if (errBanner) errBanner.style.display = 'none';
+
+    modal.style.display = 'flex';
+    modal.classList.add('active');
+    safeCreateIcons();
+}
+
+function closeCreateCustomerModal() {
+    const modal = document.getElementById('modal-create-customer');
+    if (modal) {
+        modal.style.display = 'none';
+        modal.classList.remove('active');
+    }
+}
+
+function onCustomerTypeCardChange(type) {
+    const cardNormal = document.getElementById('cust-type-card-normal');
+    const cardB2B = document.getElementById('cust-type-card-b2b');
+
+    if (type === 'B2B') {
+        if (cardNormal) { cardNormal.style.borderColor = 'var(--color-border)'; }
+        if (cardB2B) { cardB2B.style.borderColor = 'var(--color-primary)'; }
+    } else {
+        if (cardNormal) { cardNormal.style.borderColor = 'var(--color-primary)'; }
+        if (cardB2B) { cardB2B.style.borderColor = 'var(--color-border)'; }
+    }
+}
+
+async function submitCreateCustomerForm(event) {
+    event.preventDefault();
+
+    const name = document.getElementById('create-cust-name').value.trim();
+    const email = document.getElementById('create-cust-email').value.trim().toLowerCase();
+    const phone = document.getElementById('create-cust-phone').value.trim();
+    const country = document.getElementById('create-cust-country').value.trim() || 'United Kingdom';
+    const password = document.getElementById('create-cust-password').value;
+    const confirmPassword = document.getElementById('create-cust-password-confirm').value;
+
+    const custTypeRadios = document.getElementsByName('create_cust_type');
+    let custType = 'Normal';
+    for (let r of custTypeRadios) {
+        if (r.checked) { custType = r.value; break; }
+    }
+
+    const errBanner = document.getElementById('create-customer-error-banner');
+    if (password !== confirmPassword) {
+        if (errBanner) {
+            errBanner.textContent = 'Passwords do not match.';
+            errBanner.style.display = 'block';
+        }
+        return;
+    }
+
+    const submitBtn = document.getElementById('btn-submit-create-cust');
+    if (submitBtn) submitBtn.disabled = true;
+
+    const payload = {
+        role: 'CLIENT',
+        full_name: name,
+        email: email,
+        phone: phone,
+        country: country,
+        password: password,
+        confirm_password: confirmPassword,
+        client_type: custType,
+        is_b2b: (custType === 'B2B' ? 1 : 0)
+    };
+
+    try {
+        const res = await fetch('/api/admin/staff', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json().catch(() => ({}));
+
+        if (res.ok && data.status === 'success') {
+            closeCreateCustomerModal();
+            alert(`🎉 Customer account created successfully! (${custType === 'B2B' ? 'B2B Customer: ' + (data.user?.b2b_id || 'B2B Account') : 'Normal Customer'})`);
+            if (typeof loadAdminCustomers === 'function') loadAdminCustomers();
+        } else {
+            if (errBanner) {
+                errBanner.textContent = data.message || 'Could not create customer.';
+                errBanner.style.display = 'block';
+            }
+        }
+    } catch (err) {
+        if (errBanner) {
+            errBanner.textContent = 'Connection error: ' + err.message;
+            errBanner.style.display = 'block';
+        }
+    } finally {
+        if (submitBtn) submitBtn.disabled = false;
+    }
+}
+
+/* ====================================================
+   SERVICE ACCESS CREDENTIALS & PASSWORD TOGGLE HELPERS
+   ==================================================== */
+function toggleAccessPasswordVisibility(inputId) {
+    const input = document.getElementById(inputId);
+    const eyeIcon = document.getElementById(`eye-${inputId}`);
+    if (!input) return;
+
+    if (input.type === 'password') {
+        input.type = 'text';
+        if (eyeIcon) eyeIcon.setAttribute('data-lucide', 'eye-off');
+    } else {
+        input.type = 'password';
+        if (eyeIcon) eyeIcon.setAttribute('data-lucide', 'eye');
+    }
+    safeCreateIcons();
+}
+
+function toggleDisplayPasswordVisibility(elementId) {
+    const el = document.getElementById(elementId);
+    const eyeIcon = document.getElementById(`eye-${elementId}`);
+    if (!el) return;
+
+    const actualPass = el.getAttribute('data-actual-password') || '';
+    if (el.textContent === '••••••••') {
+        el.textContent = actualPass || 'None recorded';
+        if (eyeIcon) eyeIcon.setAttribute('data-lucide', 'eye-off');
+    } else {
+        el.textContent = '••••••••';
+        if (eyeIcon) eyeIcon.setAttribute('data-lucide', 'eye');
+    }
+    safeCreateIcons();
+}
+
+function copyTextToClipboard(text) {
+    if (!text || text === 'None recorded') return;
+    navigator.clipboard.writeText(text).then(() => {
+        alert('📋 Copied to clipboard: ' + text);
+    }).catch(() => {
+        alert('Copied: ' + text);
+    });
+}
+
+function toggleStaffOrderCredentialsEdit(show = true) {
+    const disp = document.getElementById('staff-order-credentials-display');
+    const editor = document.getElementById('staff-order-credentials-editor');
+    const btn = document.getElementById('btn-edit-credentials');
+    if (!disp || !editor) return;
+
+    if (show) {
+        disp.style.display = 'none';
+        editor.style.display = 'block';
+        if (btn) btn.style.display = 'none';
+
+        const dispEmail = document.getElementById('disp-access-email')?.textContent || '';
+        const btnCopyPass = document.getElementById('btn-copy-pass');
+        const passVal = btnCopyPass ? (btnCopyPass.getAttribute('data-pass') || '') : '';
+
+        const editEmail = document.getElementById('edit-access-email');
+        const editPass = document.getElementById('edit-access-password');
+        if (editEmail) editEmail.value = (dispEmail !== 'None recorded' ? dispEmail : '');
+        if (editPass) editPass.value = passVal;
+    } else {
+        disp.style.display = 'grid';
+        editor.style.display = 'none';
+        if (btn) btn.style.display = 'inline-block';
+    }
+}
+
+async function saveStaffOrderCredentials() {
+    if (!window.staffOrderId) return;
+
+    const email = document.getElementById('edit-access-email').value.trim();
+    const password = document.getElementById('edit-access-password').value.trim();
+
+    try {
+        const res = await fetch(`/api/admin/orders/${window.staffOrderId}`, {
+            method: 'PUT',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                access_email: email,
+                access_email_password: password
+            })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.status === 'success') {
+            const dispEmail = document.getElementById('disp-access-email');
+            const dispPass = document.getElementById('disp-access-password');
+            const btnCopyPass = document.getElementById('btn-copy-pass');
+
+            if (dispEmail) dispEmail.textContent = email || 'None recorded';
+            if (dispPass) {
+                dispPass.setAttribute('data-actual-password', password);
+                dispPass.textContent = '••••••••';
+            }
+            if (btnCopyPass) btnCopyPass.setAttribute('data-pass', password);
+
+            toggleStaffOrderCredentialsEdit(false);
+            safeCreateIcons();
+        } else {
+            alert('Error saving credentials: ' + (data.message || 'Unknown error'));
+        }
+    } catch (err) {
+        alert('Connection error: ' + err.message);
+    }
+}
+
+/* ====================================================
+   GOOGLE DRIVE IMPORT MODAL FOR SMART INTAKE
+   ==================================================== */
+function openGoogleDrivePickerModal() {
+    const modal = document.getElementById('modal-google-drive-picker');
+    const input = document.getElementById('gdrive-link-input');
+    const err = document.getElementById('gdrive-import-error');
+    if (!modal) return;
+    if (input) input.value = '';
+    if (err) { err.style.display = 'none'; err.textContent = ''; }
+    modal.classList.add('active');
+    if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
+}
+
+function closeGoogleDrivePickerModal() {
+    const modal = document.getElementById('modal-google-drive-picker');
+    if (modal) modal.classList.remove('active');
+}
+
+async function submitGoogleDriveImport(event) {
+    if (event) event.preventDefault();
+    const linkInput = document.getElementById('gdrive-link-input');
+    const overrideSelect = document.getElementById('gdrive-category-override');
+    const errEl = document.getElementById('gdrive-import-error');
+    const btn = document.getElementById('btn-gdrive-submit');
+    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+
+    const driveUrl = String(linkInput?.value || '').trim();
+    if (!driveUrl) {
+        if (errEl) { errEl.style.display = 'block'; errEl.textContent = 'Please enter a valid Google Drive link.'; }
+        return;
+    }
+
+    const docCategory = overrideSelect?.value || '';
+
+    if (btn) btn.disabled = true;
+
+    try {
+        const res = await fetch('/api/admin/intake/google-drive-import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: driveUrl, document_category: docCategory })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Failed to import Google Drive documents.');
+        }
+
+        const importedFiles = data.imported_files || [];
+        if (importedFiles.length === 0) {
+            throw new Error('No compatible document files were found in the Google Drive link.');
+        }
+
+        importedFiles.forEach((item) => {
+            const docType = normalizeIntakeDocumentType(docCategory || item.document_type) || '';
+            intakeQueueItems.push({
+                id: 'gdrive_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+                file: null,
+                file_content_base64: item.content_base64 || '',
+                name: item.name || 'gdrive_document.pdf',
+                relPath: item.path || item.name || 'Google Drive Document',
+                size: item.size || 0,
+                document_type: docType,
+                category: docType || item.category || 'Google Drive Document',
+                upload_status: 'UPLOADED',
+                process_status: 'Imported from Google Drive — Ready for processing',
+                error: null,
+                source: 'GOOGLE_DRIVE'
+            });
+        });
+
+        closeGoogleDrivePickerModal();
+        renderIntakeFilePreview();
+        alert(`Successfully imported ${importedFiles.length} item(s) from Google Drive! Click Process & Auto-File to run OCR.`);
+    } catch (e) {
+        if (errEl) {
+            errEl.style.display = 'block';
+            errEl.textContent = e.message || 'Error importing Google Drive documents.';
+        }
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+async function assignIntakeCompanyCandidate(companyNumber, companyName, companyId) {
+    if (!confirm(`Are you sure you want to assign company "${companyName}" (#${companyNumber}) to this client file?`)) return;
+    try {
+        const clientName = document.getElementById('res-client-name')?.textContent || '';
+        const res = await fetch('/api/admin/companies/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                company_number: companyNumber,
+                company_name: companyName,
+                director_name: clientName
+            })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Could not assign company candidate.');
+        }
+
+        const resCompCard = document.getElementById('res-company-card');
+        const resCompName = document.getElementById('res-company-name');
+        const resCompNum = document.getElementById('res-company-num');
+        const resCompBadge = document.getElementById('res-company-status-badge');
+        const resCompExpl = document.getElementById('res-company-explanation');
+
+        if (resCompCard) resCompCard.style.borderTopColor = '#16a34a';
+        if (resCompName) resCompName.textContent = companyName;
+        if (resCompNum) resCompNum.textContent = `Company #: ${companyNumber} · Manually Confirmed by Staff`;
+        if (resCompBadge) resCompBadge.innerHTML = `<span class="badge-status-approved">✓ MANUALLY CONFIRMED &amp; LINKED</span>`;
+        if (resCompExpl) resCompExpl.innerHTML = `<strong>Company:</strong> ${escapeHtml(companyName)} (#${escapeHtml(companyNumber)})<br><strong>Status:</strong> Assigned to client profile by staff manual review.`;
+
+        const candidatesEl = document.getElementById('res-company-candidates');
+        if (candidatesEl) candidatesEl.innerHTML = '';
+
+        alert(`Company "${companyName}" (#${companyNumber}) has been assigned to the client profile.`);
+    } catch (e) {
+        alert(e.message || 'Failed to assign company candidate.');
     }
 }

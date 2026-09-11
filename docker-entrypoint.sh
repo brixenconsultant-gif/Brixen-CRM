@@ -12,6 +12,15 @@ if [ ! -f "$DB_FILE" ] && [ -f "$SEED_DB" ]; then
     echo "[entrypoint] Database seeded at $DB_FILE"
 fi
 
+# Initialize empty or incomplete database volumes before starting the app.
+if [ ! -s "$DB_FILE" ]; then
+    echo "[entrypoint] Empty database detected — creating schema and seed data..."
+    python seed_db.py
+elif ! sqlite3 "$DB_FILE" "SELECT 1 FROM sqlite_master WHERE type='table' AND name='documents';" | grep -q '^1$'; then
+    echo "[entrypoint] Incomplete database detected — applying schema..."
+    python -c 'from db import init_db; init_db()'
+fi
+
 # ── First-run: copy seed client files if storage is empty ──
 STORAGE_DIR="/app/storage/clients"
 if [ -d "$SEED_STORAGE" ] && [ -z "$(ls -A $STORAGE_DIR 2>/dev/null)" ]; then

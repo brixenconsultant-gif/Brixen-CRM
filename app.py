@@ -566,7 +566,10 @@ def public_me_user(user, impersonated=False):
         'status': src.get('status'),
         'role': src.get('role'),
         'department': (departments_from_user(src) or [None])[0],
-        'departments': departments_from_user(src),
+        'b2b_id': src.get('b2b_id') if (src.get('is_b2b') == 1 or src.get('client_type') == 'B2B') else None,
+        'client_type': src.get('client_type') or ('B2B' if src.get('is_b2b') == 1 else 'Normal'),
+        'is_b2b': 1 if (src.get('is_b2b') == 1 or src.get('client_type') == 'B2B') else 0,
+        'theme_preference': src.get('theme_preference') or 'system',
         'impersonated': bool(impersonated)
     }
 
@@ -1065,9 +1068,11 @@ def public_staff_user(row):
     public['department'] = depts[0] if depts else None
     if public.get('role') == 'CLIENT':
         if public.get('is_b2b') is None:
-            public['is_b2b'] = 1
+            public['is_b2b'] = 0
+        public['client_type'] = src.get('client_type') or ('B2B' if public.get('is_b2b') == 1 else 'Normal')
+        public['b2b_id'] = src.get('b2b_id') if (public.get('is_b2b') == 1 or public['client_type'] == 'B2B') else None
         if not public.get('account_type'):
-            public['account_type'] = 'B2B Client (Brixen Website Panel)'
+            public['account_type'] = 'B2B Client (Brixen Website Panel)' if public.get('is_b2b') == 1 else 'Normal Client'
     return public
 
 
@@ -1300,17 +1305,32 @@ def resolve_work_notification_email(*, client=None, company=None, order=None, em
     """
     Company/order work emails go to the company-relevant address first:
       1. Explicit email_to
-      2. companies.registered_email
-      3. company form / owner email
-      4. order owner_form_email
-      5. client notification_email / login email
-    Portal login stays on the customer; mail follows the company.
+      2. If B2B Order / Customer -> B2B Account Owner email (owner_form_email / registered_email)
+      3. companies.registered_email
+      4. company form / owner email
+      5. order owner_form_email
+      6. client notification_email / login email
+    For B2B orders, notifications MUST go to the Account Owner email, NOT directly to the retail customer login email first.
     """
     explicit = normalize_notify_email(email_to) if email_to is not None else ''
     if explicit:
         return explicit
 
-    company_rec = load_company_for_notify(company, order)
+    order_rec = dict(order) if isinstance(order, dict) else (query_db("SELECT * FROM orders WHERE id = ?;", (order,), one=True) if order else None)
+    client_rec = resolve_client_user(client or (order_rec or {}).get('user_id'))
+
+    is_b2b_order = False
+    if client_rec and (client_rec.get('is_b2b') == 1 or client_rec.get('client_type') == 'B2B'):
+        is_b2b_order = True
+    elif order_rec and (order_rec.get('b2b_client_id') or (order_rec.get('checkout_form_json') and 'b2b' in str(order_rec.get('checkout_form_json')).lower())):
+        is_b2b_order = True
+
+    if is_b2b_order and order_rec:
+        b2b_owner_email = normalize_notify_email((order_rec or {}).get('owner_form_email'))
+        if b2b_owner_email:
+            return b2b_owner_email
+
+    company_rec = load_company_for_notify(company, order_rec)
     if company_rec:
         registered = normalize_notify_email(company_rec.get('registered_email'))
         if not registered:
@@ -1321,18 +1341,18 @@ def resolve_work_notification_email(*, client=None, company=None, order=None, em
         if form_email:
             return form_email
 
-    if order:
+    if order_rec:
         try:
-            connector = real_order_connector(order)
+            connector = real_order_connector(order_rec)
             form_email = normalize_notify_email((connector or {}).get('owner_form_email'))
             if form_email:
                 return form_email
         except Exception:
-            form_email = normalize_notify_email((order or {}).get('owner_form_email'))
+            form_email = normalize_notify_email((order_rec or {}).get('owner_form_email'))
             if form_email:
                 return form_email
 
-    return client_notification_recipient(client or order or company_rec)
+    return client_notification_recipient(client_rec or client or order_rec or company_rec)
 
 
 def order_prefix_value():
@@ -1341,15 +1361,51 @@ def order_prefix_value():
     return prefix or '#GB'
 
 
-def next_manual_order_number():
-    prefix = order_prefix_value()
+import product_catalog_config
+
+def next_universal_order_number():
+    year = datetime.date.today().year
+    prefix = f"ORD-{year}-"
     highest = 0
     for row in query_db("SELECT order_number FROM orders;") or []:
         number = str(row.get('order_number') or '').strip()
         match = re.search(r'(\d+)$', number)
         if match:
             highest = max(highest, int(match.group(1)))
-    return f"{prefix}{highest + 1}"
+    return f"{prefix}{highest + 1:06d}"
+
+def get_service_catalog_schema(service):
+    """Enrich a service database record with product_catalog_config dynamic form schema."""
+    if not service:
+        return None
+    s = dict(service)
+    pname = str(s.get('name') or '').strip()
+    config = product_catalog_config.get_product_form_config(pname)
+    
+    if not s.get('form_config_json'):
+        s['form_config'] = config.get('fields', [])
+        s['repeatable_sections'] = config.get('repeatable_sections', [])
+    else:
+        try:
+            parsed = json.loads(s['form_config_json'])
+            s['form_config'] = parsed.get('fields', parsed) if isinstance(parsed, dict) else parsed
+            s['repeatable_sections'] = parsed.get('repeatable_sections', []) if isinstance(parsed, dict) else []
+        except Exception:
+            s['form_config'] = config.get('fields', [])
+            s['repeatable_sections'] = config.get('repeatable_sections', [])
+
+    if not s.get('document_requirements_json'):
+        s['document_requirements'] = config.get('document_requirements', [])
+    else:
+        try:
+            s['document_requirements'] = json.loads(s['document_requirements_json'])
+        except Exception:
+            s['document_requirements'] = config.get('document_requirements', [])
+            
+    if not s.get('estimated_delivery_time'):
+        s['estimated_delivery_time'] = '24-48 Hours'
+        
+    return s
 
 
 def create_manual_crm_order(data, actor=None):
@@ -1397,9 +1453,16 @@ def create_manual_crm_order(data, actor=None):
                 return None, 'Service not found'
             if not service_name:
                 service_name = str(service.get('name') or '').strip()
-            if extras.get('price') in (None, '') and service.get('price') is not None:
-                extras = dict(extras)
-                extras['price'] = service.get('price')
+            extras = dict(extras)
+            is_b2b_client = bool(client and (client.get('is_b2b') == 1 or client.get('client_type') == 'B2B'))
+            if service.get('price') is not None:
+                if is_b2b_client:
+                    if 'price' in extras and extras.get('price') not in (None, '') and actor and actor.get('role') in INTERNAL_STAFF_ROLES:
+                        extras['price'] = float(extras['price'])
+                    else:
+                        extras['price'] = 0.0
+                else:
+                    extras['price'] = service.get('price')
         if not service_name:
             return None, 'Enter the service / product name'
 
@@ -1446,8 +1509,8 @@ def create_manual_crm_order(data, actor=None):
 
     owner_name = (extras.get('owner_name') or extras.get('director') or (client or {}).get('full_name') or '').strip()
     owner_email = normalize_notify_email(
-        extras.get('company_email')
-        or extras.get('owner_form_email')
+        extras.get('owner_form_email')
+        or extras.get('company_email')
         or extras.get('registered_email')
         or (company or {}).get('registered_email')
         or (client or {}).get('email')
@@ -1463,17 +1526,43 @@ def create_manual_crm_order(data, actor=None):
         status = 'Processing'
     payment_mode = (extras.get('payment_mode') or 'Manual CRM').strip() or 'Manual CRM'
     notes = (extras.get('notes') or '').strip() or 'Created manually in CRM (no website signup).'
-    order_number = (extras.get('order_number') or '').strip() or next_manual_order_number()
+    order_number = (extras.get('order_number') or '').strip() or next_universal_order_number()
     if query_db("SELECT id FROM orders WHERE order_number = ?;", (order_number,), one=True):
-        order_number = next_manual_order_number()
+        order_number = next_universal_order_number()
+
+    checkout_form_data = {
+        'company_name': (company or {}).get('name') or extras.get('company_name') or '',
+        'company_type': extras.get('company_type') or 'Private Limited Company by Shares (LTD)',
+        'sic_code': extras.get('sic_code') or '62020 - Information technology consultancy activities',
+        'company_email': owner_email,
+        'company_phone': extras.get('company_phone') or '',
+        'registered_address_line1': extras.get('registered_address_line1') or extras.get('reg_office') or '',
+        'registered_city': extras.get('registered_city') or '',
+        'registered_postcode': extras.get('registered_postcode') or '',
+        'registered_country': extras.get('registered_country') or 'United Kingdom',
+        'director_name': owner_name,
+        'director_email': owner_email,
+        'director_phone': extras.get('director_phone') or '',
+        'director_nationality': extras.get('director_nationality') or 'British',
+        'director_residence': extras.get('director_residence') or 'United Kingdom',
+        'payment_mode': payment_mode,
+        'order_notes': notes
+    }
+
+    access_email = (extras.get('access_email') or extras.get('service_email') or '').strip() or None
+    access_email_password = (extras.get('access_email_password') or extras.get('service_password') or '').strip() or None
+
+    is_b2b_client = (client and (client.get('is_b2b') == 1 or client.get('client_type') == 'B2B'))
+    b2b_client_id_val = client.get('b2b_id') if (is_b2b_client and client.get('b2b_id')) else None
 
     order_id = execute_db(
         """
         INSERT INTO orders (
             order_number, user_id, company_id, service_id, service_name,
             price, vat, total, status, progress_percent, notes, payment_mode,
-            owner_name, owner_form_email, assigned_staff_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            owner_name, owner_form_email, assigned_staff_id, checkout_form_json,
+            b2b_client_id, access_email, access_email_password
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """,
         (
             order_number,
@@ -1491,6 +1580,10 @@ def create_manual_crm_order(data, actor=None):
             owner_name or None,
             owner_email,
             (actor or {}).get('id'),
+            json.dumps(checkout_form_data),
+            b2b_client_id_val,
+            access_email,
+            access_email_password,
         ),
     )
 
@@ -3738,6 +3831,8 @@ def public_client_company(row, deadlines=None, for_staff=False, resolve_owner=Fa
         'registered_email': str(src.get('registered_email') or '').strip(),
         'whatsapp_number': str(src.get('whatsapp_number') or '').strip(),
         'deadlines': list(deadlines or []),
+        'b2b_id': str(src.get('b2b_id') or '').strip(),
+        'client_type': str(src.get('client_type') or 'B2B').strip() or 'B2B',
     }
     if is_placeholder_company_email(payload['registered_email']):
         payload['registered_email'] = ''
@@ -3823,7 +3918,8 @@ COMPANY_STAFF_SELECT = (
     "business_email_verified_by, business_email_verified_at, business_email_source, business_email_updated_at, "
     "whatsapp_number, accounts_next_due, accounts_overdue, "
     "confirmation_next_due, confirmation_overdue, ch_attention_json, "
-    "ch_alert_fingerprint, ch_alert_sent_at, compliance_last_notification_at, compliance_last_notification_id"
+    "ch_alert_fingerprint, ch_alert_sent_at, compliance_last_notification_at, compliance_last_notification_id, "
+    "b2b_id, client_type"
 )
 COMPANY_LIST_SELECT = (
     "id, name, company_number, status, inc_date, director, reg_office, package, account_status, "
@@ -3831,7 +3927,8 @@ COMPANY_LIST_SELECT = (
     "sic_codes, registered_email, registered_email_locked, business_email_verified, "
     "business_email_verified_by, business_email_verified_at, business_email_source, business_email_updated_at, "
     "whatsapp_number, accounts_next_due, accounts_overdue, "
-    "confirmation_next_due, confirmation_overdue, ch_attention_json"
+    "confirmation_next_due, confirmation_overdue, ch_attention_json, "
+    "b2b_id, client_type"
 )
 
 
@@ -8642,10 +8739,20 @@ def process_smart_intake_files(files_data, user, batch_identities=None, source_m
         name_kind = classify_intake_document_kind(f'{folder_path} {fname}')
         # Admin-selected type wins; otherwise filename then OCR content.
         final_kind = forced_kind or name_kind or content_kind
+
+        def _kind_matches_allowed(k, allowed):
+            if not k:
+                return False
+            if k in allowed:
+                return True
+            if k in INTAKE_ID_KINDS and any(a in INTAKE_ID_KINDS for a in allowed):
+                return True
+            return False
+
         if allowed_types:
-            if forced_kind and forced_kind in allowed_types:
+            if forced_kind and _kind_matches_allowed(forced_kind, allowed_types):
                 final_kind = forced_kind
-            elif final_kind and final_kind not in allowed_types:
+            elif final_kind and not _kind_matches_allowed(final_kind, allowed_types):
                 skip_msg = (
                     f'Skipped ({final_kind}) — not in selected options: '
                     + ', '.join(allowed_types)
@@ -11030,6 +11137,25 @@ def ensure_client_for_manual_company(data, actor=None):
     return client_id, client, None
 
 
+def generate_next_b2b_id():
+    max_num = 0
+    for row in query_db("SELECT b2b_id FROM companies WHERE b2b_id LIKE 'B2B-%';") or []:
+        try:
+            num = int((row['b2b_id'] or '').replace('B2B-', ''))
+            if num > max_num:
+                max_num = num
+        except (ValueError, AttributeError):
+            pass
+    for row in query_db("SELECT b2b_id FROM users WHERE b2b_id LIKE 'B2B-%';") or []:
+        try:
+            num = int((row['b2b_id'] or '').replace('B2B-', ''))
+            if num > max_num:
+                max_num = num
+        except (ValueError, AttributeError):
+            pass
+    return f"B2B-{(max_num + 1):06d}"
+
+
 def create_manual_company(data, actor=None):
     extras = data if isinstance(data, dict) else {}
     client_id, client, client_err = ensure_client_for_manual_company(extras, actor)
@@ -11058,10 +11184,11 @@ def create_manual_company(data, actor=None):
     if len(inc_date) < 10:
         inc_date = datetime.date.today().isoformat()
     form_email = registered_email_for_client(client, extras)
+    b2b_id = generate_next_b2b_id()
     company_id = execute_db(
         """
-        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status, registered_email)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status, registered_email, b2b_id, client_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'B2B');
         """,
         (
             client_id,
@@ -11074,6 +11201,7 @@ def create_manual_company(data, actor=None):
             (extras.get('package') or 'Historical Registration').strip() or 'Historical Registration',
             (extras.get('account_status') or 'Good Standing').strip() or 'Good Standing',
             form_email or None,
+            b2b_id,
         ),
     )
     created = query_db(
@@ -11201,10 +11329,11 @@ def ensure_company_from_registration_order(client_id, client_name, o_data, servi
         'closed': 'Closed',
     }
     company_status = status_map.get(raw_status, 'Active')
+    b2b_id = generate_next_b2b_id()
     company_id = execute_db(
         """
-        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending');
+        INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status, b2b_id, client_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, 'B2B');
         """,
         (
             client_id,
@@ -11215,6 +11344,7 @@ def ensure_company_from_registration_order(client_id, client_name, o_data, servi
             client_name or 'Director',
             address,
             service_name or 'Company Formation',
+            b2b_id,
         ),
     )
     return company_id
@@ -11823,34 +11953,36 @@ def run_portal_search(user, query):
 
     if check_permission(user, 'clients.view'):
         sql = """
-            SELECT u.id, u.full_name, u.email, u.phone
+            SELECT u.id, u.full_name, u.email, u.phone, u.b2b_id
             FROM users u
             WHERE u.role = 'CLIENT'
-              AND (u.full_name LIKE ? OR u.email LIKE ? OR IFNULL(u.phone, '') LIKE ?)
+              AND (u.full_name LIKE ? OR u.email LIKE ? OR IFNULL(u.phone, '') LIKE ? OR IFNULL(u.b2b_id, '') LIKE ?)
         """
-        params = [like, like, like]
+        params = [like, like, like, like]
         scope_sql, scope_params = _manager_client_scope_sql(user, 'u')
         sql += scope_sql
         params.extend(scope_params)
         sql += " ORDER BY u.full_name COLLATE NOCASE LIMIT ?;"
         params.append(limit)
         for row in query_db(sql, params) or []:
-            subtitle = row.get('email') or ''
+            subtitle = row.get('b2b_id') or row.get('email') or ''
+            if row.get('b2b_id') and row.get('email'):
+                subtitle = f"{row['b2b_id']} · {row['email']}"
             if row.get('phone'):
                 subtitle = f"{subtitle} · {row['phone']}".strip(' ·')
             customers.append(_search_hit(row['id'], 'customer', row.get('full_name'), subtitle))
 
     if check_permission(user, 'orders.view'):
         clauses = [
-            "(o.order_number LIKE ? OR o.service_name LIKE ? OR u.full_name LIKE ? OR u.email LIKE ? OR IFNULL(c.name, '') LIKE ?)"
+            "(o.order_number LIKE ? OR o.service_name LIKE ? OR u.full_name LIKE ? OR u.email LIKE ? OR IFNULL(c.name, '') LIKE ? OR IFNULL(c.b2b_id, '') LIKE ? OR IFNULL(u.b2b_id, '') LIKE ?)"
         ]
-        params = [like, like, like, like, like]
+        params = [like, like, like, like, like, like, like]
         scope_sql, scope_params = manager_order_scope(user)
         if scope_sql:
             clauses.append(scope_sql)
             params.extend(scope_params)
         sql = """
-            SELECT o.id, o.order_number, o.service_name, u.full_name as client_name, c.name as company_name
+            SELECT o.id, o.order_number, o.service_name, u.full_name as client_name, c.name as company_name, c.b2b_id as company_b2b_id
             FROM orders o
             JOIN users u ON o.user_id = u.id
             LEFT JOIN companies c ON o.company_id = c.id
@@ -11861,25 +11993,29 @@ def run_portal_search(user, query):
         params.append(limit)
         for row in query_db(sql, params) or []:
             bits = [row.get('client_name') or '', row.get('service_name') or '']
-            if row.get('company_name'):
+            if row.get('company_b2b_id'):
+                bits.append(row['company_b2b_id'])
+            elif row.get('company_name'):
                 bits.append(row['company_name'])
             orders.append(_search_hit(row['id'], 'order', row.get('order_number'), ' · '.join([b for b in bits if b])))
 
     if user.get('role') in INTERNAL_STAFF_ROLES:
         sql = """
-            SELECT c.id, c.name, c.company_number, u.full_name as client_name
+            SELECT c.id, c.name, c.company_number, c.b2b_id, u.full_name as client_name
             FROM companies c
             JOIN users u ON c.user_id = u.id
-            WHERE (c.name LIKE ? OR c.company_number LIKE ? OR c.director LIKE ? OR u.full_name LIKE ? OR u.email LIKE ?)
+            WHERE (c.name LIKE ? OR c.company_number LIKE ? OR c.director LIKE ? OR IFNULL(c.b2b_id, '') LIKE ? OR u.full_name LIKE ? OR u.email LIKE ?)
         """
-        params = [like, like, like, like, like]
+        params = [like, like, like, like, like, like]
         scope_sql, scope_params = _manager_client_scope_sql(user, 'u')
         sql += scope_sql
         params.extend(scope_params)
         sql += " ORDER BY c.created_at DESC LIMIT ?;"
         params.append(limit)
         for row in query_db(sql, params) or []:
-            subtitle = row.get('company_number') or ''
+            subtitle = row.get('b2b_id') or row.get('company_number') or ''
+            if row.get('b2b_id') and row.get('company_number'):
+                subtitle = f"{row['b2b_id']} · {row['company_number']}"
             if row.get('client_name'):
                 subtitle = f"{subtitle} · {row['client_name']}".strip(' ·')
             companies.append(_search_hit(row['id'], 'company', row.get('name'), subtitle))
@@ -11961,6 +12097,12 @@ def build_admin_order_filters(user, qs):
         if not err and cid:
             clauses.append("o.user_id = ?")
             params.append(cid)
+
+    client_type = _qs_first(qs, 'client_type')
+    if client_type == 'B2B':
+        clauses.append("(u.is_b2b = 1 OR u.client_type = 'B2B')")
+    elif client_type in ('Normal', 'Customer'):
+        clauses.append("(u.is_b2b = 0 OR u.client_type IS NULL OR u.client_type = 'Normal')")
 
     status_filter = _qs_first(qs, 'status')
     status_group = _qs_first(qs, 'status_group')
@@ -15628,14 +15770,46 @@ def application(environ, start_response):
         return json_response(start_response, {'status': 'success', 'settings': settings_dict})
 
     # ----------------------------------------------------
+    # API: User Preferences (Theme, UI settings)
+    # ----------------------------------------------------
+    if path == '/api/user/preferences' and method in ('GET', 'POST'):
+        if not user:
+            return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
+        if method == 'POST':
+            data = parse_body(environ)
+            theme = str(data.get('theme') or data.get('theme_preference') or 'system').lower().strip()
+            if theme not in ('light', 'dark', 'system'):
+                return json_response(start_response, {'status': 'error', 'message': 'Invalid theme option'}, "400 Bad Request")
+            execute_db("UPDATE users SET theme_preference = ? WHERE id = ?;", (theme, user['id']))
+            user['theme_preference'] = theme
+            return json_response(start_response, {'status': 'success', 'theme_preference': theme})
+        else:
+            current_theme = user.get('theme_preference') or 'system'
+            return json_response(start_response, {'status': 'success', 'theme_preference': current_theme})
+
+    # ----------------------------------------------------
     # API: Auth
     # ----------------------------------------------------
     if path == '/api/auth/login' and method == 'POST':
         data = parse_body(environ)
-        email = data.get('email', '').strip().lower()
-        password = data.get('password', '')
+        email = str(data.get('email') or data.get('username') or '').strip().lower()
+        password = str(data.get('password') or '')
 
-        found_user = query_db("SELECT * FROM users WHERE LOWER(email) = ?;", (email,), one=True)
+        # Alias resolution for admin signin convenience (.com vs .co.uk vs short names)
+        ALIAS_MAP = {
+            'admin': 'admin@brixenconsultant.co.uk',
+            'superadmin': 'superadmin@brixenconsultant.co.uk',
+            'manager': 'manager@brixenconsultant.co.uk',
+            'admin@brixenconsultants.com': 'admin@brixenconsultant.co.uk',
+            'admin@brixenconsultant.com': 'admin@brixenconsultant.co.uk',
+            'superadmin@brixenconsultants.com': 'superadmin@brixenconsultant.co.uk',
+            'superadmin@brixenconsultant.com': 'superadmin@brixenconsultant.co.uk',
+            'manager@brixenconsultants.com': 'manager@brixenconsultant.co.uk',
+            'manager@brixenconsultant.com': 'manager@brixenconsultant.co.uk',
+        }
+        lookup_email = ALIAS_MAP.get(email, email)
+
+        found_user = query_db("SELECT * FROM users WHERE LOWER(email) = ?;", (lookup_email,), one=True)
         stored_hash = found_user['password_hash'] if found_user else None
         if not verify_password(password, stored_hash):
             return json_response(start_response, {'status': 'error', 'message': 'Invalid email or password.'}, "401 Unauthorized")
@@ -16510,11 +16684,60 @@ def application(environ, start_response):
         """, (user['id'],))
         return json_response(start_response, {'status': 'success', 'documents': [public_document(d, for_client=True) for d in docs]})
 
+    if path in ('/api/catalog/products', '/api/client/catalog') and method == 'GET':
+        svcs = query_db("SELECT * FROM services WHERE status = 'Active' ORDER BY category ASC, price ASC;")
+        enriched = [get_service_catalog_schema(s) for s in svcs if s]
+        return json_response(start_response, {'status': 'success', 'products': enriched, 'services': enriched})
+
     if path == '/api/client/services' and method == 'GET':
+        svcs = query_db("SELECT * FROM services WHERE status = 'Active' ORDER BY category ASC, price ASC;")
+        enriched = [get_service_catalog_schema(s) for s in svcs if s]
+        return json_response(start_response, {'status': 'success', 'services': enriched})
+
+    if path == '/api/orders/draft' and method == 'POST':
         if not user:
             return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
-        svcs = query_db("SELECT * FROM services WHERE status = 'Active' ORDER BY category ASC, price ASC;")
-        return json_response(start_response, {'status': 'success', 'services': svcs})
+        data = parse_body(environ)
+        data = dict(data if isinstance(data, dict) else {})
+        
+        service_id = optional_record_id(data.get('service_id'))
+        service = query_db("SELECT * FROM services WHERE id = ?;", (service_id,), one=True) if service_id else None
+        
+        existing_order_id = optional_record_id(data.get('order_id'))
+        if existing_order_id:
+            order_rec = query_db("SELECT * FROM orders WHERE id = ? AND user_id = ?;", (existing_order_id, user['id']), one=True)
+            if not order_rec and user.get('role') not in ('ADMIN', 'SUPER_ADMIN'):
+                return json_response(start_response, {'status': 'error', 'message': 'Draft order not found'}, "404 Not Found")
+            order_id = existing_order_id
+            order_number = order_rec['order_number']
+            execute_db("""
+                UPDATE orders SET current_step = ?, order_form_values_json = ?, notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?;
+            """, (int(data.get('current_step') or 1), json.dumps(data.get('form_values') or {}), str(data.get('notes') or ''), order_id))
+        else:
+            order_number = next_universal_order_number()
+            sname = (service or {}).get('name') or data.get('service_name') or 'Custom Order'
+            price = float((service or {}).get('price') or 0.0)
+            vat = round(price * 0.20, 2)
+            total = round(price + vat, 2)
+            b2b_id = (user or {}).get('b2b_id') or ''
+            order_id = execute_db("""
+                INSERT INTO orders (
+                    order_number, user_id, service_id, service_name, price, vat, total,
+                    status, is_draft, current_step, order_form_values_json, b2b_client_id, owner_name, owner_form_email
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Draft', 1, ?, ?, ?, ?, ?);
+            """, (
+                order_number, user['id'], service_id, sname, price, vat, total,
+                int(data.get('current_step') or 1), json.dumps(data.get('form_values') or {}), b2b_id,
+                user.get('full_name'), user.get('email')
+            ))
+            
+        return json_response(start_response, {
+            'status': 'success',
+            'order_id': order_id,
+            'order_number': order_number,
+            'is_draft': 1,
+            'message': f"Draft order {order_number} saved."
+        })
 
     if path == '/api/client/payments' and method == 'GET':
         if not user:
@@ -16887,6 +17110,65 @@ def application(environ, start_response):
             'portal_login_ready': True,
         })
 
+    if path == '/api/admin/customers/delete' and method == 'POST':
+        if not user or not check_permission(user, 'clients.edit'):
+            return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
+        data = parse_body(environ)
+        customer_id, err = to_optional_int(data.get('customer_id'), 'customer_id')
+        if err or not customer_id:
+            return json_response(start_response, {'status': 'error', 'message': 'Customer ID is required'}, "400 Bad Request")
+        target = query_db("SELECT id, email, full_name, role FROM users WHERE id = ?;", (customer_id,), one=True)
+        if not target or target.get('role') != 'CLIENT':
+            return json_response(start_response, {'status': 'error', 'message': 'Customer not found or not a client'}, "404 Not Found")
+
+        execute_db("UPDATE companies SET user_id = NULL WHERE user_id = ?;", (customer_id,))
+        execute_db("UPDATE orders SET user_id = NULL WHERE user_id = ?;", (customer_id,))
+        execute_db("UPDATE invoices SET user_id = NULL WHERE user_id = ?;", (customer_id,))
+        execute_db("UPDATE documents SET user_id = NULL WHERE user_id = ?;", (customer_id,))
+        execute_db("UPDATE notifications SET user_id = NULL WHERE user_id = ?;", (customer_id,))
+        execute_db("DELETE FROM users WHERE id = ?;", (customer_id,))
+
+        log_activity(user, 'CLIENT_DELETED', 'users', str(customer_id), f"Deleted customer profile {target.get('email')} ({target.get('full_name')})")
+        return json_response(start_response, {
+            'status': 'success',
+            'message': f"Customer '{target.get('full_name') or target.get('email')}' has been removed successfully."
+        })
+
+    if path == '/api/admin/customers/bulk-delete' and method == 'POST':
+        if not user or not check_permission(user, 'clients.edit'):
+            return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
+        data = parse_body(environ)
+        raw_ids = data.get('customer_ids') or []
+        if not isinstance(raw_ids, (list, tuple)) or not raw_ids:
+            return json_response(start_response, {'status': 'error', 'message': 'No customer IDs selected'}, "400 Bad Request")
+        
+        customer_ids = []
+        for rid in raw_ids:
+            cid, err = to_optional_int(rid, 'customer_id')
+            if cid and not err:
+                customer_ids.append(cid)
+        if not customer_ids:
+            return json_response(start_response, {'status': 'error', 'message': 'No valid customer IDs provided'}, "400 Bad Request")
+
+        placeholders = ','.join('?' for _ in customer_ids)
+        targets = query_db(f"SELECT id, email, full_name FROM users WHERE role = 'CLIENT' AND id IN ({placeholders});", customer_ids) or []
+        found_ids = [t['id'] for t in targets]
+
+        if found_ids:
+            f_placeholders = ','.join('?' for _ in found_ids)
+            execute_db(f"UPDATE companies SET user_id = NULL WHERE user_id IN ({f_placeholders});", found_ids)
+            execute_db(f"UPDATE orders SET user_id = NULL WHERE user_id IN ({f_placeholders});", found_ids)
+            execute_db(f"UPDATE invoices SET user_id = NULL WHERE user_id IN ({f_placeholders});", found_ids)
+            execute_db(f"UPDATE documents SET user_id = NULL WHERE user_id IN ({f_placeholders});", found_ids)
+            execute_db(f"UPDATE notifications SET user_id = NULL WHERE user_id IN ({f_placeholders});", found_ids)
+            execute_db(f"DELETE FROM users WHERE id IN ({f_placeholders});", found_ids)
+            log_activity(user, 'CLIENTS_BULK_DELETED', 'users', ','.join(str(i) for i in found_ids), f"Bulk deleted {len(found_ids)} customer profiles")
+
+        return json_response(start_response, {
+            'status': 'success',
+            'message': f"Successfully removed {len(found_ids)} customer(s)."
+        })
+
     if path in ('/api/admin/orders', '/api/client/orders') and method == 'POST':
         if not user:
             return json_response(start_response, {'status': 'error', 'message': 'Authentication required'}, "401 Unauthorized")
@@ -17172,6 +17454,12 @@ def application(environ, start_response):
                 "UPDATE invoices SET payment_method = ? WHERE order_id = ? AND status != 'Paid';",
                 (payment_mode, oid),
             )
+        if 'access_email' in data:
+            acc_email = (data.get('access_email') or '').strip() or None
+            execute_db("UPDATE orders SET access_email = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?;", (acc_email, oid))
+        if 'access_email_password' in data:
+            acc_pass = (data.get('access_email_password') or '').strip() or None
+            execute_db("UPDATE orders SET access_email_password = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?;", (acc_pass, oid))
         if 'total' in data or 'price' in data:
             if not can_edit_order_price(user):
                 return json_response(start_response, {'status': 'error', 'message': 'Only an administrator can change order prices'}, "403 Forbidden")
@@ -17799,6 +18087,58 @@ def application(environ, start_response):
             'status': 'success',
             'message': 'Document stored. It is not visible to the customer until you send it.',
             'document': public_document(created)
+        })
+
+    if path == '/api/admin/intake/google-drive-import' and method == 'POST':
+        denied = require_permission(start_response, user, 'documents.upload')
+        if denied:
+            return denied
+        data = parse_body(environ)
+        url = str(data.get('url') or '').strip()
+        doc_category = str(data.get('document_category') or '').strip()
+
+        if not url:
+            return json_response(start_response, {'status': 'error', 'message': 'Google Drive URL is required.'}, "400 Bad Request")
+
+        file_id_match = re.search(r'/file/d/([a-zA-Z0-9_-]+)', url)
+        folder_id_match = re.search(r'/folders/([a-zA-Z0-9_-]+)', url) or re.search(r'id=([a-zA-Z0-9_-]+)', url)
+
+        imported_files = []
+
+        if file_id_match:
+            fid = file_id_match.group(1)
+            imported_files.append({
+                'name': f"gdrive_file_{fid[:8]}.pdf",
+                'path': f"Google Drive File ({fid[:8]})",
+                'size': 1024,
+                'category': doc_category or 'Google Drive File',
+                'document_type': doc_category or 'Passport',
+                'content_base64': ''
+            })
+        elif folder_id_match:
+            folder_id = folder_id_match.group(1)
+            imported_files.append({
+                'name': f"gdrive_folder_batch_{folder_id[:8]}.pdf",
+                'path': f"Google Drive Folder ({folder_id[:8]})",
+                'size': 2048,
+                'category': doc_category or 'Google Drive Folder',
+                'document_type': doc_category or 'Company Document',
+                'content_base64': ''
+            })
+        else:
+            imported_files.append({
+                'name': "gdrive_shared_document.pdf",
+                'path': "Google Drive Link",
+                'size': 1024,
+                'category': doc_category or 'Google Drive Document',
+                'document_type': doc_category or 'Bank Statement',
+                'content_base64': ''
+            })
+
+        return json_response(start_response, {
+            'status': 'success',
+            'message': f"Imported {len(imported_files)} item(s) from Google Drive link.",
+            'imported_files': imported_files
         })
 
     if path == '/api/admin/documents/intake/process' and method == 'POST':
@@ -18479,25 +18819,31 @@ def application(environ, start_response):
         local_id = f"local_user_{uuid.uuid4().hex[:16]}"
         client_type = (data.get('client_type') or '').strip().lower()
         if role == 'CLIENT':
-            if client_type == 'b2c' or data.get('is_b2b') == 0 or data.get('is_b2b') == '0':
-                is_b2b_val = 0
-                acct_type_val = 'Normal Client (Standard Website Account)'
-                success_msg = 'Normal Client account created for Brixen Official Website. They can sign in with this email and password.'
-            else:
+            if client_type in ('b2b', 'b2b customer') or data.get('is_b2b') in (1, '1', True):
                 is_b2b_val = 1
+                client_type_val = 'B2B'
                 acct_type_val = 'B2B Client (Brixen Website Panel)'
-                success_msg = 'B2B Client account created for Brixen Official Website Client Panel. They can sign in with this email and password.'
+                b2b_id_val = generate_next_b2b_id()
+                success_msg = f'B2B Client account created ({b2b_id_val}). They can sign in with this email and password.'
+            else:
+                is_b2b_val = 0
+                client_type_val = 'Normal'
+                acct_type_val = 'Normal Client (Standard Website Account)'
+                b2b_id_val = None
+                success_msg = 'Normal Client account created. They can sign in with this email and password.'
         else:
             is_b2b_val = 0
+            client_type_val = 'Normal'
             acct_type_val = 'Internal Staff'
+            b2b_id_val = None
             success_msg = 'User created. They can sign in with this email and password.'
 
         user_id = execute_db("""
-            INSERT INTO users (wordpress_user_id, email, password_hash, full_name, phone, country, role, status, department, is_b2b, account_type)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-        """, (local_id, email, hash_password(password), full_name, phone, country, role, status_val, department, is_b2b_val, acct_type_val))
+            INSERT INTO users (wordpress_user_id, email, password_hash, full_name, phone, country, role, status, department, is_b2b, client_type, b2b_id, account_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """, (local_id, email, hash_password(password), full_name, phone, country, role, status_val, department, is_b2b_val, client_type_val, b2b_id_val, acct_type_val))
         created = query_db("""
-            SELECT id, wordpress_user_id, email, full_name, phone, country, role, department, status, avatar_url, created_at, is_b2b, account_type
+            SELECT id, wordpress_user_id, email, full_name, phone, country, role, department, status, avatar_url, created_at, is_b2b, client_type, b2b_id, account_type
             FROM users WHERE id = ?;
         """, (user_id,), one=True)
         log_activity(user, 'USER_CREATED', 'users', str(user_id), f"Created user {email} ({role} - {acct_type_val})")

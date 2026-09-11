@@ -24,9 +24,13 @@ CREATE TABLE IF NOT EXISTS users (
     department TEXT,
     status TEXT NOT NULL DEFAULT 'Active' CHECK(status IN ('Active', 'Suspended', 'Pending')),
     two_factor_enabled INTEGER DEFAULT 0,
+    b2b_id TEXT UNIQUE,
+    client_type TEXT DEFAULT 'Normal',
+    theme_preference TEXT DEFAULT 'system',
     last_synced_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_b2b_id ON users(b2b_id) WHERE b2b_id IS NOT NULL;
 
 -- 2b. RBAC Roles & Permissions
 CREATE TABLE IF NOT EXISTS roles (
@@ -113,9 +117,12 @@ CREATE TABLE IF NOT EXISTS companies (
     business_email_updated_at TIMESTAMP,
     compliance_last_notification_at TIMESTAMP,
     compliance_last_notification_id TEXT,
+    b2b_id TEXT UNIQUE,
+    client_type TEXT DEFAULT 'B2B',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_companies_b2b_id ON companies(b2b_id) WHERE b2b_id IS NOT NULL;
 
 
 -- 3b. Dismissed company cards (staff deleted; block auto-recreation from webhooks)
@@ -199,6 +206,9 @@ CREATE TABLE IF NOT EXISTS services (
     vat_rate REAL DEFAULT 0.20,
     renewal_period TEXT DEFAULT 'Annual',
     woocommerce_product_id TEXT,
+    form_config_json TEXT,
+    document_requirements_json TEXT,
+    estimated_delivery_time TEXT DEFAULT '24-48 Hours',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -213,7 +223,7 @@ CREATE TABLE IF NOT EXISTS orders (
     price REAL NOT NULL,
     vat REAL NOT NULL DEFAULT 0.00,
     total REAL NOT NULL,
-    status TEXT NOT NULL CHECK(status IN ('Pending', 'Processing', 'In Progress', 'Completed', 'Cancelled', 'Refunded', 'Pending Verification')),
+    status TEXT NOT NULL CHECK(status IN ('Draft', 'Submitted', 'Pending', 'Processing', 'In Progress', 'Completed', 'Cancelled', 'Refunded', 'Pending Verification', 'Information Required', 'Documents Required')),
     progress_percent INTEGER NOT NULL DEFAULT 0,
     delivery_label TEXT DEFAULT 'Standard Processing',
     assigned_staff_id INTEGER,
@@ -224,6 +234,13 @@ CREATE TABLE IF NOT EXISTS orders (
     portfolio_hidden INTEGER NOT NULL DEFAULT 0,
     owner_name TEXT,
     owner_form_email TEXT,
+    checkout_form_json TEXT,
+    order_form_values_json TEXT,
+    is_draft INTEGER NOT NULL DEFAULT 0,
+    current_step INTEGER NOT NULL DEFAULT 1,
+    b2b_client_id TEXT,
+    access_email TEXT,
+    access_email_password TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,

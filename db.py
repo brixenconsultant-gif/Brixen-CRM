@@ -182,6 +182,9 @@ def migrate_invoice_partial_paid_status(conn):
 def ensure_schema():
     """Additive, non-destructive columns/tables for existing local databases."""
     conn = get_db()
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if not tables or 'users' not in tables:
+        return
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS order_line_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -214,6 +217,23 @@ def ensure_schema():
     service_cols = {row[1] for row in conn.execute("PRAGMA table_info(services)").fetchall()}
     if 'woocommerce_product_id' not in service_cols:
         conn.execute("ALTER TABLE services ADD COLUMN woocommerce_product_id TEXT")
+    if 'form_config_json' not in service_cols:
+        conn.execute("ALTER TABLE services ADD COLUMN form_config_json TEXT")
+    if 'document_requirements_json' not in service_cols:
+        conn.execute("ALTER TABLE services ADD COLUMN document_requirements_json TEXT")
+    if 'estimated_delivery_time' not in service_cols:
+        conn.execute("ALTER TABLE services ADD COLUMN estimated_delivery_time TEXT DEFAULT '24-48 Hours'")
+
+    if 'checkout_form_json' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN checkout_form_json TEXT")
+    if 'order_form_values_json' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN order_form_values_json TEXT")
+    if 'is_draft' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN is_draft INTEGER NOT NULL DEFAULT 0")
+    if 'current_step' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN current_step INTEGER NOT NULL DEFAULT 1")
+    if 'b2b_client_id' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN b2b_client_id TEXT")
     user_cols = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
     if 'department' not in user_cols:
         conn.execute("ALTER TABLE users ADD COLUMN department TEXT")
@@ -222,12 +242,28 @@ def ensure_schema():
     if 'notification_email' not in user_cols:
         conn.execute("ALTER TABLE users ADD COLUMN notification_email TEXT")
     if 'is_b2b' not in user_cols:
-        conn.execute("ALTER TABLE users ADD COLUMN is_b2b INTEGER NOT NULL DEFAULT 1")
+        conn.execute("ALTER TABLE users ADD COLUMN is_b2b INTEGER NOT NULL DEFAULT 0")
     if 'account_type' not in user_cols:
-        conn.execute("ALTER TABLE users ADD COLUMN account_type TEXT DEFAULT 'B2B Client (Brixen Website Panel)'")
-        conn.execute("UPDATE users SET account_type = 'B2B Client (Brixen Website Panel)', is_b2b = 1 WHERE role = 'CLIENT'")
+        conn.execute("ALTER TABLE users ADD COLUMN account_type TEXT DEFAULT 'Normal Client'")
+    if 'b2b_id' not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN b2b_id TEXT")
+    if 'client_type' not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN client_type TEXT DEFAULT 'Normal'")
+
+    # Safe Audit: Ensure standard retail/individual clients default to Normal Customer (is_b2b = 0, b2b_id = NULL)
+    conn.execute("""
+        UPDATE users 
+        SET b2b_id = NULL, client_type = 'Normal', is_b2b = 0 
+        WHERE role = 'CLIENT' AND (is_b2b = 0 OR client_type = 'Normal' OR (account_type IS NOT NULL AND account_type NOT LIKE '%B2B%'));
+    """)
+    if 'theme_preference' not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN theme_preference TEXT DEFAULT 'system'")
     if 'checkout_phone' not in order_cols:
         conn.execute("ALTER TABLE orders ADD COLUMN checkout_phone TEXT")
+    if 'access_email' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN access_email TEXT")
+    if 'access_email_password' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN access_email_password TEXT")
     if 'checkout_dob' not in order_cols:
         conn.execute("ALTER TABLE orders ADD COLUMN checkout_dob TEXT")
     if 'website_checkout_pulled_at' not in order_cols:
@@ -343,6 +379,12 @@ def ensure_schema():
         conn.execute("ALTER TABLE companies ADD COLUMN compliance_last_notification_at TIMESTAMP")
     if 'compliance_last_notification_id' not in company_cols:
         conn.execute("ALTER TABLE companies ADD COLUMN compliance_last_notification_id TEXT")
+    if 'b2b_id' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN b2b_id TEXT")
+    if 'client_type' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN client_type TEXT DEFAULT 'B2B'")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_companies_b2b_id ON companies(b2b_id) WHERE b2b_id IS NOT NULL;")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_b2b_id ON users(b2b_id) WHERE b2b_id IS NOT NULL;")
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS company_email_verification_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
