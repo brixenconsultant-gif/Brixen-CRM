@@ -105,14 +105,24 @@ jobs:
             export STORAGE_HOST_PATH='$DEPLOY_PATH/storage/clients'
             \$COMPOSE build
             systemctl stop brixen-crm.service
+            test "\$(sqlite3 hypetex.db 'PRAGMA integrity_check;')" = ok
+            DB_SIGNATURE=\$(sqlite3 hypetex.db "SELECT (SELECT COUNT(*) FROM users)||':'||(SELECT COUNT(*) FROM companies)||':'||(SELECT COUNT(*) FROM orders)||':'||(SELECT COUNT(*) FROM documents)||':'||(SELECT COUNT(*) FROM invoices);")
+            mkdir -p backups/db
+            sqlite3 hypetex.db ".backup 'backups/db/hypetex-\$(date +%Y%m%d-%H%M%S).db'"
             if ! \$COMPOSE up -d; then
               systemctl start brixen-crm.service
               exit 1
             fi
             for attempt in 1 2 3 4 5 6; do
               if curl -fsS http://127.0.0.1:5050/ >/dev/null; then
-                systemctl disable brixen-crm.service
-                exit 0
+                test "\$(sqlite3 hypetex.db 'PRAGMA integrity_check;')" = ok
+                CURRENT_SIGNATURE=\$(sqlite3 hypetex.db "SELECT (SELECT COUNT(*) FROM users)||':'||(SELECT COUNT(*) FROM companies)||':'||(SELECT COUNT(*) FROM orders)||':'||(SELECT COUNT(*) FROM documents)||':'||(SELECT COUNT(*) FROM invoices);")
+                if [ "\$CURRENT_SIGNATURE" = "\$DB_SIGNATURE" ]; then
+                  systemctl disable brixen-crm.service
+                  exit 0
+                fi
+                echo "Database row-count signature changed: \$DB_SIGNATURE -> \$CURRENT_SIGNATURE"
+                break
               fi
               sleep 5
             done
