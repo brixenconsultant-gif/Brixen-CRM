@@ -3831,8 +3831,8 @@ def public_client_company(row, deadlines=None, for_staff=False, resolve_owner=Fa
         'registered_email': str(src.get('registered_email') or '').strip(),
         'whatsapp_number': str(src.get('whatsapp_number') or '').strip(),
         'deadlines': list(deadlines or []),
-        'b2b_id': str(src.get('b2b_id') or '').strip(),
-        'client_type': str(src.get('client_type') or 'B2B').strip() or 'B2B',
+        'b2b_id': str(src.get('b2b_id') or '').strip() if (src.get('client_type') == 'B2B' or src.get('is_b2b') == 1) else '',
+        'client_type': str(src.get('client_type') or 'Normal').strip() or 'Normal',
     }
     if is_placeholder_company_email(payload['registered_email']):
         payload['registered_email'] = ''
@@ -11184,11 +11184,13 @@ def create_manual_company(data, actor=None):
     if len(inc_date) < 10:
         inc_date = datetime.date.today().isoformat()
     form_email = registered_email_for_client(client, extras)
-    b2b_id = generate_next_b2b_id()
+    is_b2b_client = bool(client and (client.get('is_b2b') == 1 or client.get('client_type') == 'B2B'))
+    b2b_id = generate_next_b2b_id() if is_b2b_client else None
+    client_type_val = 'B2B' if is_b2b_client else 'Normal'
     company_id = execute_db(
         """
         INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status, registered_email, b2b_id, client_type)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'B2B');
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """,
         (
             client_id,
@@ -11202,6 +11204,7 @@ def create_manual_company(data, actor=None):
             (extras.get('account_status') or 'Good Standing').strip() or 'Good Standing',
             form_email or None,
             b2b_id,
+            client_type_val,
         ),
     )
     created = query_db(
@@ -11329,11 +11332,14 @@ def ensure_company_from_registration_order(client_id, client_name, o_data, servi
         'closed': 'Closed',
     }
     company_status = status_map.get(raw_status, 'Active')
-    b2b_id = generate_next_b2b_id()
+    client_rec = query_db("SELECT id, is_b2b, client_type FROM users WHERE id = ?;", (client_id,), one=True) if client_id else None
+    is_b2b_client = bool(client_rec and (client_rec.get('is_b2b') == 1 or client_rec.get('client_type') == 'B2B'))
+    b2b_id = generate_next_b2b_id() if is_b2b_client else None
+    client_type_val = 'B2B' if is_b2b_client else 'Normal'
     company_id = execute_db(
         """
         INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status, b2b_id, client_type)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, 'B2B');
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?);
         """,
         (
             client_id,
@@ -11345,6 +11351,7 @@ def ensure_company_from_registration_order(client_id, client_name, o_data, servi
             address,
             service_name or 'Company Formation',
             b2b_id,
+            client_type_val,
         ),
     )
     return company_id

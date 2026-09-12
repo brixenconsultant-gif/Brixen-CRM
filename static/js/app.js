@@ -2218,7 +2218,7 @@ function renderRegisteredCompanyCard(company, isAdmin) {
                     <h3>${escapeHtml(company.name || 'Company')}</h3>
                     <p style="display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:2px;">
                         <span>#${escapeHtml(company.company_number || '—')}</span>
-                        ${company.b2b_id ? `<span class="b2b-badge">${escapeHtml(company.b2b_id)}</span>` : ''}
+                        ${(company.b2b_id && (company.client_type === 'B2B' || company.is_b2b === 1)) ? `<span class="b2b-badge">${escapeHtml(company.b2b_id)}</span>` : ''}
                     </p>
                     ${(() => {
                         const names = portfolioDirectorNames(company);
