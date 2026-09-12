@@ -746,6 +746,72 @@ function showLoginView() {
     setAuthShellState(false, false);
 }
 
+function toggleLoginPasswordVisibility() {
+    const passInput = document.getElementById('login-password');
+    const chk = document.getElementById('login-show-password');
+    if (passInput) {
+        passInput.type = chk && chk.checked ? 'text' : 'password';
+    }
+}
+
+function openForgotPasswordModal(event) {
+    if (event) event.preventDefault();
+    const loginEmail = (document.getElementById('login-email')?.value || '').trim();
+    const forgotEmail = document.getElementById('forgot-email');
+    if (forgotEmail && loginEmail) forgotEmail.value = loginEmail;
+    const msg = document.getElementById('forgot-password-msg');
+    if (msg) { msg.style.display = 'none'; msg.textContent = ''; }
+    const modal = document.getElementById('modal-forgot-password');
+    if (modal) {
+        modal.removeAttribute('hidden');
+        modal.style.display = 'flex';
+    }
+}
+
+function closeForgotPasswordModal() {
+    const modal = document.getElementById('modal-forgot-password');
+    if (modal) {
+        modal.setAttribute('hidden', '');
+        modal.style.display = 'none';
+    }
+}
+
+async function handleForgotPasswordSubmit(event) {
+    event.preventDefault();
+    const emailInput = document.getElementById('forgot-email');
+    const msgEl = document.getElementById('forgot-password-msg');
+    const submitBtn = document.getElementById('btn-submit-forgot-password');
+    const email = (emailInput?.value || '').trim();
+    if (!email) return;
+
+    if (submitBtn) submitBtn.disabled = true;
+    try {
+        const res = await fetch('/api/auth/forgot-password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (msgEl) {
+            msgEl.style.display = 'block';
+            msgEl.textContent = data.message || 'If an account exists, password reset instructions have been sent.';
+            msgEl.style.background = (res.ok && data.status === 'success') ? '#f0fdf4' : '#fef2f2';
+            msgEl.style.color = (res.ok && data.status === 'success') ? '#166534' : '#991b1b';
+            msgEl.style.border = (res.ok && data.status === 'success') ? '1px solid #bbf7d0' : '1px solid #fecaca';
+        }
+    } catch (err) {
+        if (msgEl) {
+            msgEl.style.display = 'block';
+            msgEl.textContent = 'Unable to process request. Please try again.';
+            msgEl.style.background = '#fef2f2';
+            msgEl.style.color = '#991b1b';
+            msgEl.style.border = '1px solid #fecaca';
+        }
+    } finally {
+        if (submitBtn) submitBtn.disabled = false;
+    }
+}
+
 async function handleFormLogin(e) {
     if (e) e.preventDefault();
     const emailInput = document.getElementById('login-email');

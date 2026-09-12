@@ -15874,6 +15874,45 @@ def application(environ, start_response):
         origin_clear = ('Set-Cookie', origin_cookie_header(clear=True, environ=environ))
         return json_response(start_response, {'status': 'success', 'user': u_dict}, extra_headers=[origin_clear, cookie_header])
 
+    if path == '/api/auth/forgot-password' and method == 'POST':
+        data = parse_body(environ)
+        email = str(data.get('email') or '').strip().lower()
+        if not email:
+            return json_response(start_response, {'status': 'error', 'message': 'Email address is required.'}, "400 Bad Request")
+
+        ALIAS_MAP = {
+            'admin': 'admin@brixenconsultant.co.uk',
+            'superadmin': 'superadmin@brixenconsultant.co.uk',
+            'manager': 'manager@brixenconsultant.co.uk',
+        }
+        lookup_email = ALIAS_MAP.get(email, email)
+        found_user = query_db("SELECT * FROM users WHERE LOWER(email) = ?;", (lookup_email,), one=True)
+        if not found_user:
+            found_user = query_db("SELECT * FROM users WHERE LOWER(email) = ?;", (email,), one=True)
+
+        if found_user:
+            log_activity(found_user, 'FORGOT_PASSWORD_REQUEST', 'users', str(found_user['id']), f"Password reset requested for {found_user['email']}")
+            try:
+                msg = f"Password reset requested for {found_user['email']}. Please contact system administration to issue a new credential."
+                notify_client(
+                    found_user,
+                    'Password Reset Instructions',
+                    msg,
+                    'password_reset',
+                    '/login',
+                    email_subject=f"Password Reset Request — {brand_settings()['company_name']}",
+                    email_headline='Password Reset Requested',
+                    cta_label='Contact Support',
+                    layout='activity'
+                )
+            except Exception as e:
+                print(f"[ForgotPassword Error] {e}")
+
+        return json_response(start_response, {
+            'status': 'success',
+            'message': f"If an account exists for {email}, password reset instructions have been sent."
+        })
+
     if path == '/api/auth/me' and method == 'GET':
         if not user:
             return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
