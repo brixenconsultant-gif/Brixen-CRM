@@ -17155,8 +17155,8 @@ def application(environ, start_response):
         })
 
     if path == '/api/admin/customers/delete' and method == 'POST':
-        if not user or user.get('role') not in ('SUPER_ADMIN', 'ADMIN'):
-            return json_response(start_response, {'status': 'error', 'message': 'Deletion is restricted to Administrator accounts only.'}, "403 Forbidden")
+        if not user or user.get('role') not in ('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF'):
+            return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
         data = parse_body(environ)
         customer_id, err = to_optional_int(data.get('customer_id'), 'customer_id')
         if err or not customer_id:
@@ -17172,8 +17172,8 @@ def application(environ, start_response):
         })
 
     if path == '/api/admin/customers/bulk-delete' and method == 'POST':
-        if not user or user.get('role') not in ('SUPER_ADMIN', 'ADMIN'):
-            return json_response(start_response, {'status': 'error', 'message': 'Deletion is restricted to Administrator accounts only.'}, "403 Forbidden")
+        if not user or user.get('role') not in ('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF'):
+            return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
         data = parse_body(environ)
         raw_ids = data.get('customer_ids') or []
         if not isinstance(raw_ids, (list, tuple)) or not raw_ids:

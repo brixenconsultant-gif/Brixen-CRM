@@ -5743,7 +5743,7 @@ function canManageOrders() {
 }
 
 function canDeleteRecords() {
-    return currentUser && ['SUPER_ADMIN', 'ADMIN'].includes(currentUser.role);
+    return currentUser && ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF'].includes(currentUser.role);
 }
 
 function canDeleteOrders() {
