@@ -15089,6 +15089,50 @@ try:
 except Exception:
     pass
 
+def remove_customer_accounts(customer_ids, actor=None):
+    if not customer_ids or not isinstance(customer_ids, (list, tuple, set)):
+        return 0
+    ids_list = [int(x) for x in customer_ids if str(x).isdigit()]
+    if not ids_list:
+        return 0
+
+    chunk_size = 200
+    total_deleted = 0
+    
+    for i in range(0, len(ids_list), chunk_size):
+        chunk = ids_list[i:i + chunk_size]
+        placeholders = ','.join('?' for _ in chunk)
+        
+        targets = query_db(f"SELECT id, email, full_name FROM users WHERE role = 'CLIENT' AND id IN ({placeholders});", chunk) or []
+        found_ids = [t['id'] for t in targets]
+        if not found_ids:
+            continue
+            
+        f_placeholders = ','.join('?' for _ in found_ids)
+        
+        try:
+            execute_db(f"DELETE FROM support_messages WHERE ticket_id IN (SELECT id FROM support_tickets WHERE user_id IN ({f_placeholders}));", found_ids)
+            execute_db(f"DELETE FROM support_tickets WHERE user_id IN ({f_placeholders});", found_ids)
+            execute_db(f"DELETE FROM documents WHERE user_id IN ({f_placeholders});", found_ids)
+            execute_db(f"DELETE FROM invoices WHERE user_id IN ({f_placeholders});", found_ids)
+            execute_db(f"DELETE FROM order_line_items WHERE order_id IN (SELECT id FROM orders WHERE user_id IN ({f_placeholders}));", found_ids)
+            execute_db(f"DELETE FROM orders WHERE user_id IN ({f_placeholders});", found_ids)
+            execute_db(f"DELETE FROM company_directors WHERE company_id IN (SELECT id FROM companies WHERE user_id IN ({f_placeholders}));", found_ids)
+            execute_db(f"DELETE FROM company_owners WHERE company_id IN (SELECT id FROM companies WHERE user_id IN ({f_placeholders}));", found_ids)
+            execute_db(f"DELETE FROM companies WHERE user_id IN ({f_placeholders});", found_ids)
+            execute_db(f"DELETE FROM notifications WHERE user_id IN ({f_placeholders});", found_ids)
+            execute_db(f"DELETE FROM user_sessions WHERE user_id IN ({f_placeholders});", found_ids)
+            
+            c_res = execute_db(f"DELETE FROM users WHERE role = 'CLIENT' AND id IN ({f_placeholders});", found_ids)
+            total_deleted += len(found_ids)
+            
+            if actor:
+                log_activity(actor, 'CLIENTS_BULK_DELETED', 'users', ','.join(str(x) for x in found_ids), f"Bulk deleted {len(found_ids)} customer profiles")
+        except Exception as ex:
+            print(f"[remove_customer_accounts Error] {ex}")
+
+    return total_deleted
+
 def application(environ, start_response):
     start_registration_notice_worker()
     try:
@@ -17121,14 +17165,7 @@ def application(environ, start_response):
         if not target or target.get('role') != 'CLIENT':
             return json_response(start_response, {'status': 'error', 'message': 'Customer not found or not a client'}, "404 Not Found")
 
-        execute_db("UPDATE companies SET user_id = NULL WHERE user_id = ?;", (customer_id,))
-        execute_db("UPDATE orders SET user_id = NULL WHERE user_id = ?;", (customer_id,))
-        execute_db("UPDATE invoices SET user_id = NULL WHERE user_id = ?;", (customer_id,))
-        execute_db("UPDATE documents SET user_id = NULL WHERE user_id = ?;", (customer_id,))
-        execute_db("UPDATE notifications SET user_id = NULL WHERE user_id = ?;", (customer_id,))
-        execute_db("DELETE FROM users WHERE id = ?;", (customer_id,))
-
-        log_activity(user, 'CLIENT_DELETED', 'users', str(customer_id), f"Deleted customer profile {target.get('email')} ({target.get('full_name')})")
+        count = remove_customer_accounts([customer_id], actor=user)
         return json_response(start_response, {
             'status': 'success',
             'message': f"Customer '{target.get('full_name') or target.get('email')}' has been removed successfully."
@@ -17150,23 +17187,11 @@ def application(environ, start_response):
         if not customer_ids:
             return json_response(start_response, {'status': 'error', 'message': 'No valid customer IDs provided'}, "400 Bad Request")
 
-        placeholders = ','.join('?' for _ in customer_ids)
-        targets = query_db(f"SELECT id, email, full_name FROM users WHERE role = 'CLIENT' AND id IN ({placeholders});", customer_ids) or []
-        found_ids = [t['id'] for t in targets]
-
-        if found_ids:
-            f_placeholders = ','.join('?' for _ in found_ids)
-            execute_db(f"UPDATE companies SET user_id = NULL WHERE user_id IN ({f_placeholders});", found_ids)
-            execute_db(f"UPDATE orders SET user_id = NULL WHERE user_id IN ({f_placeholders});", found_ids)
-            execute_db(f"UPDATE invoices SET user_id = NULL WHERE user_id IN ({f_placeholders});", found_ids)
-            execute_db(f"UPDATE documents SET user_id = NULL WHERE user_id IN ({f_placeholders});", found_ids)
-            execute_db(f"UPDATE notifications SET user_id = NULL WHERE user_id IN ({f_placeholders});", found_ids)
-            execute_db(f"DELETE FROM users WHERE id IN ({f_placeholders});", found_ids)
-            log_activity(user, 'CLIENTS_BULK_DELETED', 'users', ','.join(str(i) for i in found_ids), f"Bulk deleted {len(found_ids)} customer profiles")
+        deleted_count = remove_customer_accounts(customer_ids, actor=user)
 
         return json_response(start_response, {
             'status': 'success',
-            'message': f"Successfully removed {len(found_ids)} customer(s)."
+            'message': f"Successfully removed {deleted_count} customer(s)."
         })
 
     if path in ('/api/admin/orders', '/api/client/orders') and method == 'POST':
