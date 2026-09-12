@@ -13152,14 +13152,36 @@ function setupCompaniesHouseLiveSearch(inputEl, options = {}) {
                         const selectedOffice = item.getAttribute('data-office');
 
                         inputEl.value = selectedName;
+                        inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+                        inputEl.dispatchEvent(new Event('change', { bubbles: true }));
 
-                        const numTarget = options.numEl || document.getElementById('create-company-number') || document.getElementById('wizard-company-number');
-                        const directorTarget = options.directorEl || document.getElementById('create-company-director') || document.getElementById('wizard-director-name') || document.getElementById('staff-edit-director-name');
-                        const officeTarget = options.officeEl || document.getElementById('create-company-address') || document.getElementById('wizard-registered-address');
+                        // Smart container discovery for form fields
+                        const form = inputEl.closest('form, div.modal-card, div.wizard-step-pane, div[id*="order"], body');
 
-                        if (numTarget) numTarget.value = selectedNum;
+                        let numTarget = options.numEl;
+                        let directorTarget = options.directorEl;
+                        let officeTarget = options.officeEl;
+
+                        if (form) {
+                            if (!numTarget) numTarget = form.querySelector('input[id*="company-number"], input[id*="company_number"], input[id*="reg"], input[name*="reg"], input[placeholder*="reg"]');
+                            if (!directorTarget) directorTarget = form.querySelector('input[id*="director"], input[name*="director"], input[placeholder*="director"]');
+                            if (!officeTarget) officeTarget = form.querySelector('input[id*="address"], input[name*="address"], input[placeholder*="address"]');
+                        }
+
+                        if (!numTarget) numTarget = document.getElementById('create-company-number') || document.getElementById('wizard-company-number');
+                        if (!directorTarget) directorTarget = document.getElementById('create-company-director') || document.getElementById('wizard-director-name') || document.getElementById('staff-edit-director-name');
+                        if (!officeTarget) officeTarget = document.getElementById('create-company-address') || document.getElementById('wizard-registered-address');
+
+                        if (numTarget) {
+                            numTarget.value = selectedNum;
+                            numTarget.dispatchEvent(new Event('input', { bubbles: true }));
+                            numTarget.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
                         if (directorTarget && selectedDirector) {
                             directorTarget.value = selectedDirector;
+                            directorTarget.dispatchEvent(new Event('input', { bubbles: true }));
+                            directorTarget.dispatchEvent(new Event('change', { bubbles: true }));
+                            
                             directorTarget.style.borderColor = '#2563eb';
                             directorTarget.style.backgroundColor = '#eff6ff';
                             setTimeout(() => {
@@ -13167,7 +13189,11 @@ function setupCompaniesHouseLiveSearch(inputEl, options = {}) {
                                 directorTarget.style.backgroundColor = '';
                             }, 2000);
                         }
-                        if (officeTarget && selectedOffice) officeTarget.value = selectedOffice;
+                        if (officeTarget && selectedOffice) {
+                            officeTarget.value = selectedOffice;
+                            officeTarget.dispatchEvent(new Event('input', { bubbles: true }));
+                            officeTarget.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
 
                         dropdown.style.display = 'none';
 
@@ -13199,4 +13225,5 @@ function initAllCompaniesHouseLiveSearch() {
 
 document.addEventListener('DOMContentLoaded', () => {
     initAllCompaniesHouseLiveSearch();
+    setInterval(initAllCompaniesHouseLiveSearch, 1500);
 });
