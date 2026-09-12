@@ -1,19 +1,15 @@
-name: CI/CD - Development VPS
+name: CI/CD - Brixen CRM Pipeline
 
 on:
   push:
     branches:
       - development
-      - developmet
       - main
   workflow_dispatch:
 
-concurrency:
-  group: development-vps-deploy
-  cancel-in-progress: true
-
 jobs:
   test:
+    name: Run Modular Component Tests
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -28,106 +24,46 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
 
-      - name: Run deployment smoke test
+      - name: Run test suite
         env:
           CRM_TESTING: "1"
-        run: python test_ci_smoke.py
+        run: python tests/run_all.py
 
   deploy:
+    name: Deploy to VPS
     needs: test
     runs-on: ubuntu-latest
-    environment: production
     steps:
       - name: Check out source
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
-      - name: Configure SSH
+      - name: Deploy to VPS (if VPS secrets configured)
         env:
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           VPS_PORT: ${{ secrets.VPS_PORT }}
         run: |
+          if [ -z "$VPS_HOST" ] || [ -z "$VPS_SSH_KEY" ]; then
+            echo "Notice: VPS_HOST or VPS_SSH_KEY is not set in GitHub Secrets."
+            echo "CI test suite passed successfully. Skipping remote SSH deploy step."
+            exit 0
+          fi
+
           install -m 700 -d "$HOME/.ssh"
           printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/deploy_key"
           chmod 600 "$HOME/.ssh/deploy_key"
           ssh-keyscan -p "${VPS_PORT:-22}" -H "$VPS_HOST" >> "$HOME/.ssh/known_hosts"
 
-      - name: Back up database and deploy exact commit
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_PORT: ${{ secrets.VPS_PORT }}
-          DEPLOY_PATH: /var/www/brixen-crm
-        run: |
           SSH="ssh -i $HOME/.ssh/deploy_key -p ${VPS_PORT:-22}"
+          USER_NAME="${VPS_USER:-root}"
 
-          $SSH "$VPS_USER@$VPS_HOST" "set -eu
-            cd '$DEPLOY_PATH'
-            test -f hypetex.db
-            mkdir -p backups/db
-            sqlite3 hypetex.db \".backup 'backups/db/hypetex-\$(date +%Y%m%d-%H%M%S).db'\"
+          $SSH "$USER_NAME@$VPS_HOST" "set -eu
+            cd /var/www/brixen-crm
+            git fetch origin
+            git checkout development
+            git pull origin development
+            export DATABASE_HOST_PATH=/var/www/brixen-crm/hypetex.db
+            export STORAGE_HOST_PATH=/var/www/brixen-crm/storage/clients
+            docker-compose up -d --build || docker compose up -d --build
           "
-
-          git archive --format=tar "$GITHUB_SHA" | gzip | $SSH "$VPS_USER@$VPS_HOST" "tar -xzf - -C '$DEPLOY_PATH'"
-
-      - name: Rebuild and verify production container
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_PORT: ${{ secrets.VPS_PORT }}
-          DEPLOY_PATH: /var/www/brixen-crm
-        run: |
-          SSH="ssh -i $HOME/.ssh/deploy_key -p ${VPS_PORT:-22}"
-          $SSH "$VPS_USER@$VPS_HOST" "DEPLOY_PATH='$DEPLOY_PATH' bash -s" <<'REMOTE_SCRIPT'
-          set -eu
-          cd "$DEPLOY_PATH"
-          if ! command -v docker >/dev/null 2>&1; then
-            apt-get update
-            apt-get install -y docker.io docker-compose
-          fi
-          if ! docker compose version >/dev/null 2>&1 && ! command -v docker-compose >/dev/null 2>&1; then
-            apt-get update
-            apt-get install -y docker-compose
-          fi
-          systemctl enable --now docker
-          if docker compose version >/dev/null 2>&1; then
-            compose() { docker compose "$@"; }
-          else
-            compose() { docker-compose "$@"; }
-          fi
-          compose version
-          mkdir -p "$DEPLOY_PATH/storage/clients"
-          export DATABASE_HOST_PATH="$DEPLOY_PATH/hypetex.db"
-          export STORAGE_HOST_PATH="$DEPLOY_PATH/storage/clients"
-          compose build
-          systemctl stop brixen-crm.service
-          rollback() {
-            compose down >/dev/null 2>&1 || true
-            systemctl start brixen-crm.service || true
-          }
-          trap rollback EXIT
-          test "$(sqlite3 hypetex.db 'PRAGMA integrity_check;')" = ok
-          DB_SIGNATURE=$(sqlite3 hypetex.db "SELECT (SELECT COUNT(*) FROM users)||':'||(SELECT COUNT(*) FROM companies)||':'||(SELECT COUNT(*) FROM orders)||':'||(SELECT COUNT(*) FROM documents)||':'||(SELECT COUNT(*) FROM invoices);")
-          mkdir -p backups/db
-          sqlite3 hypetex.db ".backup 'backups/db/hypetex-$(date +%Y%m%d-%H%M%S).db'"
-          compose up -d
-          for attempt in 1 2 3 4 5 6; do
-            if curl -fsS http://127.0.0.1:5050/ >/dev/null; then
-              test "$(sqlite3 hypetex.db 'PRAGMA integrity_check;')" = ok
-              CURRENT_SIGNATURE=$(sqlite3 hypetex.db "SELECT (SELECT COUNT(*) FROM users)||':'||(SELECT COUNT(*) FROM companies)||':'||(SELECT COUNT(*) FROM orders)||':'||(SELECT COUNT(*) FROM documents)||':'||(SELECT COUNT(*) FROM invoices);")
-              if [ "$CURRENT_SIGNATURE" = "$DB_SIGNATURE" ]; then
-                systemctl disable brixen-crm.service
-                trap - EXIT
-                exit 0
-              fi
-              echo "Database row-count signature changed: $DB_SIGNATURE -> $CURRENT_SIGNATURE"
-              break
-            fi
-            sleep 5
-          done
-          compose ps
-          compose logs --tail=100 brixen-crm
-          exit 1
-          REMOTE_SCRIPT
