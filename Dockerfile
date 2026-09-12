@@ -35,8 +35,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py db.py schema.sql seed_db.py ./
 COPY email_engine.py compliance_alerts.py product_catalog_config.py ./
 COPY templates/ templates/
-COPY static/ static/
 COPY scripts/ scripts/
+COPY tests/ tests/
+COPY test_app.py test_ci_smoke.py ./
 
 # ── Runtime data directories ───────────────────────────────
 # Production database and client files are mounted from the VPS.
