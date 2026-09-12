@@ -3,7 +3,6 @@ name: CI/CD - Brixen CRM Pipeline
 on:
   push:
     branches:
-      - development
       - main
   workflow_dispatch:
 
