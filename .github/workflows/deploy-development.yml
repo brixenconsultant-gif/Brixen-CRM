@@ -7,35 +7,39 @@ on:
       - main
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
-    name: Run Modular Component Tests
+  build-test-deploy:
+    name: Build, Test & Deploy
     runs-on: ubuntu-latest
     steps:
-      - name: Check out source
+      - name: Check out source code
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
 
-      - name: Install dependencies
-        run: python -m pip install -r requirements.txt
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-eng libglib2.0-0 libsm6 libxext6 libxrender1
 
-      - name: Run test suite
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run Component Test Suite
         env:
           CRM_TESTING: "1"
-        run: python tests/run_all.py
-
-  deploy:
-    name: Deploy to VPS
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v4
+        run: |
+          python tests/run_all.py
 
       - name: Deploy to VPS (if VPS secrets configured)
         env:
@@ -44,18 +48,21 @@ jobs:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           VPS_PORT: ${{ secrets.VPS_PORT }}
         run: |
-          if [ -z "$VPS_HOST" ] || [ -z "$VPS_SSH_KEY" ]; then
-            echo "Notice: VPS_HOST or VPS_SSH_KEY is not set in GitHub Secrets."
-            echo "CI test suite passed successfully. Skipping remote SSH deploy step."
+          if [ -z "${VPS_HOST:-}" ] || [ -z "${VPS_SSH_KEY:-}" ]; then
+            echo "--------------------------------------------------------"
+            echo "Notice: VPS_HOST or VPS_SSH_KEY secret is not set."
+            echo "CI component tests passed 100%. Skipping SSH deployment."
+            echo "--------------------------------------------------------"
             exit 0
           fi
 
-          install -m 700 -d "$HOME/.ssh"
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
           printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/deploy_key"
           chmod 600 "$HOME/.ssh/deploy_key"
-          ssh-keyscan -p "${VPS_PORT:-22}" -H "$VPS_HOST" >> "$HOME/.ssh/known_hosts"
+          ssh-keyscan -p "${VPS_PORT:-22}" -H "$VPS_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null || true
 
-          SSH="ssh -i $HOME/.ssh/deploy_key -p ${VPS_PORT:-22}"
+          SSH="ssh -i $HOME/.ssh/deploy_key -p ${VPS_PORT:-22} -o StrictHostKeyChecking=no"
           USER_NAME="${VPS_USER:-root}"
 
           $SSH "$USER_NAME@$VPS_HOST" "set -eu
