@@ -45,6 +45,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, 'static')
 TEMPLATES_DIR = os.path.join(BASE_DIR, 'templates')
 
+try:
+    ensure_schema()
+except Exception as _schema_err:
+    print(f"[SchemaInit Warning] {_schema_err}")
+
 import uuid
 import datetime
 import calendar
