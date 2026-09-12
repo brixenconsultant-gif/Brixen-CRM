@@ -1,9 +1,13 @@
 import os
 import sys
+import tempfile
 sys_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if sys_path not in sys.path:
     sys.path.insert(0, sys_path)
 os.environ.setdefault('CRM_TESTING', '1')
+test_db_dir = os.path.join(tempfile.gettempdir(), 'brixen_tests')
+os.makedirs(test_db_dir, exist_ok=True)
+os.environ['DATABASE_URL'] = os.path.join(test_db_dir, 'brixen_test.db')
 import sys
 import json
 import io
