@@ -15848,21 +15848,24 @@ def application(environ, start_response):
 
         # Alias resolution for admin signin convenience (.com vs .co.uk vs short names)
         ALIAS_MAP = {
-            'admin': 'admin@brixenconsultant.co.uk',
-            'superadmin': 'superadmin@brixenconsultant.co.uk',
-            'manager': 'manager@brixenconsultant.co.uk',
-            'admin@brixenconsultants.com': 'admin@brixenconsultant.co.uk',
-            'admin@brixenconsultant.com': 'admin@brixenconsultant.co.uk',
-            'superadmin@brixenconsultants.com': 'superadmin@brixenconsultant.co.uk',
-            'superadmin@brixenconsultant.com': 'superadmin@brixenconsultant.co.uk',
-            'manager@brixenconsultants.com': 'manager@brixenconsultant.co.uk',
-            'manager@brixenconsultant.com': 'manager@brixenconsultant.co.uk',
+            'admin': 'admin@brixenconsultants.com',
+            'superadmin': 'admin@brixenconsultants.com',
+            'admin@brixenconsultant.co.uk': 'admin@brixenconsultants.com',
+            'admin@brixenconsultant.com': 'admin@brixenconsultants.com',
+            'superadmin@brixenconsultants.com': 'admin@brixenconsultants.com',
+            'superadmin@brixenconsultant.co.uk': 'admin@brixenconsultants.com',
+            'superadmin@brixenconsultant.com': 'admin@brixenconsultants.com',
         }
         lookup_email = ALIAS_MAP.get(email, email)
+        found_user = query_db("SELECT * FROM users WHERE LOWER(email) = ?;", (email,), one=True)
+        if not found_user or not verify_password(password, found_user['password_hash']):
+            if lookup_email != email:
+                alias_user = query_db("SELECT * FROM users WHERE LOWER(email) = ?;", (lookup_email,), one=True)
+                if alias_user and verify_password(password, alias_user['password_hash']):
+                    found_user = alias_user
 
-        found_user = query_db("SELECT * FROM users WHERE LOWER(email) = ?;", (lookup_email,), one=True)
         stored_hash = found_user['password_hash'] if found_user else None
-        if not verify_password(password, stored_hash):
+        if not found_user or not verify_password(password, stored_hash):
             return json_response(start_response, {'status': 'error', 'message': 'Invalid email or password.'}, "401 Unauthorized")
         if needs_rehash(stored_hash):
             execute_db(
