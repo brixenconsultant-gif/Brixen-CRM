@@ -837,9 +837,9 @@ async function handleFormLogin(e) {
             credentials: 'same-origin',
             body: JSON.stringify({ email, password })
         });
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         if (generation !== authCheckGeneration) return;
-        if (data.status === 'success' && data.user) {
+        if (res.ok && data.status === 'success' && data.user) {
             currentUser = data.user;
             writeCachedAuthUser(data.user);
             setAuthShellState(false, true);
@@ -848,13 +848,13 @@ async function handleFormLogin(e) {
             switchView(defaultPortalView(), { force: true });
         } else {
             if (errDiv) {
-                errDiv.textContent = data.message || 'Login failed.';
+                errDiv.textContent = data.message || 'Invalid email or password.';
                 errDiv.style.display = 'block';
             }
         }
     } catch (err) {
         if (errDiv) {
-            errDiv.textContent = 'Server communication error.';
+            errDiv.textContent = 'Server communication error. Please try again.';
             errDiv.style.display = 'block';
         }
     } finally {
