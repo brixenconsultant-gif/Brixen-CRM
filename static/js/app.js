@@ -2343,6 +2343,8 @@ function renderPortfolioCompanies(companies, targetGridId = 'portfolio-companies
 function updateAdminCompaniesSelectionCount() {
     const el = document.getElementById('admin-companies-selection-count');
     if (el) el.textContent = adminCompaniesSelection.size ? `${adminCompaniesSelection.size} selected` : '';
+    const bulkBtn = document.getElementById('btn-bulk-delete-companies');
+    if (bulkBtn) bulkBtn.style.display = canDeleteRecords() ? 'inline-block' : 'none';
 }
 
 function toggleAdminCompanySelection(companyId, checked) {
@@ -5740,8 +5742,12 @@ function canManageOrders() {
     return canOperateOrderDocuments();
 }
 
-function canDeleteOrders() {
+function canDeleteRecords() {
     return currentUser && ['SUPER_ADMIN', 'ADMIN'].includes(currentUser.role);
+}
+
+function canDeleteOrders() {
+    return canDeleteRecords();
 }
 
 function canEditOrderPrice() {
@@ -5749,7 +5755,7 @@ function canEditOrderPrice() {
 }
 
 function canDeleteCompanies() {
-    return currentUser && ['SUPER_ADMIN', 'ADMIN'].includes(currentUser.role);
+    return canDeleteRecords();
 }
 
 function companyNameFromCaches(companyId) {
@@ -7289,7 +7295,7 @@ function renderAdminCustomers() {
                     <div class="table-action-btns">
                         <button type="button" class="btn-primary btn-table" data-customer-action="profile" data-customer-id="${c.id}">View profile</button>
                         ${portalReady ? '' : `<button type="button" class="btn-secondary btn-table" data-customer-action="password" data-customer-id="${c.id}" data-customer-email="${escapeHtml(c.email || '')}">Set password</button>`}
-                        <button type="button" class="btn-secondary btn-table" style="color:#dc2626; border-color:#fca5a5; background:#fef2f2;" onclick="deleteCustomerSingle(${c.id}, '${escapeJsString(c.full_name || c.email)}')"><i data-lucide="trash-2"></i> Delete</button>
+                        ${canDeleteRecords() ? `<button type="button" class="btn-secondary btn-table" style="color:#dc2626; border-color:#fca5a5; background:#fef2f2;" onclick="deleteCustomerSingle(${c.id}, '${escapeJsString(c.full_name || c.email)}')"><i data-lucide="trash-2"></i> Delete</button>` : ''}
                     </div>
                 </td>
             </tr>
@@ -7314,7 +7320,7 @@ function updateCustomerSelectionState() {
     const masterChk = document.getElementById('chk-select-all-customers');
     
     if (countEl) countEl.textContent = selected.length;
-    if (bulkBtn) bulkBtn.style.display = selected.length > 0 ? 'inline-flex' : 'none';
+    if (bulkBtn) bulkBtn.style.display = (selected.length > 0 && canDeleteRecords()) ? 'inline-flex' : 'none';
     
     const all = document.querySelectorAll('.chk-customer-item');
     if (masterChk && all.length > 0) {
@@ -7323,6 +7329,10 @@ function updateCustomerSelectionState() {
 }
 
 async function deleteCustomerSingle(customerId, customerName) {
+    if (!canDeleteRecords()) {
+        alert('Deletion is restricted to Administrator accounts only.');
+        return;
+    }
     if (!customerId) return;
     if (!confirm(`Are you sure you want to delete customer account "${customerName}"?`)) return;
     try {
@@ -7344,6 +7354,10 @@ async function deleteCustomerSingle(customerId, customerName) {
 }
 
 async function deleteSelectedCustomers() {
+    if (!canDeleteRecords()) {
+        alert('Deletion is restricted to Administrator accounts only.');
+        return;
+    }
     const selectedBoxes = Array.from(document.querySelectorAll('.chk-customer-item:checked'));
     const selectedIds = selectedBoxes.map((chk) => parseInt(chk.value, 10)).filter(Boolean);
     if (!selectedIds.length) {
@@ -8247,7 +8261,7 @@ async function loadAdminServices() {
             const actions = canEdit
                 ? `<div class="order-row-actions table-action-btns">
                         <button type="button" class="btn-secondary btn-table" onclick="openEditServiceModal(${sid})">Edit</button>
-                        <button type="button" class="portfolio-delete-btn" title="Delete" aria-label="Delete service" onclick="deleteAdminService(${sid})"><i data-lucide="trash-2"></i></button>
+                        ${canDeleteRecords() ? `<button type="button" class="portfolio-delete-btn" title="Delete" aria-label="Delete service" onclick="deleteAdminService(${sid})"><i data-lucide="trash-2"></i></button>` : ''}
                    </div>`
                 : '—';
             return `
@@ -8394,8 +8408,8 @@ async function submitCreateServiceForm(event) {
 }
 
 async function deleteAdminService(serviceId) {
-    if (!canManageServiceCatalog()) {
-        alert('You do not have permission to delete services.');
+    if (!canDeleteRecords()) {
+        alert('Deletion is restricted to Administrator accounts only.');
         return;
     }
     const sid = Number(serviceId);

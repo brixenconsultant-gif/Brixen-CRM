@@ -17111,8 +17111,8 @@ def application(environ, start_response):
         })
 
     if path == '/api/admin/customers/delete' and method == 'POST':
-        if not user or not check_permission(user, 'clients.edit'):
-            return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
+        if not user or user.get('role') not in ('SUPER_ADMIN', 'ADMIN'):
+            return json_response(start_response, {'status': 'error', 'message': 'Deletion is restricted to Administrator accounts only.'}, "403 Forbidden")
         data = parse_body(environ)
         customer_id, err = to_optional_int(data.get('customer_id'), 'customer_id')
         if err or not customer_id:
@@ -17135,8 +17135,8 @@ def application(environ, start_response):
         })
 
     if path == '/api/admin/customers/bulk-delete' and method == 'POST':
-        if not user or not check_permission(user, 'clients.edit'):
-            return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
+        if not user or user.get('role') not in ('SUPER_ADMIN', 'ADMIN'):
+            return json_response(start_response, {'status': 'error', 'message': 'Deletion is restricted to Administrator accounts only.'}, "403 Forbidden")
         data = parse_body(environ)
         raw_ids = data.get('customer_ids') or []
         if not isinstance(raw_ids, (list, tuple)) or not raw_ids:
@@ -17678,9 +17678,8 @@ def application(environ, start_response):
         return json_response(start_response, {'status': 'success', 'message': 'Service updated.', 'service': updated})
 
     if path.startswith('/api/admin/services/') and method == 'DELETE':
-        denied = require_permission(start_response, user, 'settings.manage')
-        if denied:
-            return denied
+        if not user or user.get('role') not in ('SUPER_ADMIN', 'ADMIN'):
+            return json_response(start_response, {'status': 'error', 'message': 'Deletion is restricted to Administrator accounts only.'}, "403 Forbidden")
         parts = [p for p in path.split('/') if p]
         if len(parts) != 4:
             return json_response(start_response, {'status': 'error', 'message': 'Service not found'}, "404 Not Found")
@@ -18722,9 +18721,8 @@ def application(environ, start_response):
 
     m_doc_del = re.match(r'^/api/admin/documents/(\d+)$', path)
     if m_doc_del and method == 'DELETE':
-        denied = require_permission(start_response, user, 'documents.upload')
-        if denied:
-            return denied
+        if not user or user.get('role') not in ('SUPER_ADMIN', 'ADMIN'):
+            return json_response(start_response, {'status': 'error', 'message': 'Deletion is restricted to Administrator accounts only.'}, "403 Forbidden")
         try:
             doc_id = int(m_doc_del.group(1))
         except (TypeError, ValueError):
