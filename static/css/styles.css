@@ -4769,10 +4769,10 @@ textarea {
 }
 
 select,
-.select-filter,
-.table-select,
-.filter-select,
-.crm-select,
+select.select-filter,
+select.table-select,
+select.filter-select,
+select.crm-select,
 .filter-group select {
     -webkit-appearance: none !important;
     -moz-appearance: none !important;
@@ -4782,6 +4782,15 @@ select,
     background-position: right 12px center !important;
     background-size: 14px 14px !important;
     padding-right: 36px !important;
+}
+
+input,
+input.select-filter,
+input.table-select,
+input.filter-select,
+input.crm-select,
+textarea {
+    background-image: none !important;
 }
 
 input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]):not(#global-search-input):focus,

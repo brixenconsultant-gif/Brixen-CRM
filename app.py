@@ -6716,6 +6716,41 @@ def public_companies_house_match(item):
     }
 
 
+def fetch_company_house_primary_officer(company_number):
+    num = str(company_number or '').strip().zfill(8)
+    if not num or num == '00000000':
+        return None, []
+    payload, error = cached_companies_house_request(f'/company/{urllib.parse.quote(num)}/officers')
+    if error or not payload:
+        return None, []
+    officers_list = []
+    primary_name = None
+    for item in payload.get('items') or []:
+        raw_name = str(item.get('name') or '').strip()
+        role = str(item.get('officer_role') or '').lower()
+        resigned = item.get('resigned_on')
+        if not raw_name or resigned:
+            continue
+        clean_name = raw_name
+        if ',' in raw_name:
+            parts = raw_name.split(',', 1)
+            clean_name = f"{parts[1].strip()} {parts[0].strip()}".strip()
+        officers_list.append({
+            'name': clean_name,
+            'raw_name': raw_name,
+            'role': item.get('officer_role') or 'Director',
+            'appointed_on': item.get('appointed_on'),
+            'nationality': item.get('nationality'),
+            'occupation': item.get('occupation'),
+            'dob': item.get('date_of_birth'),
+        })
+        if not primary_name and ('director' in role or 'member' in role or 'owner' in role):
+            primary_name = clean_name
+    if not primary_name and officers_list:
+        primary_name = officers_list[0]['name']
+    return primary_name, officers_list
+
+
 def search_companies_house(query):
     q = (query or '').strip()
     if len(q) < 2 or len(q) > 80:
@@ -6728,6 +6763,11 @@ def search_companies_house(query):
     for item in (payload or {}).get('items') or []:
         match = public_companies_house_match(item)
         if match:
+            cnum = match.get('company_number')
+            director_name, officers = fetch_company_house_primary_officer(cnum)
+            match['director'] = director_name or ''
+            match['director_name'] = director_name or ''
+            match['officers'] = officers or []
             matches.append(match)
     return matches, None
 
@@ -16446,6 +16486,21 @@ def application(environ, start_response):
             'status': 'success',
             'configured': True,
             'companies': matches,
+        })
+
+    if path in ('/api/admin/companies/officers', '/api/companies-house/officers') and method == 'GET':
+        if not user:
+            return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
+        qs = urllib.parse.parse_qs(environ.get('QUERY_STRING', ''))
+        cnum = (qs.get('company_number') or qs.get('number') or [''])[0].strip()
+        if not cnum:
+            return json_response(start_response, {'status': 'error', 'message': 'Company number is required'}, "400 Bad Request")
+        primary_name, officers = fetch_company_house_primary_officer(cnum)
+        return json_response(start_response, {
+            'status': 'success',
+            'company_number': cnum,
+            'director_name': primary_name or '',
+            'officers': officers or []
         })
 
     if path == '/api/admin/companies/import-webfiling' and method == 'POST':

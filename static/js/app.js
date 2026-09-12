@@ -13079,3 +13079,124 @@ async function assignIntakeCompanyCandidate(companyNumber, companyName, companyI
         alert(e.message || 'Failed to assign company candidate.');
     }
 }
+
+/* ====================================================
+   COMPANIES HOUSE LIVE AUTOCOMPLETE & DIRECTOR AUTO-SELECT
+   ==================================================== */
+let chSearchDebounceTimer = null;
+
+function setupCompaniesHouseLiveSearch(inputEl, options = {}) {
+    if (!inputEl || inputEl.dataset.chSearchInitialized) return;
+    inputEl.dataset.chSearchInitialized = 'true';
+
+    const parent = inputEl.parentElement;
+    if (parent && getComputedStyle(parent).position === 'static') {
+        parent.style.position = 'relative';
+    }
+
+    let dropdown = document.createElement('div');
+    dropdown.className = 'ch-live-search-dropdown';
+    dropdown.style.cssText = 'position:absolute; left:0; right:0; top:100%; z-index:1200; background:#ffffff; border:1px solid #cbd5e1; border-radius:8px; box-shadow:0 10px 25px -5px rgba(0,0,0,0.15); max-height:260px; overflow-y:auto; margin-top:4px; display:none;';
+    if (parent) parent.appendChild(dropdown);
+
+    inputEl.addEventListener('input', (e) => {
+        const query = (e.target.value || '').trim();
+        clearTimeout(chSearchDebounceTimer);
+        if (query.length < 2) {
+            dropdown.style.display = 'none';
+            dropdown.innerHTML = '';
+            return;
+        }
+
+        chSearchDebounceTimer = setTimeout(async () => {
+            dropdown.style.display = 'block';
+            dropdown.innerHTML = '<div style="padding:12px; font-size:0.8rem; color:#64748b; text-align:center;"><i data-lucide="loader-2" class="spin"></i> Searching Companies House...</div>';
+            if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
+
+            try {
+                const res = await fetch(`/api/admin/companies/search?q=${encodeURIComponent(query)}`);
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || data.status !== 'success' || !data.companies || !data.companies.length) {
+                    dropdown.innerHTML = '<div style="padding:10px 14px; font-size:0.8rem; color:#94a3b8;">No matching UK companies found.</div>';
+                    return;
+                }
+
+                dropdown.innerHTML = data.companies.map((c) => {
+                    const cname = escapeHtml(c.name || c.title || '');
+                    const cnum = escapeHtml(c.company_number || '');
+                    const status = escapeHtml(c.status || 'Active');
+                    const director = escapeHtml(c.director || c.director_name || '');
+                    const regOffice = escapeHtml(c.reg_office || c.address || '');
+
+                    return `
+                        <div class="ch-search-item" data-cnum="${cnum}" data-cname="${cname}" data-director="${director}" data-office="${regOffice}" style="padding:10px 14px; border-bottom:1px solid #f1f5f9; cursor:pointer; transition:background 0.15s ease;">
+                            <div style="font-weight:700; font-size:0.85rem; color:#0f172a; display:flex; justify-content:space-between; align-items:center;">
+                                <span>${cname}</span>
+                                <span style="font-size:0.75rem; font-weight:600; color:#0284c7; background:#e0f2fe; padding:2px 6px; border-radius:4px;">#${cnum}</span>
+                            </div>
+                            <div style="font-size:0.78rem; color:#475569; margin-top:2px;">
+                                ${director ? `<strong>Director:</strong> ${director}` : 'Status: ' + status}
+                                ${regOffice ? ` · <span style="color:#64748b;">${regOffice.substring(0, 45)}...</span>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+                dropdown.querySelectorAll('.ch-search-item').forEach((item) => {
+                    item.addEventListener('mouseenter', () => { item.style.background = '#f8fafc'; });
+                    item.addEventListener('mouseleave', () => { item.style.background = '#ffffff'; });
+                    item.addEventListener('click', () => {
+                        const selectedName = item.getAttribute('data-cname');
+                        const selectedNum = item.getAttribute('data-cnum');
+                        const selectedDirector = item.getAttribute('data-director');
+                        const selectedOffice = item.getAttribute('data-office');
+
+                        inputEl.value = selectedName;
+
+                        const numTarget = options.numEl || document.getElementById('create-company-number') || document.getElementById('wizard-company-number');
+                        const directorTarget = options.directorEl || document.getElementById('create-company-director') || document.getElementById('wizard-director-name') || document.getElementById('staff-edit-director-name');
+                        const officeTarget = options.officeEl || document.getElementById('create-company-address') || document.getElementById('wizard-registered-address');
+
+                        if (numTarget) numTarget.value = selectedNum;
+                        if (directorTarget && selectedDirector) {
+                            directorTarget.value = selectedDirector;
+                            directorTarget.style.borderColor = '#2563eb';
+                            directorTarget.style.backgroundColor = '#eff6ff';
+                            setTimeout(() => {
+                                directorTarget.style.borderColor = '';
+                                directorTarget.style.backgroundColor = '';
+                            }, 2000);
+                        }
+                        if (officeTarget && selectedOffice) officeTarget.value = selectedOffice;
+
+                        dropdown.style.display = 'none';
+
+                        if (typeof options.onSelect === 'function') {
+                            options.onSelect({ name: selectedName, number: selectedNum, director: selectedDirector, office: selectedOffice });
+                        }
+                    });
+                });
+            } catch (err) {
+                dropdown.style.display = 'none';
+            }
+        }, 300);
+    });
+
+    document.addEventListener('click', (evt) => {
+        if (parent && !parent.contains(evt.target)) {
+            dropdown.style.display = 'none';
+        }
+    });
+}
+
+function initAllCompaniesHouseLiveSearch() {
+    const inputs = document.querySelectorAll('input[placeholder*="company"], input[placeholder*="Company"], input[id*="company-name"], input[id*="company_name"], [data-ch-search="true"]');
+    inputs.forEach((input) => {
+        if (input.id === 'set-company-name' || input.id === 'filter-admin-company-search' || input.id === 'filter-client-company-search') return;
+        setupCompaniesHouseLiveSearch(input);
+    });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    initAllCompaniesHouseLiveSearch();
+});
