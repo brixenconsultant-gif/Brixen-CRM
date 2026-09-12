@@ -7,7 +7,7 @@
     <script>
         (function() {
             var saved = localStorage.getItem('brixen_theme');
-            var theme = saved || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+            var theme = saved || 'dark';
             document.documentElement.setAttribute('data-theme', theme);
         })();
     </script>
@@ -16,7 +16,7 @@
     <link rel="apple-touch-icon" href="/apple-touch-icon.png">
     <link rel="canonical" href="https://portal.brixenconsultants.com/">
     <style>
-        html.auth-pending body { background: #f8fafc; }
+        html.auth-pending body { background: #080d16; color: #f8fafc; }
         html.auth-pending #app-container,
         #app-container[hidden] {
             display: none !important;
@@ -3861,6 +3861,6 @@
     </div>
 
     <div id="global-search-results" class="global-search-results" hidden></div>
-    <script src="/static/js/app.js?v=2300.0" defer></script>
+    <script src="/static/js/app.js?v=2400.0" defer></script>
 </body>
 </html>
