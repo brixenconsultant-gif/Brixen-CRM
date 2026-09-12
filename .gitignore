@@ -54,7 +54,6 @@ rewrite_*.py
 *.patch
 css_diff.txt
 css_history.patch
-deploy_to_portal.sh
 
 # Restored CSS backup
 static/css/styles_restored.css
