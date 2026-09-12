@@ -66,7 +66,7 @@
             if (app) app.setAttribute('hidden', '');
         });
     </script>
-    <link rel="stylesheet" href="/static/css/styles.css?v=1300.0">
+    <link rel="stylesheet" href="/static/css/styles.css?v=2100.0">
     <script src="/static/js/vendor/lucide.min.js"></script>
     <script src="/static/js/vendor/chart.umd.min.js"></script>
 </head>
@@ -444,6 +444,12 @@
                                 <label for="login-password">Password</label>
                                 <input type="password" id="login-password" required placeholder="••••••••" autocomplete="current-password">
                             </div>
+                            <div class="login-form-options" style="display: flex; justify-content: space-between; align-items: center; margin: 12px 0 16px 0; font-size: 0.85rem;">
+                                <label class="show-password-checkbox-label" style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer; color: var(--color-text-secondary); user-select: none;">
+                                    <input type="checkbox" id="login-show-password" onchange="toggleLoginPasswordVisibility()"> Show password
+                                </label>
+                                <a href="javascript:void(0)" class="forgot-password-link" style="color: var(--color-primary); font-weight: 600; text-decoration: none;" onclick="openForgotPasswordModal(event)">Forgot password?</a>
+                            </div>
                             <div id="login-error-msg" class="apple-form-error" style="display: none;"></div>
                             <button type="submit" class="btn-primary btn-block">Sign In</button>
                         </form>
@@ -721,7 +727,7 @@
                         <label class="lifecycle-check-label"><input type="checkbox" id="admin-companies-select-page" onchange="toggleAdminCompaniesPageSelection(this.checked)"> Select visible</label>
                         <button type="button" class="btn-secondary btn-table" onclick="clearAdminCompaniesSelection()">Clear</button>
                         <button type="button" class="btn-secondary btn-table" onclick="openBulkEditCompaniesModal()">Edit selected</button>
-                        <button type="button" class="btn-secondary btn-table" onclick="bulkDeleteAdminCompanies()">Delete selected</button>
+                        <button type="button" class="btn-secondary btn-table" id="btn-bulk-delete-companies" onclick="bulkDeleteAdminCompanies()">Delete selected</button>
                         <span id="admin-companies-selection-count" style="font-size:0.8rem;color:#64748b;"></span>
                     </div>
                     <div id="admin-attention-banner" class="portfolio-attention-banner" hidden></div>
@@ -1317,6 +1323,7 @@
                                         <th>Role</th>
                                         <th>Access</th>
                                         <th>Status</th>
+                                        <th style="text-align:right;">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody id="adm-team-table-body"></tbody>
@@ -3827,9 +3834,33 @@
                 </div>
             </form>
         </div>
+    <!-- Forgot Password Modal -->
+    <div id="modal-forgot-password" class="crm-modal-backdrop" hidden style="display:none; position:fixed; inset:0; z-index:9999; background:rgba(15,23,42,0.6); backdrop-filter:blur(4px); align-items:center; justify-content:center; padding:16px;">
+        <div class="crm-modal-card" style="background:#ffffff; border-radius:16px; max-width:440px; width:100%; box-shadow:0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04); overflow:hidden;">
+            <div class="crm-modal-head" style="display:flex; justify-content:space-between; align-items:center; padding:18px 24px; border-bottom:1px solid #e2e8f0; background:#f8fafc;">
+                <h3 style="margin:0; font-size:1.1rem; font-weight:700; color:#0f172a;">Reset Password</h3>
+                <button type="button" class="modal-close" style="background:none; border:none; font-size:1.5rem; color:#64748b; cursor:pointer;" onclick="closeForgotPasswordModal()">&times;</button>
+            </div>
+            <form id="forgot-password-form" onsubmit="handleForgotPasswordSubmit(event)">
+                <div class="crm-modal-body" style="padding:24px;">
+                    <p style="font-size:0.88rem; color:#64748b; margin:0 0 16px 0; line-height:1.5;">
+                        Enter your account email address below and we will send you instructions to reset your password.
+                    </p>
+                    <div class="apple-field">
+                        <label for="forgot-email" style="font-size:0.82rem; font-weight:700; color:#1e293b; margin-bottom:6px; display:block;">Email address</label>
+                        <input type="email" id="forgot-email" required placeholder="you@company.com" autocomplete="email" style="width:100%; padding:10px 14px; border:1px solid #cbd5e1; border-radius:8px; font-size:0.95rem;">
+                    </div>
+                    <div id="forgot-password-msg" class="apple-form-error" style="display:none; margin-top:14px; padding:10px; border-radius:8px; font-size:0.88rem;"></div>
+                </div>
+                <div class="crm-modal-foot" style="padding:16px 24px; display:flex; justify-content:flex-end; gap:10px; background:#f8fafc; border-top:1px solid #e2e8f0;">
+                    <button type="button" class="btn-secondary" onclick="closeForgotPasswordModal()">Cancel</button>
+                    <button type="submit" class="btn-primary" id="btn-submit-forgot-password">Send Instructions</button>
+                </div>
+            </form>
+        </div>
     </div>
 
     <div id="global-search-results" class="global-search-results" hidden></div>
-    <script src="/static/js/app.js?v=1300.0" defer></script>
+    <script src="/static/js/app.js?v=2300.0" defer></script>
 </body>
 </html>

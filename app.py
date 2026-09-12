@@ -3831,8 +3831,8 @@ def public_client_company(row, deadlines=None, for_staff=False, resolve_owner=Fa
         'registered_email': str(src.get('registered_email') or '').strip(),
         'whatsapp_number': str(src.get('whatsapp_number') or '').strip(),
         'deadlines': list(deadlines or []),
-        'b2b_id': str(src.get('b2b_id') or '').strip(),
-        'client_type': str(src.get('client_type') or 'B2B').strip() or 'B2B',
+        'b2b_id': str(src.get('b2b_id') or '').strip() if (src.get('client_type') == 'B2B' or src.get('is_b2b') == 1) else '',
+        'client_type': str(src.get('client_type') or 'Normal').strip() or 'Normal',
     }
     if is_placeholder_company_email(payload['registered_email']):
         payload['registered_email'] = ''
@@ -6716,6 +6716,41 @@ def public_companies_house_match(item):
     }
 
 
+def fetch_company_house_primary_officer(company_number):
+    num = str(company_number or '').strip().zfill(8)
+    if not num or num == '00000000':
+        return None, []
+    payload, error = cached_companies_house_request(f'/company/{urllib.parse.quote(num)}/officers')
+    if error or not payload:
+        return None, []
+    officers_list = []
+    primary_name = None
+    for item in payload.get('items') or []:
+        raw_name = str(item.get('name') or '').strip()
+        role = str(item.get('officer_role') or '').lower()
+        resigned = item.get('resigned_on')
+        if not raw_name or resigned:
+            continue
+        clean_name = raw_name
+        if ',' in raw_name:
+            parts = raw_name.split(',', 1)
+            clean_name = f"{parts[1].strip()} {parts[0].strip()}".strip()
+        officers_list.append({
+            'name': clean_name,
+            'raw_name': raw_name,
+            'role': item.get('officer_role') or 'Director',
+            'appointed_on': item.get('appointed_on'),
+            'nationality': item.get('nationality'),
+            'occupation': item.get('occupation'),
+            'dob': item.get('date_of_birth'),
+        })
+        if not primary_name and ('director' in role or 'member' in role or 'owner' in role):
+            primary_name = clean_name
+    if not primary_name and officers_list:
+        primary_name = officers_list[0]['name']
+    return primary_name, officers_list
+
+
 def search_companies_house(query):
     q = (query or '').strip()
     if len(q) < 2 or len(q) > 80:
@@ -6728,6 +6763,11 @@ def search_companies_house(query):
     for item in (payload or {}).get('items') or []:
         match = public_companies_house_match(item)
         if match:
+            cnum = match.get('company_number')
+            director_name, officers = fetch_company_house_primary_officer(cnum)
+            match['director'] = director_name or ''
+            match['director_name'] = director_name or ''
+            match['officers'] = officers or []
             matches.append(match)
     return matches, None
 
@@ -11184,11 +11224,13 @@ def create_manual_company(data, actor=None):
     if len(inc_date) < 10:
         inc_date = datetime.date.today().isoformat()
     form_email = registered_email_for_client(client, extras)
-    b2b_id = generate_next_b2b_id()
+    is_b2b_client = bool(client and (client.get('is_b2b') == 1 or client.get('client_type') == 'B2B'))
+    b2b_id = generate_next_b2b_id() if is_b2b_client else None
+    client_type_val = 'B2B' if is_b2b_client else 'Normal'
     company_id = execute_db(
         """
         INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status, registered_email, b2b_id, client_type)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'B2B');
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """,
         (
             client_id,
@@ -11202,6 +11244,7 @@ def create_manual_company(data, actor=None):
             (extras.get('account_status') or 'Good Standing').strip() or 'Good Standing',
             form_email or None,
             b2b_id,
+            client_type_val,
         ),
     )
     created = query_db(
@@ -11329,11 +11372,14 @@ def ensure_company_from_registration_order(client_id, client_name, o_data, servi
         'closed': 'Closed',
     }
     company_status = status_map.get(raw_status, 'Active')
-    b2b_id = generate_next_b2b_id()
+    client_rec = query_db("SELECT id, is_b2b, client_type FROM users WHERE id = ?;", (client_id,), one=True) if client_id else None
+    is_b2b_client = bool(client_rec and (client_rec.get('is_b2b') == 1 or client_rec.get('client_type') == 'B2B'))
+    b2b_id = generate_next_b2b_id() if is_b2b_client else None
+    client_type_val = 'B2B' if is_b2b_client else 'Normal'
     company_id = execute_db(
         """
         INSERT INTO companies (user_id, name, company_number, status, inc_date, director, reg_office, package, account_status, b2b_id, client_type)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, 'B2B');
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?);
         """,
         (
             client_id,
@@ -11345,6 +11391,7 @@ def ensure_company_from_registration_order(client_id, client_name, o_data, servi
             address,
             service_name or 'Company Formation',
             b2b_id,
+            client_type_val,
         ),
     )
     return company_id
@@ -15089,6 +15136,50 @@ try:
 except Exception:
     pass
 
+def remove_customer_accounts(customer_ids, actor=None):
+    if not customer_ids or not isinstance(customer_ids, (list, tuple, set)):
+        return 0
+    ids_list = [int(x) for x in customer_ids if str(x).isdigit()]
+    if not ids_list:
+        return 0
+
+    chunk_size = 200
+    total_deleted = 0
+    
+    for i in range(0, len(ids_list), chunk_size):
+        chunk = ids_list[i:i + chunk_size]
+        placeholders = ','.join('?' for _ in chunk)
+        
+        targets = query_db(f"SELECT id, email, full_name FROM users WHERE role = 'CLIENT' AND id IN ({placeholders});", chunk) or []
+        found_ids = [t['id'] for t in targets]
+        if not found_ids:
+            continue
+            
+        f_placeholders = ','.join('?' for _ in found_ids)
+        
+        try:
+            execute_db(f"DELETE FROM support_messages WHERE ticket_id IN (SELECT id FROM support_tickets WHERE user_id IN ({f_placeholders}));", found_ids)
+            execute_db(f"DELETE FROM support_tickets WHERE user_id IN ({f_placeholders});", found_ids)
+            execute_db(f"DELETE FROM documents WHERE user_id IN ({f_placeholders});", found_ids)
+            execute_db(f"DELETE FROM invoices WHERE user_id IN ({f_placeholders});", found_ids)
+            execute_db(f"DELETE FROM order_line_items WHERE order_id IN (SELECT id FROM orders WHERE user_id IN ({f_placeholders}));", found_ids)
+            execute_db(f"DELETE FROM orders WHERE user_id IN ({f_placeholders});", found_ids)
+            execute_db(f"DELETE FROM company_directors WHERE company_id IN (SELECT id FROM companies WHERE user_id IN ({f_placeholders}));", found_ids)
+            execute_db(f"DELETE FROM company_owners WHERE company_id IN (SELECT id FROM companies WHERE user_id IN ({f_placeholders}));", found_ids)
+            execute_db(f"DELETE FROM companies WHERE user_id IN ({f_placeholders});", found_ids)
+            execute_db(f"DELETE FROM notifications WHERE user_id IN ({f_placeholders});", found_ids)
+            execute_db(f"DELETE FROM user_sessions WHERE user_id IN ({f_placeholders});", found_ids)
+            
+            c_res = execute_db(f"DELETE FROM users WHERE role = 'CLIENT' AND id IN ({f_placeholders});", found_ids)
+            total_deleted += len(found_ids)
+            
+            if actor:
+                log_activity(actor, 'CLIENTS_BULK_DELETED', 'users', ','.join(str(x) for x in found_ids), f"Bulk deleted {len(found_ids)} customer profiles")
+        except Exception as ex:
+            print(f"[remove_customer_accounts Error] {ex}")
+
+    return total_deleted
+
 def application(environ, start_response):
     start_registration_notice_worker()
     try:
@@ -15797,21 +15888,24 @@ def application(environ, start_response):
 
         # Alias resolution for admin signin convenience (.com vs .co.uk vs short names)
         ALIAS_MAP = {
-            'admin': 'admin@brixenconsultant.co.uk',
-            'superadmin': 'superadmin@brixenconsultant.co.uk',
-            'manager': 'manager@brixenconsultant.co.uk',
-            'admin@brixenconsultants.com': 'admin@brixenconsultant.co.uk',
-            'admin@brixenconsultant.com': 'admin@brixenconsultant.co.uk',
-            'superadmin@brixenconsultants.com': 'superadmin@brixenconsultant.co.uk',
-            'superadmin@brixenconsultant.com': 'superadmin@brixenconsultant.co.uk',
-            'manager@brixenconsultants.com': 'manager@brixenconsultant.co.uk',
-            'manager@brixenconsultant.com': 'manager@brixenconsultant.co.uk',
+            'admin': 'admin@brixenconsultants.com',
+            'superadmin': 'admin@brixenconsultants.com',
+            'admin@brixenconsultant.co.uk': 'admin@brixenconsultants.com',
+            'admin@brixenconsultant.com': 'admin@brixenconsultants.com',
+            'superadmin@brixenconsultants.com': 'admin@brixenconsultants.com',
+            'superadmin@brixenconsultant.co.uk': 'admin@brixenconsultants.com',
+            'superadmin@brixenconsultant.com': 'admin@brixenconsultants.com',
         }
         lookup_email = ALIAS_MAP.get(email, email)
+        found_user = query_db("SELECT * FROM users WHERE LOWER(email) = ?;", (email,), one=True)
+        if not found_user or not verify_password(password, found_user['password_hash']):
+            if lookup_email != email:
+                alias_user = query_db("SELECT * FROM users WHERE LOWER(email) = ?;", (lookup_email,), one=True)
+                if alias_user and verify_password(password, alias_user['password_hash']):
+                    found_user = alias_user
 
-        found_user = query_db("SELECT * FROM users WHERE LOWER(email) = ?;", (lookup_email,), one=True)
         stored_hash = found_user['password_hash'] if found_user else None
-        if not verify_password(password, stored_hash):
+        if not found_user or not verify_password(password, stored_hash):
             return json_response(start_response, {'status': 'error', 'message': 'Invalid email or password.'}, "401 Unauthorized")
         if needs_rehash(stored_hash):
             execute_db(
@@ -15829,6 +15923,45 @@ def application(environ, start_response):
         cookie_header = ('Set-Cookie', session_cookie_header(token, environ=environ))
         origin_clear = ('Set-Cookie', origin_cookie_header(clear=True, environ=environ))
         return json_response(start_response, {'status': 'success', 'user': u_dict}, extra_headers=[origin_clear, cookie_header])
+
+    if path == '/api/auth/forgot-password' and method == 'POST':
+        data = parse_body(environ)
+        email = str(data.get('email') or '').strip().lower()
+        if not email:
+            return json_response(start_response, {'status': 'error', 'message': 'Email address is required.'}, "400 Bad Request")
+
+        ALIAS_MAP = {
+            'admin': 'admin@brixenconsultant.co.uk',
+            'superadmin': 'superadmin@brixenconsultant.co.uk',
+            'manager': 'manager@brixenconsultant.co.uk',
+        }
+        lookup_email = ALIAS_MAP.get(email, email)
+        found_user = query_db("SELECT * FROM users WHERE LOWER(email) = ?;", (lookup_email,), one=True)
+        if not found_user:
+            found_user = query_db("SELECT * FROM users WHERE LOWER(email) = ?;", (email,), one=True)
+
+        if found_user:
+            log_activity(found_user, 'FORGOT_PASSWORD_REQUEST', 'users', str(found_user['id']), f"Password reset requested for {found_user['email']}")
+            try:
+                msg = f"Password reset requested for {found_user['email']}. Please contact system administration to issue a new credential."
+                notify_client(
+                    found_user,
+                    'Password Reset Instructions',
+                    msg,
+                    'password_reset',
+                    '/login',
+                    email_subject=f"Password Reset Request — {brand_settings()['company_name']}",
+                    email_headline='Password Reset Requested',
+                    cta_label='Contact Support',
+                    layout='activity'
+                )
+            except Exception as e:
+                print(f"[ForgotPassword Error] {e}")
+
+        return json_response(start_response, {
+            'status': 'success',
+            'message': f"If an account exists for {email}, password reset instructions have been sent."
+        })
 
     if path == '/api/auth/me' and method == 'GET':
         if not user:
@@ -16353,6 +16486,21 @@ def application(environ, start_response):
             'status': 'success',
             'configured': True,
             'companies': matches,
+        })
+
+    if path in ('/api/admin/companies/officers', '/api/companies-house/officers') and method == 'GET':
+        if not user:
+            return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
+        qs = urllib.parse.parse_qs(environ.get('QUERY_STRING', ''))
+        cnum = (qs.get('company_number') or qs.get('number') or [''])[0].strip()
+        if not cnum:
+            return json_response(start_response, {'status': 'error', 'message': 'Company number is required'}, "400 Bad Request")
+        primary_name, officers = fetch_company_house_primary_officer(cnum)
+        return json_response(start_response, {
+            'status': 'success',
+            'company_number': cnum,
+            'director_name': primary_name or '',
+            'officers': officers or []
         })
 
     if path == '/api/admin/companies/import-webfiling' and method == 'POST':
@@ -17111,7 +17259,7 @@ def application(environ, start_response):
         })
 
     if path == '/api/admin/customers/delete' and method == 'POST':
-        if not user or not check_permission(user, 'clients.edit'):
+        if not user or user.get('role') not in ('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF'):
             return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
         data = parse_body(environ)
         customer_id, err = to_optional_int(data.get('customer_id'), 'customer_id')
@@ -17121,21 +17269,14 @@ def application(environ, start_response):
         if not target or target.get('role') != 'CLIENT':
             return json_response(start_response, {'status': 'error', 'message': 'Customer not found or not a client'}, "404 Not Found")
 
-        execute_db("UPDATE companies SET user_id = NULL WHERE user_id = ?;", (customer_id,))
-        execute_db("UPDATE orders SET user_id = NULL WHERE user_id = ?;", (customer_id,))
-        execute_db("UPDATE invoices SET user_id = NULL WHERE user_id = ?;", (customer_id,))
-        execute_db("UPDATE documents SET user_id = NULL WHERE user_id = ?;", (customer_id,))
-        execute_db("UPDATE notifications SET user_id = NULL WHERE user_id = ?;", (customer_id,))
-        execute_db("DELETE FROM users WHERE id = ?;", (customer_id,))
-
-        log_activity(user, 'CLIENT_DELETED', 'users', str(customer_id), f"Deleted customer profile {target.get('email')} ({target.get('full_name')})")
+        count = remove_customer_accounts([customer_id], actor=user)
         return json_response(start_response, {
             'status': 'success',
             'message': f"Customer '{target.get('full_name') or target.get('email')}' has been removed successfully."
         })
 
     if path == '/api/admin/customers/bulk-delete' and method == 'POST':
-        if not user or not check_permission(user, 'clients.edit'):
+        if not user or user.get('role') not in ('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF'):
             return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
         data = parse_body(environ)
         raw_ids = data.get('customer_ids') or []
@@ -17150,23 +17291,11 @@ def application(environ, start_response):
         if not customer_ids:
             return json_response(start_response, {'status': 'error', 'message': 'No valid customer IDs provided'}, "400 Bad Request")
 
-        placeholders = ','.join('?' for _ in customer_ids)
-        targets = query_db(f"SELECT id, email, full_name FROM users WHERE role = 'CLIENT' AND id IN ({placeholders});", customer_ids) or []
-        found_ids = [t['id'] for t in targets]
-
-        if found_ids:
-            f_placeholders = ','.join('?' for _ in found_ids)
-            execute_db(f"UPDATE companies SET user_id = NULL WHERE user_id IN ({f_placeholders});", found_ids)
-            execute_db(f"UPDATE orders SET user_id = NULL WHERE user_id IN ({f_placeholders});", found_ids)
-            execute_db(f"UPDATE invoices SET user_id = NULL WHERE user_id IN ({f_placeholders});", found_ids)
-            execute_db(f"UPDATE documents SET user_id = NULL WHERE user_id IN ({f_placeholders});", found_ids)
-            execute_db(f"UPDATE notifications SET user_id = NULL WHERE user_id IN ({f_placeholders});", found_ids)
-            execute_db(f"DELETE FROM users WHERE id IN ({f_placeholders});", found_ids)
-            log_activity(user, 'CLIENTS_BULK_DELETED', 'users', ','.join(str(i) for i in found_ids), f"Bulk deleted {len(found_ids)} customer profiles")
+        deleted_count = remove_customer_accounts(customer_ids, actor=user)
 
         return json_response(start_response, {
             'status': 'success',
-            'message': f"Successfully removed {len(found_ids)} customer(s)."
+            'message': f"Successfully removed {deleted_count} customer(s)."
         })
 
     if path in ('/api/admin/orders', '/api/client/orders') and method == 'POST':
@@ -17678,9 +17807,8 @@ def application(environ, start_response):
         return json_response(start_response, {'status': 'success', 'message': 'Service updated.', 'service': updated})
 
     if path.startswith('/api/admin/services/') and method == 'DELETE':
-        denied = require_permission(start_response, user, 'settings.manage')
-        if denied:
-            return denied
+        if not user or user.get('role') not in ('SUPER_ADMIN', 'ADMIN'):
+            return json_response(start_response, {'status': 'error', 'message': 'Deletion is restricted to Administrator accounts only.'}, "403 Forbidden")
         parts = [p for p in path.split('/') if p]
         if len(parts) != 4:
             return json_response(start_response, {'status': 'error', 'message': 'Service not found'}, "404 Not Found")
@@ -18722,9 +18850,8 @@ def application(environ, start_response):
 
     m_doc_del = re.match(r'^/api/admin/documents/(\d+)$', path)
     if m_doc_del and method == 'DELETE':
-        denied = require_permission(start_response, user, 'documents.upload')
-        if denied:
-            return denied
+        if not user or user.get('role') not in ('SUPER_ADMIN', 'ADMIN'):
+            return json_response(start_response, {'status': 'error', 'message': 'Deletion is restricted to Administrator accounts only.'}, "403 Forbidden")
         try:
             doc_id = int(m_doc_del.group(1))
         except (TypeError, ValueError):
@@ -18878,6 +19005,35 @@ def application(environ, start_response):
         """, (staff_id,), one=True)
         log_activity(user, 'USER_DEPARTMENT', 'users', str(staff_id), f"Set departments to {', '.join(departments) or 'none'}")
         return json_response(start_response, {'status': 'success', 'user': public_staff_user(updated)})
+
+    if path.startswith('/api/admin/staff/') and method == 'DELETE':
+        if not user:
+            return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
+        if user.get('role') not in ('SUPER_ADMIN', 'ADMIN'):
+            return json_response(start_response, {'status': 'error', 'message': 'Team deletion is restricted to Administrators only'}, "403 Forbidden")
+        sid = path.rstrip('/').split('/')[-1]
+        staff_id, err = to_optional_int(sid, 'staff_id')
+        if err or not staff_id:
+            return json_response(start_response, {'status': 'error', 'message': 'Invalid staff id'}, "400 Bad Request")
+        if staff_id == user.get('id'):
+            return json_response(start_response, {'status': 'error', 'message': 'You cannot remove your own active administrator account'}, "400 Bad Request")
+            
+        target = query_db("SELECT id, email, full_name, role FROM users WHERE id = ?;", (staff_id,), one=True)
+        if not target or target['role'] not in ('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF'):
+            return json_response(start_response, {'status': 'error', 'message': 'Team user not found'}, "404 Not Found")
+            
+        execute_db("UPDATE internal_tasks SET assigned_staff_id = NULL WHERE assigned_staff_id = ?;", (staff_id,))
+        execute_db("UPDATE orders SET assigned_staff_id = NULL WHERE assigned_staff_id = ?;", (staff_id,))
+        execute_db("DELETE FROM user_sessions WHERE user_id = ?;", (staff_id,))
+        execute_db("DELETE FROM notifications WHERE user_id = ?;", (staff_id,))
+        execute_db("DELETE FROM role_permissions WHERE user_id = ?;", (staff_id,))
+        execute_db("DELETE FROM users WHERE id = ?;", (staff_id,))
+        
+        log_activity(user, 'TEAM_MEMBER_REMOVED', 'users', str(staff_id), f"Removed team member {target.get('full_name') or target.get('email')} ({target.get('role')})")
+        return json_response(start_response, {
+            'status': 'success',
+            'message': f"Team member '{target.get('full_name') or target.get('email')}' removed successfully."
+        })
 
     if path == '/api/admin/impersonate' and method == 'POST':
         if not user:

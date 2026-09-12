@@ -26,6 +26,7 @@
     --color-text-muted: #64748B;
     --color-placeholder: #94A3B8;
     --color-disabled: #CBD5E1;
+    --select-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m7 9 5-5 5 5'/%3E%3Cpath d='m7 15 5 5 5-5'/%3E%3C/svg%3E");
 
     /* Interactive Accent Blue */
     --color-primary: #2563EB;
@@ -218,6 +219,7 @@ html[data-theme="dark"] {
     --color-text-muted: #94A3B8;
     --color-placeholder: #64748B;
     --color-disabled: #475569;
+    --select-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m7 9 5-5 5 5'/%3E%3Cpath d='m7 15 5 5 5-5'/%3E%3C/svg%3E");
 
     /* Accent Blue */
     --color-primary: #60A5FA;
@@ -4766,15 +4768,29 @@ textarea {
     line-height: 1.47;
 }
 
-select {
-    background-color: #ffffff;
-    background-image: var(--select-caret);
-    background-repeat: no-repeat;
-    background-position: right 14px center;
-    background-size: 11px 8px;
-    padding-right: 36px;
-    -webkit-appearance: none;
-    appearance: none;
+select,
+select.select-filter,
+select.table-select,
+select.filter-select,
+select.crm-select,
+.filter-group select {
+    -webkit-appearance: none !important;
+    -moz-appearance: none !important;
+    appearance: none !important;
+    background-image: var(--select-caret) !important;
+    background-repeat: no-repeat !important;
+    background-position: right 12px center !important;
+    background-size: 14px 14px !important;
+    padding-right: 36px !important;
+}
+
+input,
+input.select-filter,
+input.table-select,
+input.filter-select,
+input.crm-select,
+textarea {
+    background-image: none !important;
 }
 
 input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]):not(#global-search-input):focus,

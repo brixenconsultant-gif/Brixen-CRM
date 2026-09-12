@@ -746,6 +746,72 @@ function showLoginView() {
     setAuthShellState(false, false);
 }
 
+function toggleLoginPasswordVisibility() {
+    const passInput = document.getElementById('login-password');
+    const chk = document.getElementById('login-show-password');
+    if (passInput) {
+        passInput.type = chk && chk.checked ? 'text' : 'password';
+    }
+}
+
+function openForgotPasswordModal(event) {
+    if (event) event.preventDefault();
+    const loginEmail = (document.getElementById('login-email')?.value || '').trim();
+    const forgotEmail = document.getElementById('forgot-email');
+    if (forgotEmail && loginEmail) forgotEmail.value = loginEmail;
+    const msg = document.getElementById('forgot-password-msg');
+    if (msg) { msg.style.display = 'none'; msg.textContent = ''; }
+    const modal = document.getElementById('modal-forgot-password');
+    if (modal) {
+        modal.removeAttribute('hidden');
+        modal.style.display = 'flex';
+    }
+}
+
+function closeForgotPasswordModal() {
+    const modal = document.getElementById('modal-forgot-password');
+    if (modal) {
+        modal.setAttribute('hidden', '');
+        modal.style.display = 'none';
+    }
+}
+
+async function handleForgotPasswordSubmit(event) {
+    event.preventDefault();
+    const emailInput = document.getElementById('forgot-email');
+    const msgEl = document.getElementById('forgot-password-msg');
+    const submitBtn = document.getElementById('btn-submit-forgot-password');
+    const email = (emailInput?.value || '').trim();
+    if (!email) return;
+
+    if (submitBtn) submitBtn.disabled = true;
+    try {
+        const res = await fetch('/api/auth/forgot-password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (msgEl) {
+            msgEl.style.display = 'block';
+            msgEl.textContent = data.message || 'If an account exists, password reset instructions have been sent.';
+            msgEl.style.background = (res.ok && data.status === 'success') ? '#f0fdf4' : '#fef2f2';
+            msgEl.style.color = (res.ok && data.status === 'success') ? '#166534' : '#991b1b';
+            msgEl.style.border = (res.ok && data.status === 'success') ? '1px solid #bbf7d0' : '1px solid #fecaca';
+        }
+    } catch (err) {
+        if (msgEl) {
+            msgEl.style.display = 'block';
+            msgEl.textContent = 'Unable to process request. Please try again.';
+            msgEl.style.background = '#fef2f2';
+            msgEl.style.color = '#991b1b';
+            msgEl.style.border = '1px solid #fecaca';
+        }
+    } finally {
+        if (submitBtn) submitBtn.disabled = false;
+    }
+}
+
 async function handleFormLogin(e) {
     if (e) e.preventDefault();
     const emailInput = document.getElementById('login-email');
@@ -771,9 +837,9 @@ async function handleFormLogin(e) {
             credentials: 'same-origin',
             body: JSON.stringify({ email, password })
         });
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         if (generation !== authCheckGeneration) return;
-        if (data.status === 'success' && data.user) {
+        if (res.ok && data.status === 'success' && data.user) {
             currentUser = data.user;
             writeCachedAuthUser(data.user);
             setAuthShellState(false, true);
@@ -782,13 +848,13 @@ async function handleFormLogin(e) {
             switchView(defaultPortalView(), { force: true });
         } else {
             if (errDiv) {
-                errDiv.textContent = data.message || 'Login failed.';
+                errDiv.textContent = data.message || 'Invalid email or password.';
                 errDiv.style.display = 'block';
             }
         }
     } catch (err) {
         if (errDiv) {
-            errDiv.textContent = 'Server communication error.';
+            errDiv.textContent = 'Server communication error. Please try again.';
             errDiv.style.display = 'block';
         }
     } finally {
@@ -2152,7 +2218,7 @@ function renderRegisteredCompanyCard(company, isAdmin) {
                     <h3>${escapeHtml(company.name || 'Company')}</h3>
                     <p style="display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:2px;">
                         <span>#${escapeHtml(company.company_number || '—')}</span>
-                        ${company.b2b_id ? `<span class="b2b-badge">${escapeHtml(company.b2b_id)}</span>` : ''}
+                        ${(company.b2b_id && (company.client_type === 'B2B' || company.is_b2b === 1)) ? `<span class="b2b-badge">${escapeHtml(company.b2b_id)}</span>` : ''}
                     </p>
                     ${(() => {
                         const names = portfolioDirectorNames(company);
@@ -2343,6 +2409,8 @@ function renderPortfolioCompanies(companies, targetGridId = 'portfolio-companies
 function updateAdminCompaniesSelectionCount() {
     const el = document.getElementById('admin-companies-selection-count');
     if (el) el.textContent = adminCompaniesSelection.size ? `${adminCompaniesSelection.size} selected` : '';
+    const bulkBtn = document.getElementById('btn-bulk-delete-companies');
+    if (bulkBtn) bulkBtn.style.display = canDeleteRecords() ? 'inline-block' : 'none';
 }
 
 function toggleAdminCompanySelection(companyId, checked) {
@@ -5740,8 +5808,12 @@ function canManageOrders() {
     return canOperateOrderDocuments();
 }
 
+function canDeleteRecords() {
+    return currentUser && ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF'].includes(currentUser.role);
+}
+
 function canDeleteOrders() {
-    return currentUser && ['SUPER_ADMIN', 'ADMIN'].includes(currentUser.role);
+    return canDeleteRecords();
 }
 
 function canEditOrderPrice() {
@@ -5749,7 +5821,7 @@ function canEditOrderPrice() {
 }
 
 function canDeleteCompanies() {
-    return currentUser && ['SUPER_ADMIN', 'ADMIN'].includes(currentUser.role);
+    return canDeleteRecords();
 }
 
 function companyNameFromCaches(companyId) {
@@ -7023,18 +7095,49 @@ async function loadAdminTeam() {
             throw new Error(data.message || 'Unable to load team users.');
         }
         const staff = data.staff || [];
-        tbody.innerHTML = staff.length ? staff.map(s => `
-            <tr>
-                <td style="font-weight:700;">${escapeHtml(s.full_name)}</td>
-                <td>${escapeHtml(s.email)}</td>
-                <td>${escapeHtml(s.role)}</td>
-                <td class="team-dept-cell">${renderStaffAccessCell(s)}</td>
-                <td><span class="status-badge ${s.status === 'Active' ? 'completed' : 'pending'}">${escapeHtml(s.status)}</span></td>
-            </tr>
-        `).join('') : '<tr><td colspan="5" style="color:#64748b;">No team users yet.</td></tr>';
+        const canDelete = currentUser && ['SUPER_ADMIN', 'ADMIN'].includes(currentUser.role);
+        tbody.innerHTML = staff.length ? staff.map(s => {
+            const isSelf = currentUser && currentUser.id === s.id;
+            const deleteBtn = (canDelete && !isSelf)
+                ? `<button type="button" class="btn-ghost text-danger" title="Remove Team Member" style="color:#dc2626; border-color:#fca5a5; background:#fef2f2; font-weight:600; padding:4px 10px; font-size:0.8rem; border-radius:6px; border:1px solid #fca5a5;" onclick="removeTeamMember(${s.id}, '${escapeJsString(s.full_name || s.email)}')"><i data-lucide="trash-2" style="width:14px; height:14px; vertical-align:-2px;"></i> Remove</button>`
+                : '<span style="color:#94a3b8; font-size:0.8rem;">—</span>';
+            return `
+                <tr>
+                    <td style="font-weight:700;">${escapeHtml(s.full_name)}</td>
+                    <td>${escapeHtml(s.email)}</td>
+                    <td>${escapeHtml(s.role)}</td>
+                    <td class="team-dept-cell">${renderStaffAccessCell(s)}</td>
+                    <td><span class="status-badge ${s.status === 'Active' ? 'completed' : 'pending'}">${escapeHtml(s.status)}</span></td>
+                    <td style="text-align:right;">${deleteBtn}</td>
+                </tr>
+            `;
+        }).join('') : '<tr><td colspan="6" style="color:#64748b; padding:20px; text-align:center;">No team users yet.</td></tr>';
         lucide.createIcons();
     } catch (err) {
         setTeamMessage('error', err.message || 'Unable to load team users.');
+    }
+}
+
+async function removeTeamMember(staffId, staffName) {
+    if (!currentUser || !['SUPER_ADMIN', 'ADMIN'].includes(currentUser.role)) {
+        alert('Team deletion is restricted to Administrator accounts only.');
+        return;
+    }
+    if (!confirm(`Are you sure you want to remove team member "${staffName}"?`)) return;
+    try {
+        const res = await fetch(`/api/admin/staff/${staffId}`, {
+            method: 'DELETE',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Could not remove team member.');
+        }
+        setTeamMessage('success', data.message || `Team member "${staffName}" removed.`);
+        await loadAdminTeam();
+    } catch (err) {
+        setTeamMessage('error', err.message || 'Could not remove team member.');
     }
 }
 
@@ -7289,7 +7392,7 @@ function renderAdminCustomers() {
                     <div class="table-action-btns">
                         <button type="button" class="btn-primary btn-table" data-customer-action="profile" data-customer-id="${c.id}">View profile</button>
                         ${portalReady ? '' : `<button type="button" class="btn-secondary btn-table" data-customer-action="password" data-customer-id="${c.id}" data-customer-email="${escapeHtml(c.email || '')}">Set password</button>`}
-                        <button type="button" class="btn-secondary btn-table" style="color:#dc2626; border-color:#fca5a5; background:#fef2f2;" onclick="deleteCustomerSingle(${c.id}, '${escapeJsString(c.full_name || c.email)}')"><i data-lucide="trash-2"></i> Delete</button>
+                        ${canDeleteRecords() ? `<button type="button" class="btn-secondary btn-table" style="color:#dc2626; border-color:#fca5a5; background:#fef2f2;" onclick="deleteCustomerSingle(${c.id}, '${escapeJsString(c.full_name || c.email)}')"><i data-lucide="trash-2"></i> Delete</button>` : ''}
                     </div>
                 </td>
             </tr>
@@ -7314,7 +7417,7 @@ function updateCustomerSelectionState() {
     const masterChk = document.getElementById('chk-select-all-customers');
     
     if (countEl) countEl.textContent = selected.length;
-    if (bulkBtn) bulkBtn.style.display = selected.length > 0 ? 'inline-flex' : 'none';
+    if (bulkBtn) bulkBtn.style.display = (selected.length > 0 && canDeleteRecords()) ? 'inline-flex' : 'none';
     
     const all = document.querySelectorAll('.chk-customer-item');
     if (masterChk && all.length > 0) {
@@ -7323,6 +7426,10 @@ function updateCustomerSelectionState() {
 }
 
 async function deleteCustomerSingle(customerId, customerName) {
+    if (!canDeleteRecords()) {
+        alert('Deletion is restricted to Administrator accounts only.');
+        return;
+    }
     if (!customerId) return;
     if (!confirm(`Are you sure you want to delete customer account "${customerName}"?`)) return;
     try {
@@ -7344,6 +7451,10 @@ async function deleteCustomerSingle(customerId, customerName) {
 }
 
 async function deleteSelectedCustomers() {
+    if (!canDeleteRecords()) {
+        alert('Deletion is restricted to Administrator accounts only.');
+        return;
+    }
     const selectedBoxes = Array.from(document.querySelectorAll('.chk-customer-item:checked'));
     const selectedIds = selectedBoxes.map((chk) => parseInt(chk.value, 10)).filter(Boolean);
     if (!selectedIds.length) {
@@ -8247,7 +8358,7 @@ async function loadAdminServices() {
             const actions = canEdit
                 ? `<div class="order-row-actions table-action-btns">
                         <button type="button" class="btn-secondary btn-table" onclick="openEditServiceModal(${sid})">Edit</button>
-                        <button type="button" class="portfolio-delete-btn" title="Delete" aria-label="Delete service" onclick="deleteAdminService(${sid})"><i data-lucide="trash-2"></i></button>
+                        ${canDeleteRecords() ? `<button type="button" class="portfolio-delete-btn" title="Delete" aria-label="Delete service" onclick="deleteAdminService(${sid})"><i data-lucide="trash-2"></i></button>` : ''}
                    </div>`
                 : '—';
             return `
@@ -8394,8 +8505,8 @@ async function submitCreateServiceForm(event) {
 }
 
 async function deleteAdminService(serviceId) {
-    if (!canManageServiceCatalog()) {
-        alert('You do not have permission to delete services.');
+    if (!canDeleteRecords()) {
+        alert('Deletion is restricted to Administrator accounts only.');
         return;
     }
     const sid = Number(serviceId);
@@ -12968,3 +13079,151 @@ async function assignIntakeCompanyCandidate(companyNumber, companyName, companyI
         alert(e.message || 'Failed to assign company candidate.');
     }
 }
+
+/* ====================================================
+   COMPANIES HOUSE LIVE AUTOCOMPLETE & DIRECTOR AUTO-SELECT
+   ==================================================== */
+let chSearchDebounceTimer = null;
+
+function setupCompaniesHouseLiveSearch(inputEl, options = {}) {
+    if (!inputEl || inputEl.dataset.chSearchInitialized) return;
+    inputEl.dataset.chSearchInitialized = 'true';
+
+    const parent = inputEl.parentElement;
+    if (parent && getComputedStyle(parent).position === 'static') {
+        parent.style.position = 'relative';
+    }
+
+    let dropdown = document.createElement('div');
+    dropdown.className = 'ch-live-search-dropdown';
+    dropdown.style.cssText = 'position:absolute; left:0; right:0; top:100%; z-index:1200; background:#ffffff; border:1px solid #cbd5e1; border-radius:8px; box-shadow:0 10px 25px -5px rgba(0,0,0,0.15); max-height:260px; overflow-y:auto; margin-top:4px; display:none;';
+    if (parent) parent.appendChild(dropdown);
+
+    inputEl.addEventListener('input', (e) => {
+        const query = (e.target.value || '').trim();
+        clearTimeout(chSearchDebounceTimer);
+        if (query.length < 2) {
+            dropdown.style.display = 'none';
+            dropdown.innerHTML = '';
+            return;
+        }
+
+        chSearchDebounceTimer = setTimeout(async () => {
+            dropdown.style.display = 'block';
+            dropdown.innerHTML = '<div style="padding:12px; font-size:0.8rem; color:#64748b; text-align:center;"><i data-lucide="loader-2" class="spin"></i> Searching Companies House...</div>';
+            if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
+
+            try {
+                const res = await fetch(`/api/admin/companies/search?q=${encodeURIComponent(query)}`);
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || data.status !== 'success' || !data.companies || !data.companies.length) {
+                    dropdown.innerHTML = '<div style="padding:10px 14px; font-size:0.8rem; color:#94a3b8;">No matching UK companies found.</div>';
+                    return;
+                }
+
+                dropdown.innerHTML = data.companies.map((c) => {
+                    const cname = escapeHtml(c.name || c.title || '');
+                    const cnum = escapeHtml(c.company_number || '');
+                    const status = escapeHtml(c.status || 'Active');
+                    const director = escapeHtml(c.director || c.director_name || '');
+                    const regOffice = escapeHtml(c.reg_office || c.address || '');
+
+                    return `
+                        <div class="ch-search-item" data-cnum="${cnum}" data-cname="${cname}" data-director="${director}" data-office="${regOffice}" style="padding:10px 14px; border-bottom:1px solid #f1f5f9; cursor:pointer; transition:background 0.15s ease;">
+                            <div style="font-weight:700; font-size:0.85rem; color:#0f172a; display:flex; justify-content:space-between; align-items:center;">
+                                <span>${cname}</span>
+                                <span style="font-size:0.75rem; font-weight:600; color:#0284c7; background:#e0f2fe; padding:2px 6px; border-radius:4px;">#${cnum}</span>
+                            </div>
+                            <div style="font-size:0.78rem; color:#475569; margin-top:2px;">
+                                ${director ? `<strong>Director:</strong> ${director}` : 'Status: ' + status}
+                                ${regOffice ? ` · <span style="color:#64748b;">${regOffice.substring(0, 45)}...</span>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+                dropdown.querySelectorAll('.ch-search-item').forEach((item) => {
+                    item.addEventListener('mouseenter', () => { item.style.background = '#f8fafc'; });
+                    item.addEventListener('mouseleave', () => { item.style.background = '#ffffff'; });
+                    item.addEventListener('click', () => {
+                        const selectedName = item.getAttribute('data-cname');
+                        const selectedNum = item.getAttribute('data-cnum');
+                        const selectedDirector = item.getAttribute('data-director');
+                        const selectedOffice = item.getAttribute('data-office');
+
+                        inputEl.value = selectedName;
+                        inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+                        inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+
+                        // Smart container discovery for form fields
+                        const form = inputEl.closest('form, div.modal-card, div.wizard-step-pane, div[id*="order"], body');
+
+                        let numTarget = options.numEl;
+                        let directorTarget = options.directorEl;
+                        let officeTarget = options.officeEl;
+
+                        if (form) {
+                            if (!numTarget) numTarget = form.querySelector('input[id*="company-number"], input[id*="company_number"], input[id*="reg"], input[name*="reg"], input[placeholder*="reg"]');
+                            if (!directorTarget) directorTarget = form.querySelector('input[id*="director"], input[name*="director"], input[placeholder*="director"]');
+                            if (!officeTarget) officeTarget = form.querySelector('input[id*="address"], input[name*="address"], input[placeholder*="address"]');
+                        }
+
+                        if (!numTarget) numTarget = document.getElementById('create-company-number') || document.getElementById('wizard-company-number');
+                        if (!directorTarget) directorTarget = document.getElementById('create-company-director') || document.getElementById('wizard-director-name') || document.getElementById('staff-edit-director-name');
+                        if (!officeTarget) officeTarget = document.getElementById('create-company-address') || document.getElementById('wizard-registered-address');
+
+                        if (numTarget) {
+                            numTarget.value = selectedNum;
+                            numTarget.dispatchEvent(new Event('input', { bubbles: true }));
+                            numTarget.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+                        if (directorTarget && selectedDirector) {
+                            directorTarget.value = selectedDirector;
+                            directorTarget.dispatchEvent(new Event('input', { bubbles: true }));
+                            directorTarget.dispatchEvent(new Event('change', { bubbles: true }));
+                            
+                            directorTarget.style.borderColor = '#2563eb';
+                            directorTarget.style.backgroundColor = '#eff6ff';
+                            setTimeout(() => {
+                                directorTarget.style.borderColor = '';
+                                directorTarget.style.backgroundColor = '';
+                            }, 2000);
+                        }
+                        if (officeTarget && selectedOffice) {
+                            officeTarget.value = selectedOffice;
+                            officeTarget.dispatchEvent(new Event('input', { bubbles: true }));
+                            officeTarget.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+
+                        dropdown.style.display = 'none';
+
+                        if (typeof options.onSelect === 'function') {
+                            options.onSelect({ name: selectedName, number: selectedNum, director: selectedDirector, office: selectedOffice });
+                        }
+                    });
+                });
+            } catch (err) {
+                dropdown.style.display = 'none';
+            }
+        }, 300);
+    });
+
+    document.addEventListener('click', (evt) => {
+        if (parent && !parent.contains(evt.target)) {
+            dropdown.style.display = 'none';
+        }
+    });
+}
+
+function initAllCompaniesHouseLiveSearch() {
+    const inputs = document.querySelectorAll('input[placeholder*="company"], input[placeholder*="Company"], input[id*="company-name"], input[id*="company_name"], [data-ch-search="true"]');
+    inputs.forEach((input) => {
+        if (input.id === 'set-company-name' || input.id === 'filter-admin-company-search' || input.id === 'filter-client-company-search') return;
+        setupCompaniesHouseLiveSearch(input);
+    });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    initAllCompaniesHouseLiveSearch();
+    setInterval(initAllCompaniesHouseLiveSearch, 1500);
+});
