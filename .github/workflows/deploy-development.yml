@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - development
+      - developmet
       - main
   workflow_dispatch:
 
