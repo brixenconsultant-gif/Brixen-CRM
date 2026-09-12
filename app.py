@@ -18948,6 +18948,35 @@ def application(environ, start_response):
         log_activity(user, 'USER_DEPARTMENT', 'users', str(staff_id), f"Set departments to {', '.join(departments) or 'none'}")
         return json_response(start_response, {'status': 'success', 'user': public_staff_user(updated)})
 
+    if path.startswith('/api/admin/staff/') and method == 'DELETE':
+        if not user:
+            return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
+        if user.get('role') not in ('SUPER_ADMIN', 'ADMIN'):
+            return json_response(start_response, {'status': 'error', 'message': 'Team deletion is restricted to Administrators only'}, "403 Forbidden")
+        sid = path.rstrip('/').split('/')[-1]
+        staff_id, err = to_optional_int(sid, 'staff_id')
+        if err or not staff_id:
+            return json_response(start_response, {'status': 'error', 'message': 'Invalid staff id'}, "400 Bad Request")
+        if staff_id == user.get('id'):
+            return json_response(start_response, {'status': 'error', 'message': 'You cannot remove your own active administrator account'}, "400 Bad Request")
+            
+        target = query_db("SELECT id, email, full_name, role FROM users WHERE id = ?;", (staff_id,), one=True)
+        if not target or target['role'] not in ('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF'):
+            return json_response(start_response, {'status': 'error', 'message': 'Team user not found'}, "404 Not Found")
+            
+        execute_db("UPDATE internal_tasks SET assigned_staff_id = NULL WHERE assigned_staff_id = ?;", (staff_id,))
+        execute_db("UPDATE orders SET assigned_staff_id = NULL WHERE assigned_staff_id = ?;", (staff_id,))
+        execute_db("DELETE FROM user_sessions WHERE user_id = ?;", (staff_id,))
+        execute_db("DELETE FROM notifications WHERE user_id = ?;", (staff_id,))
+        execute_db("DELETE FROM role_permissions WHERE user_id = ?;", (staff_id,))
+        execute_db("DELETE FROM users WHERE id = ?;", (staff_id,))
+        
+        log_activity(user, 'TEAM_MEMBER_REMOVED', 'users', str(staff_id), f"Removed team member {target.get('full_name') or target.get('email')} ({target.get('role')})")
+        return json_response(start_response, {
+            'status': 'success',
+            'message': f"Team member '{target.get('full_name') or target.get('email')}' removed successfully."
+        })
+
     if path == '/api/admin/impersonate' and method == 'POST':
         if not user:
             return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")

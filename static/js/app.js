@@ -7095,18 +7095,49 @@ async function loadAdminTeam() {
             throw new Error(data.message || 'Unable to load team users.');
         }
         const staff = data.staff || [];
-        tbody.innerHTML = staff.length ? staff.map(s => `
-            <tr>
-                <td style="font-weight:700;">${escapeHtml(s.full_name)}</td>
-                <td>${escapeHtml(s.email)}</td>
-                <td>${escapeHtml(s.role)}</td>
-                <td class="team-dept-cell">${renderStaffAccessCell(s)}</td>
-                <td><span class="status-badge ${s.status === 'Active' ? 'completed' : 'pending'}">${escapeHtml(s.status)}</span></td>
-            </tr>
-        `).join('') : '<tr><td colspan="5" style="color:#64748b;">No team users yet.</td></tr>';
+        const canDelete = currentUser && ['SUPER_ADMIN', 'ADMIN'].includes(currentUser.role);
+        tbody.innerHTML = staff.length ? staff.map(s => {
+            const isSelf = currentUser && currentUser.id === s.id;
+            const deleteBtn = (canDelete && !isSelf)
+                ? `<button type="button" class="btn-ghost text-danger" title="Remove Team Member" style="color:#dc2626; border-color:#fca5a5; background:#fef2f2; font-weight:600; padding:4px 10px; font-size:0.8rem; border-radius:6px; border:1px solid #fca5a5;" onclick="removeTeamMember(${s.id}, '${escapeJsString(s.full_name || s.email)}')"><i data-lucide="trash-2" style="width:14px; height:14px; vertical-align:-2px;"></i> Remove</button>`
+                : '<span style="color:#94a3b8; font-size:0.8rem;">—</span>';
+            return `
+                <tr>
+                    <td style="font-weight:700;">${escapeHtml(s.full_name)}</td>
+                    <td>${escapeHtml(s.email)}</td>
+                    <td>${escapeHtml(s.role)}</td>
+                    <td class="team-dept-cell">${renderStaffAccessCell(s)}</td>
+                    <td><span class="status-badge ${s.status === 'Active' ? 'completed' : 'pending'}">${escapeHtml(s.status)}</span></td>
+                    <td style="text-align:right;">${deleteBtn}</td>
+                </tr>
+            `;
+        }).join('') : '<tr><td colspan="6" style="color:#64748b; padding:20px; text-align:center;">No team users yet.</td></tr>';
         lucide.createIcons();
     } catch (err) {
         setTeamMessage('error', err.message || 'Unable to load team users.');
+    }
+}
+
+async function removeTeamMember(staffId, staffName) {
+    if (!currentUser || !['SUPER_ADMIN', 'ADMIN'].includes(currentUser.role)) {
+        alert('Team deletion is restricted to Administrator accounts only.');
+        return;
+    }
+    if (!confirm(`Are you sure you want to remove team member "${staffName}"?`)) return;
+    try {
+        const res = await fetch(`/api/admin/staff/${staffId}`, {
+            method: 'DELETE',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Could not remove team member.');
+        }
+        setTeamMessage('success', data.message || `Team member "${staffName}" removed.`);
+        await loadAdminTeam();
+    } catch (err) {
+        setTeamMessage('error', err.message || 'Could not remove team member.');
     }
 }
 
