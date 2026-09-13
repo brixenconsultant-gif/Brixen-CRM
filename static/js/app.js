@@ -12495,21 +12495,27 @@ async function handleWizardFileUpload(docReqId, fileInput) {
 
     showWizardError(`Uploading ${file.name}...`, false);
 
-    const formData = new FormData();
-    formData.append('document', file);
-    formData.append('document_type', docReqId);
-
     try {
+        const b64 = await readFileAsBase64(file);
+        const targetClient = universalOrderWizardState.selectedCustomer;
         const res = await fetch('/api/client/documents/upload', {
             method: 'POST',
             credentials: 'same-origin',
-            body: formData
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                name: file.name,
+                category: 'Order Documents',
+                file_name: file.name,
+                file_content_base64: b64,
+                client_id: targetClient ? targetClient.id : null,
+                company_id: (targetClient && targetClient.company_id) || null
+            })
         });
         const data = await res.json().catch(() => ({}));
-        if (res.ok && (data.status === 'success' || data.document_id)) {
+        if (res.ok && (data.status === 'success' || data.doc_id || data.id)) {
             hideWizardError();
             universalOrderWizardState.uploadedDocs[docReqId] = {
-                document_id: data.document_id || data.id,
+                document_id: data.doc_id || data.id || data.document_id,
                 file_name: file.name,
                 file_path: data.file_path || '',
                 status: 'Uploaded'
@@ -12519,7 +12525,7 @@ async function handleWizardFileUpload(docReqId, fileInput) {
             showWizardError(data.message || 'File upload failed. Please try again.');
         }
     } catch (err) {
-        showWizardError('Document upload error: ' + err.message);
+        showWizardError('Document upload error: ' + (err.message || err));
     }
 }
 

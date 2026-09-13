@@ -1640,6 +1640,20 @@ def create_manual_crm_order(data, actor=None):
             (order_id, service_name, 'Manual CRM Order', price, price)
         )
 
+    uploaded_docs = extras.get('uploaded_docs')
+    if uploaded_docs and isinstance(uploaded_docs, dict):
+        for req_key, doc_item in uploaded_docs.items():
+            if isinstance(doc_item, dict):
+                doc_id_val = doc_item.get('document_id') or doc_item.get('id')
+                if doc_id_val:
+                    try:
+                        execute_db(
+                            "UPDATE documents SET order_id = ?, company_id = COALESCE(company_id, ?) WHERE id = ?;",
+                            (order_id, company_id, int(doc_id_val))
+                        )
+                    except Exception:
+                        pass
+
     ensure_order_timeline(order_id)
     ensure_invoice_for_order(order_id)
     if actor:
@@ -16923,7 +16937,14 @@ def application(environ, start_response):
         company_id = data.get('company_id')
         order_id = data.get('order_id')
         b64_content = data.get('file_content_base64', '')
-        
+
+        target_user_id = user['id']
+        if user.get('role') in INTERNAL_STAFF_ROLES and data.get('client_id'):
+            try:
+                target_user_id = int(data.get('client_id'))
+            except (ValueError, TypeError):
+                pass
+
         file_bytes, decode_err = decode_document_base64(
             b64_content,
             default_bytes=f"Sample Document Content for {doc_name}".encode('utf-8')
@@ -16934,14 +16955,14 @@ def application(environ, start_response):
         ext, upload_err = validate_uploaded_document(doc_name, file_bytes, upload_filename=upload_filename)
         if upload_err:
             return json_response(start_response, {'status': 'error', 'message': upload_err}, "400 Bad Request")
-        target_path, store_err = store_client_document_file(user['id'], order_id, ext, file_bytes)
+        target_path, store_err = store_client_document_file(target_user_id, order_id, ext, file_bytes)
         if store_err:
             return json_response(start_response, {'status': 'error', 'message': store_err}, "400 Bad Request")
         file_size_str = format_document_size(len(file_bytes))
         file_hash = hashlib.sha256(file_bytes).hexdigest()
         triage = triage_uploaded_document(
-            file_bytes, upload_filename or doc_name, user['id'],
-            client_id=user['id'], actor=user, run_company_match=True,
+            file_bytes, upload_filename or doc_name, target_user_id,
+            client_id=target_user_id, actor=user, run_company_match=True,
         )
         resolved_company_id = company_id or triage.get('company_id')
         lifecycle = triage.get('lifecycle_status') or 'REVIEW_REQUIRED'
@@ -16957,7 +16978,7 @@ def application(environ, start_response):
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending Review', 'Customer Upload', ?, 0,
                     ?, ?, 0, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?, ?, ?);
         """, (
-            user['id'], resolved_company_id, order_id, doc_name,
+            target_user_id, resolved_company_id, order_id, doc_name,
             triage.get('category') or category, target_path,
             DOCUMENT_TYPE_LABELS.get(ext, 'Document'), file_size_str,
             triage.get('review_notes') or 'Awaiting staff approval.',
@@ -16978,7 +16999,7 @@ def application(environ, start_response):
                 'matching_evidence': triage.get('matching_evidence'),
                 'conflicting_evidence': triage.get('conflicting_evidence'),
                 'quarantine_reason': triage.get('quarantine_reason'),
-            },
+            }
         )
         log_activity(user, 'DOCUMENT_UPLOAD', 'documents', str(doc_id), f"Uploaded document {doc_name} → {lifecycle}")
         notify_client(
@@ -16988,6 +17009,7 @@ def application(environ, start_response):
             'DOCUMENT',
             '/documents',
             email_headline='Document received',
+            email_button_label='View Documents',
             cta_label='Open Client Panel',
             detail_title='Document',
             detail_value=doc_name,
@@ -16996,7 +17018,10 @@ def application(environ, start_response):
         return json_response(start_response, {
             'status': 'success',
             'message': 'Document uploaded successfully and queued for review.',
+            'doc_id': doc_id,
             'document_id': doc_id,
+            'id': doc_id,
+            'file_path': target_path,
             'lifecycle_status': lifecycle,
         })
 
