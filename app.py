@@ -1475,21 +1475,20 @@ def create_manual_crm_order(data, actor=None):
     company = None
     if company_id:
         company = query_db("SELECT * FROM companies WHERE id = ?;", (company_id,), one=True)
-        if not company or int(company.get('user_id') or 0) != int(client_id):
-            return None, 'Company does not belong to this client'
+        if company and int(company.get('user_id') or 0) != int(client_id) and actor and actor.get('role') in INTERNAL_STAFF_ROLES:
+            execute_db("UPDATE companies SET user_id = ? WHERE id = ?;", (client_id, company_id))
     else:
-        company_name = (extras.get('company_name') or extras.get('name') or '').strip()
+        form_vals = extras.get('form_values') if isinstance(extras.get('form_values'), dict) else {}
+        company_name = (extras.get('company_name') or extras.get('name') or form_vals.get('company_name') or form_vals.get('registered_company_name') or form_vals.get('proposed_company_name') or '').strip()
         if company_name:
             company_id, company_err = create_manual_company({
                 **extras,
                 'client_mode': 'existing',
                 'client_id': client_id,
                 'name': company_name,
-                'registered_email': extras.get('company_email') or extras.get('registered_email') or extras.get('owner_form_email'),
+                'registered_email': extras.get('company_email') or extras.get('registered_email') or extras.get('owner_form_email') or (client or {}).get('email'),
             }, actor)
-            if company_err:
-                return None, company_err
-            company = query_db("SELECT * FROM companies WHERE id = ?;", (company_id,), one=True)
+            company = query_db("SELECT * FROM companies WHERE id = ?;", (company_id,), one=True) if company_id else None
 
     try:
         price = float(extras.get('price') if extras.get('price') not in (None, '') else 0)
