@@ -5288,15 +5288,31 @@ def decode_document_base64(b64_content, default_bytes=None):
         return default_bytes, None
     import base64
     try:
-        return base64.b64decode(b64_content), None
-    except Exception:
-        return None, 'Invalid base64 payload'
+        content_str = str(b64_content).strip()
+        if ',' in content_str:
+            content_str = content_str.split(',', 1)[1].strip()
+        content_str = re.sub(r'\s+', '', content_str)
+        missing_padding = len(content_str) % 4
+        if missing_padding:
+            content_str += '=' * (4 - missing_padding)
+        return base64.b64decode(content_str), None
+    except Exception as ex:
+        return None, f"Invalid base64 payload: {ex}"
 
 
 def validate_uploaded_document(original_name, file_bytes, require_bytes=False, upload_filename=None):
     ext = document_extension(original_name)
     if ext not in ALLOWED_DOCUMENT_EXTS:
         ext = document_extension(upload_filename)
+    if ext not in ALLOWED_DOCUMENT_EXTS and file_bytes:
+        if file_bytes.startswith(b'%PDF'):
+            ext = '.pdf'
+        elif file_bytes.startswith(b'\x89PNG'):
+            ext = '.png'
+        elif file_bytes.startswith(b'\xff\xd8'):
+            ext = '.jpg'
+        elif file_bytes.startswith(b'PK\x03\x04'):
+            ext = '.docx'
     if ext not in ALLOWED_DOCUMENT_EXTS:
         return None, 'Invalid file format. Use PDF, PNG, JPG, Word, or ZIP (max 15 MB).'
     if require_bytes and not file_bytes:
@@ -5331,25 +5347,28 @@ def log_document_audit(
     evidence = reason_evidence
     if evidence is not None and not isinstance(evidence, str):
         evidence = json.dumps(evidence)
-    execute_db(
-        """
-        INSERT INTO document_audit_log (
-            document_id, actor_type, actor_id, actor_name, action,
-            previous_state, new_state, ai_model_version, reason_evidence_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
-        """,
-        (
-            document_id,
-            actor_type or 'AI',
-            actor_id,
-            actor_name or 'System',
-            action,
-            previous_state,
-            new_state,
-            ai_model_version,
-            evidence,
-        ),
-    )
+    try:
+        execute_db(
+            """
+            INSERT INTO document_audit_log (
+                document_id, actor_type, actor_id, actor_name, action,
+                previous_state, new_state, ai_model_version, reason_evidence_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            (
+                document_id,
+                actor_type or 'AI',
+                actor_id,
+                actor_name or 'System',
+                action,
+                previous_state,
+                new_state,
+                ai_model_version,
+                evidence,
+            ),
+        )
+    except Exception as exc:
+        print(f"[log_document_audit Error] {exc}")
 
 
 def find_document_by_file_hash(file_hash, exclude_id=None):
@@ -17002,18 +17021,20 @@ def application(environ, start_response):
             }
         )
         log_activity(user, 'DOCUMENT_UPLOAD', 'documents', str(doc_id), f"Uploaded document {doc_name} → {lifecycle}")
-        notify_client(
-            user,
-            'Document uploaded',
-            f"New document '{doc_name}' uploaded successfully and queued for review.",
-            'DOCUMENT',
-            '/documents',
-            email_headline='Document received',
-            email_button_label='View Documents',
-            cta_label='Open Client Panel',
-            detail_title='Document',
-            detail_value=doc_name,
-        )
+        try:
+            notify_client(
+                user,
+                'Document uploaded',
+                f"New document '{doc_name}' uploaded successfully and queued for review.",
+                'DOCUMENT',
+                '/documents',
+                email_headline='Document received',
+                cta_label='Open Client Panel',
+                detail_title='Document',
+                detail_value=doc_name,
+            )
+        except Exception as exc:
+            print(f"[notify_client Error] {exc}")
 
         return json_response(start_response, {
             'status': 'success',

@@ -12498,10 +12498,14 @@ async function handleWizardFileUpload(docReqId, fileInput) {
     try {
         const b64 = await readFileAsBase64(file);
         const targetClient = universalOrderWizardState.selectedCustomer;
+        const headers = { 'Content-Type': 'application/json' };
+        const token = localStorage.getItem('brixen_session_token');
+        if (token) headers['Authorization'] = 'Bearer ' + token;
+
         const res = await fetch('/api/client/documents/upload', {
             method: 'POST',
             credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json' },
+            headers: headers,
             body: JSON.stringify({
                 name: file.name,
                 category: 'Order Documents',
