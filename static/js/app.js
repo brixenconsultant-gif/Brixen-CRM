@@ -12288,14 +12288,47 @@ function renderWizardStep3Form() {
         if (fields.length === 0) {
             fieldsContainer.innerHTML = '<div style="font-size:0.85rem; color:var(--color-text-muted);">No specific custom fields required for this product. Click Continue to proceed.</div>';
         } else {
-            fieldsContainer.innerHTML = fields.map(f => renderSingleWizardFieldHTML(f)).join('');
+            fieldsContainer.innerHTML = fields.map(f => renderSingleWizardFieldHTML(f, p)).join('');
         }
     }
 
     renderWizardRepeatableSections();
+    setTimeout(initAllCompaniesHouseLiveSearch, 100);
 }
 
-function renderSingleWizardFieldHTML(f) {
+function isCompanySearchMandatoryField(f, product) {
+    if (!f || !product) return false;
+    const label = (f.label || '').toLowerCase();
+    const id = (f.id || '').toLowerCase();
+    const placeholder = (f.placeholder || '').toLowerCase();
+    const cat = (product.category || '').toLowerCase();
+    const pname = (product.name || '').toLowerCase();
+
+    const isCompanyInput = (
+        label.includes('company name') ||
+        label.includes('uk company') ||
+        id.includes('company_name') ||
+        id.includes('companyname') ||
+        placeholder.includes('company name')
+    );
+
+    if (!isCompanyInput) return false;
+
+    const isMandatoryCategory = (
+        cat.includes('bank') ||
+        cat.includes('company') ||
+        cat.includes('formation') ||
+        pname.includes('bank') ||
+        pname.includes('company') ||
+        pname.includes('formation') ||
+        product.requires_company === true
+    );
+
+    return isMandatoryCategory;
+}
+
+function renderSingleWizardFieldHTML(f, product) {
+    const p = product || universalOrderWizardState.selectedProduct;
     const val = universalOrderWizardState.formValues[f.id] !== undefined ? universalOrderWizardState.formValues[f.id] : (f.default_value || '');
     const isHidden = shouldHideWizardConditionalField(f);
 
@@ -12322,7 +12355,9 @@ function renderSingleWizardFieldHTML(f) {
             </div>`;
     } else {
         const inputType = (fieldType === 'email') ? 'email' : (fieldType === 'phone') ? 'tel' : (fieldType === 'number') ? 'number' : (fieldType === 'date') ? 'date' : 'text';
-        inputHTML = `<input type="${inputType}" id="wfield-${f.id}" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 14px;" value="${escapeHtml(val)}" placeholder="${escapeHtml(f.placeholder || '')}" autocomplete="off" oninput="updateWizardFieldValue('${f.id}', this.value)">`;
+        const isChSearch = isCompanySearchMandatoryField(f, p);
+        const chAttr = isChSearch ? ' data-ch-search="true" autocomplete="off"' : '';
+        inputHTML = `<input type="${inputType}" id="wfield-${f.id}" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 14px;" value="${escapeHtml(val)}" placeholder="${escapeHtml(f.placeholder || '')}" ${chAttr} autocomplete="off" oninput="updateWizardFieldValue('${f.id}', this.value)">`;
     }
 
     return `
@@ -13097,6 +13132,7 @@ let chSearchDebounceTimer = null;
 
 function setupCompaniesHouseLiveSearch(inputEl, options = {}) {
     if (!inputEl || inputEl.dataset.chSearchInitialized) return;
+    if (!inputEl.getAttribute('data-ch-search') && !inputEl.getAttribute('data-ch-live')) return;
     inputEl.dataset.chSearchInitialized = 'true';
 
     const parent = inputEl.parentElement;
@@ -13226,7 +13262,7 @@ function setupCompaniesHouseLiveSearch(inputEl, options = {}) {
 }
 
 function initAllCompaniesHouseLiveSearch() {
-    const inputs = document.querySelectorAll('input[placeholder*="company"], input[placeholder*="Company"], input[id*="company-name"], input[id*="company_name"], [data-ch-search="true"]');
+    const inputs = document.querySelectorAll('input[data-ch-search="true"], input[data-ch-live="true"]');
     inputs.forEach((input) => {
         if (input.id === 'set-company-name' || input.id === 'filter-admin-company-search' || input.id === 'filter-client-company-search') return;
         setupCompaniesHouseLiveSearch(input);
@@ -13235,5 +13271,4 @@ function initAllCompaniesHouseLiveSearch() {
 
 document.addEventListener('DOMContentLoaded', () => {
     initAllCompaniesHouseLiveSearch();
-    setInterval(initAllCompaniesHouseLiveSearch, 1500);
 });
