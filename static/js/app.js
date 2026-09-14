@@ -13163,7 +13163,8 @@ function setupCompaniesHouseLiveSearch(inputEl, options = {}) {
                 const res = await fetch(`/api/admin/companies/search?q=${encodeURIComponent(query)}`);
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok || data.status !== 'success' || !data.companies || !data.companies.length) {
-                    dropdown.innerHTML = '<div style="padding:10px 14px; font-size:0.8rem; color:#94a3b8;">No matching UK companies found.</div>';
+                    dropdown.style.display = 'none';
+                    dropdown.innerHTML = '';
                     return;
                 }
 
