@@ -12284,54 +12284,146 @@ function renderWizardStep3Form() {
 
     const fieldsContainer = document.getElementById('wizard-dynamic-fields-container');
     if (fieldsContainer) {
-        const fields = p.form_config || [];
-        const endClientHTML = renderWizardEndClientCardHTML();
-        if (fields.length === 0) {
-            fieldsContainer.innerHTML = endClientHTML + '<div style="font-size:0.85rem; color:var(--color-text-muted);">No additional custom fields required for this product. Click Continue to proceed.</div>';
-        } else {
-            fieldsContainer.innerHTML = endClientHTML + fields.map(f => renderSingleWizardFieldHTML(f, p)).join('');
-        }
+        fieldsContainer.innerHTML = renderStandardizedProductStep3HTML(p);
     }
 
     renderWizardRepeatableSections();
     setTimeout(initAllCompaniesHouseLiveSearch, 100);
 }
 
-function renderWizardEndClientCardHTML() {
+function renderStandardizedProductStep3HTML(product) {
+    const p = product || universalOrderWizardState.selectedProduct;
     const cust = universalOrderWizardState.selectedCustomer;
-    if (!cust) return '';
-    const isB2B = (cust.is_b2b === 1 || cust.client_type === 'B2B');
+    const isB2B = (cust && (cust.is_b2b === 1 || cust.client_type === 'B2B'));
 
     const inputStyle = "width:100%; box-sizing:border-box; padding:12px 16px; font-size:0.95rem; line-height:1.5; color:var(--color-text-primary); background:#ffffff; border:1px solid #cbd5e1; border-radius:8px; margin-top:6px; outline:none; transition:border-color 0.15s ease, box-shadow 0.15s ease;";
 
+    const companyVal = universalOrderWizardState.formValues['company_name'] || universalOrderWizardState.formValues['proposed_company_name'] || '';
+    const companyNumVal = universalOrderWizardState.formValues['company_number'] || '';
+    const directorVal = universalOrderWizardState.formValues['director_name'] || universalOrderWizardState.formValues['full_name'] || universalOrderWizardState.formValues['end_client_name'] || (isB2B ? '' : (cust ? cust.full_name : '')) || '';
+    const directorDobVal = universalOrderWizardState.formValues['director_dob'] || universalOrderWizardState.formValues['dob'] || '';
+    const officeAddressVal = universalOrderWizardState.formValues['registered_office_address'] || universalOrderWizardState.formValues['address'] || '';
+
+    const clientEmailVal = universalOrderWizardState.formValues['end_client_email'] || universalOrderWizardState.formValues['email'] || (isB2B ? '' : (cust ? cust.email : '')) || '';
+    const clientPhoneVal = universalOrderWizardState.formValues['end_client_phone'] || universalOrderWizardState.formValues['phone'] || universalOrderWizardState.formValues['uk_contact'] || (isB2B ? '' : (cust ? cust.phone : '')) || '';
+    
+    const tradingProofVal = universalOrderWizardState.formValues['trading_proof'] || '';
+
     return `
+        <!-- CLIENT DETAILS SECTION CARD -->
         <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:14px; padding:24px; margin-bottom:24px; box-shadow:0 1px 3px 0 rgba(0,0,0,0.05);">
-            <div style="font-size:1.02rem; font-weight:700; color:#0f172a; margin-bottom:6px; display:flex; align-items:center; gap:8px;">
-                <i data-lucide="user-check" style="width:18px; height:18px; color:var(--color-primary);"></i>
-                Target Client / End Person Details (Person for whom this work is being done)
+            <div style="font-size:1.05rem; font-weight:800; color:#0f172a; margin-bottom:6px; display:flex; align-items:center; gap:8px;">
+                <i data-lucide="building-2" style="width:20px; height:20px; color:var(--color-primary);"></i>
+                Client Details
             </div>
-            <div style="font-size:0.82rem; color:#64748b; margin-bottom:16px;">
-                ${isB2B ? `Ordering under B2B Account: <strong>${escapeHtml(cust.full_name || 'Partner')}</strong> (${escapeHtml(cust.b2b_id || 'B2B')}). Enter the actual person/client details below for whom this service is being performed.` : 'Enter the target end customer details for whom this work is being completed.'}
+            <div style="font-size:0.84rem; color:#64748b; margin-bottom:18px;">
+                ${isB2B ? `Ordering under B2B Account: <strong>${escapeHtml(cust.full_name || 'Partner')}</strong> (${escapeHtml(cust.b2b_id || 'B2B')}). Type company name below to search Companies House automatically.` : 'Enter company details below to search Companies House automatically.'}
             </div>
-            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:18px;">
+
+            <div style="display:grid; grid-template-columns:1fr; gap:18px;">
+                <!-- 1. COMPANY NAME WITH LIVE COMPANIES HOUSE AUTOCOMPLETE -->
                 <div>
-                    <label style="font-size:0.9rem; font-weight:700; color:#1e293b; display:block;">Target Person Full Name <span style="color:#ef4444; font-weight:700;">*</span></label>
-                    <input type="text" id="wfield-end-client-name" class="select-filter" style="${inputStyle}" 
-                           placeholder="e.g. Rohan Nasim" value="${escapeHtml(universalOrderWizardState.formValues['end_client_name'] || (isB2B ? '' : (cust.full_name || '')))}" 
-                           oninput="updateWizardFieldValue('end_client_name', this.value)">
+                    <label style="font-size:0.9rem; font-weight:700; color:#1e293b; display:block;">
+                        Company Name <span style="color:#ef4444; font-weight:700;">*</span>
+                    </label>
+                    <input type="text" id="wfield-company_name" class="select-filter" style="${inputStyle}" 
+                           placeholder="Type to search Companies House (e.g. BRIXEN CONSULTANTS LTD)..." 
+                           data-ch-search="true" autocomplete="off"
+                           value="${escapeHtml(companyVal)}"
+                           oninput="updateWizardFieldValue('company_name', this.value); updateWizardFieldValue('proposed_company_name', this.value);">
+                    <div style="font-size:0.8rem; color:#64748b; margin-top:6px; font-weight:500;">
+                        Type company name to search Companies House live API and auto-fill details below.
+                    </div>
                 </div>
-                <div>
-                    <label style="font-size:0.9rem; font-weight:700; color:#1e293b; display:block;">Target Person Email <span style="color:#ef4444; font-weight:700;">*</span></label>
-                    <input type="email" id="wfield-end-client-email" class="select-filter" style="${inputStyle}" 
-                           placeholder="e.g. rohan@client.com" value="${escapeHtml(universalOrderWizardState.formValues['end_client_email'] || (isB2B ? '' : (cust.email || '')))}" 
-                           oninput="updateWizardFieldValue('end_client_email', this.value)">
+
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:18px;">
+                    <!-- 2. COMPANY REGISTRATION NUMBER -->
+                    <div>
+                        <label style="font-size:0.9rem; font-weight:700; color:#1e293b; display:block;">
+                            Company Registration Number <span style="color:#ef4444; font-weight:700;">*</span>
+                        </label>
+                        <input type="text" id="wfield-company_number" class="select-filter" style="${inputStyle}" 
+                               placeholder="e.g. 12345678" 
+                               value="${escapeHtml(companyNumVal)}"
+                               oninput="updateWizardFieldValue('company_number', this.value)">
+                    </div>
+
+                    <!-- 3. DIRECTOR FULL NAME -->
+                    <div>
+                        <label style="font-size:0.9rem; font-weight:700; color:#1e293b; display:block;">
+                            Director Full Name <span style="color:#ef4444; font-weight:700;">*</span>
+                        </label>
+                        <input type="text" id="wfield-director_name" class="select-filter" style="${inputStyle}" 
+                               placeholder="e.g. Muhammad Rohan" 
+                               value="${escapeHtml(directorVal)}"
+                               oninput="updateWizardFieldValue('director_name', this.value); updateWizardFieldValue('full_name', this.value); updateWizardFieldValue('end_client_name', this.value);">
+                    </div>
                 </div>
-                <div>
-                    <label style="font-size:0.9rem; font-weight:700; color:#1e293b; display:block;">Target Person Phone Number</label>
-                    <input type="tel" id="wfield-end-client-phone" class="select-filter" style="${inputStyle}" 
-                           placeholder="+44 7911 123456" value="${escapeHtml(universalOrderWizardState.formValues['end_client_phone'] || (isB2B ? '' : (cust.phone || '')))}" 
-                           oninput="updateWizardFieldValue('end_client_phone', this.value)">
+
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:18px;">
+                    <!-- 4. DIRECTOR DATE OF BIRTH (MANUAL - PRIVATE) -->
+                    <div>
+                        <label style="font-size:0.9rem; font-weight:700; color:#1e293b; display:block;">
+                            Director Date of Birth (Private / Manual) <span style="color:#ef4444; font-weight:700;">*</span>
+                        </label>
+                        <input type="date" id="wfield-director_dob" class="select-filter" style="${inputStyle}" 
+                               value="${escapeHtml(directorDobVal)}"
+                               oninput="updateWizardFieldValue('director_dob', this.value); updateWizardFieldValue('dob', this.value);">
+                        <div style="font-size:0.8rem; color:#64748b; margin-top:6px; font-weight:500;">
+                            Date of birth is not public on Companies House API, please enter manually.
+                        </div>
+                    </div>
+
+                    <!-- 5. REGISTERED OFFICE ADDRESS -->
+                    <div>
+                        <label style="font-size:0.9rem; font-weight:700; color:#1e293b; display:block;">
+                            Registered Office Address <span style="color:#ef4444; font-weight:700;">*</span>
+                        </label>
+                        <input type="text" id="wfield-registered_office_address" class="select-filter" style="${inputStyle}" 
+                               placeholder="Address Line 1, City, Postcode, Country" 
+                               value="${escapeHtml(officeAddressVal)}"
+                               oninput="updateWizardFieldValue('registered_office_address', this.value); updateWizardFieldValue('address', this.value);">
+                    </div>
                 </div>
+
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:18px;">
+                    <!-- 6. CLIENT EMAIL ADDRESS -->
+                    <div>
+                        <label style="font-size:0.9rem; font-weight:700; color:#1e293b; display:block;">
+                            Client Email Address <span style="color:#ef4444; font-weight:700;">*</span>
+                        </label>
+                        <input type="email" id="wfield-end-client-email" class="select-filter" style="${inputStyle}" 
+                               placeholder="e.g. client@company.com" 
+                               value="${escapeHtml(clientEmailVal)}"
+                               oninput="updateWizardFieldValue('end_client_email', this.value); updateWizardFieldValue('email', this.value);">
+                    </div>
+
+                    <!-- 7. CLIENT PHONE NUMBER -->
+                    <div>
+                        <label style="font-size:0.9rem; font-weight:700; color:#1e293b; display:block;">
+                            Client Phone Number
+                        </label>
+                        <input type="tel" id="wfield-end-client-phone" class="select-filter" style="${inputStyle}" 
+                               placeholder="+44 7911 123456" 
+                               value="${escapeHtml(clientPhoneVal)}"
+                               oninput="updateWizardFieldValue('end_client_phone', this.value); updateWizardFieldValue('phone', this.value); updateWizardFieldValue('uk_contact', this.value);">
+                    </div>
+                </div>
+
+                ${(p.name && (p.name.includes('Bank') || p.name.includes('Tide'))) ? `
+                    <div>
+                        <label style="font-size:0.9rem; font-weight:700; color:#1e293b; display:block;">
+                            Business Trading Proof (Website or Selling Platform)
+                        </label>
+                        <input type="text" id="wfield-trading_proof" class="select-filter" style="${inputStyle}" 
+                               placeholder="Enter website URL or platform name (Optional)" 
+                               value="${escapeHtml(tradingProofVal)}"
+                               oninput="updateWizardFieldValue('trading_proof', this.value)">
+                        <div style="font-size:0.8rem; color:#64748b; margin-top:6px; font-weight:500;">
+                            If available, otherwise we can create it for you.
+                        </div>
+                    </div>
+                ` : ''}
             </div>
         </div>
     `;
@@ -12543,18 +12635,30 @@ function renderWizardStep4Documents() {
     const container = document.getElementById('wizard-documents-checklist');
     if (!container) return;
 
-    const p = universalOrderWizardState.selectedProduct;
-    let reqs = (p && p.document_requirements) ? [...p.document_requirements] : [];
-
-    if (!reqs.some(r => r.id === 'general_extra_docs')) {
-        reqs.push({
-            id: 'general_extra_docs',
-            name: 'Additional Package & Supporting Files',
+    // Standardized must-have 3 document requirements for ALL products
+    const reqs = [
+        {
+            id: 'id_document',
+            name: 'ID Document (Passport / Driving Licence / Photo ID)',
+            description: 'Valid passport or government photo ID (Accepted: PDF, JPG, PNG, DOC, DOCX).',
+            required: true,
+            allowed_extensions: ['.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx']
+        },
+        {
+            id: 'bank_statement',
+            name: 'Bank Statement (Last 3 Months)',
+            description: 'Recent local or UK bank statement issued within the last 90 days.',
+            required: true,
+            allowed_extensions: ['.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx']
+        },
+        {
+            id: 'additional_documents',
+            name: 'Additional Documents & Supporting Files',
             description: 'Upload any extra client documents, certificates, briefs, or files (Multiple files supported).',
             required: false,
             allowed_extensions: ['.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx', '.zip']
-        });
-    }
+        }
+    ];
 
     container.innerHTML = reqs.map(doc => {
         const uploadedVal = universalOrderWizardState.uploadedDocs[doc.id];
