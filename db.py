@@ -761,11 +761,39 @@ def ensure_rbac():
                 completed_at TIMESTAMP
             );
         """)
+        # Genuine business-data locks — never auto-delete real orders / companies / invoices.
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        _should_lock = False
+        if 'companies' in tables:
+            company_cols = {row[1] for row in conn.execute("PRAGMA table_info(companies)").fetchall()}
+            if 'data_locked' not in company_cols:
+                conn.execute("ALTER TABLE companies ADD COLUMN data_locked INTEGER NOT NULL DEFAULT 0")
+        if 'orders' in tables:
+            order_cols_lock = {row[1] for row in conn.execute("PRAGMA table_info(orders)").fetchall()}
+            if 'data_locked' not in order_cols_lock:
+                conn.execute("ALTER TABLE orders ADD COLUMN data_locked INTEGER NOT NULL DEFAULT 0")
+        if 'invoices' in tables:
+            invoice_cols = {row[1] for row in conn.execute("PRAGMA table_info(invoices)").fetchall()}
+            if 'data_locked' not in invoice_cols:
+                conn.execute("ALTER TABLE invoices ADD COLUMN data_locked INTEGER NOT NULL DEFAULT 0")
         conn.commit()
+        _should_lock = 'companies' in tables and 'orders' in tables and 'invoices' in tables
     except Exception as exc:
         print(f"[Schema Migration Note] {exc}")
+        _should_lock = False
     finally:
         conn.close()
+    if locals().get('_should_lock'):
+        try:
+            import data_protection as _data_protection
+            result = _data_protection.lock_genuine_records()
+            if any(result.values()):
+                print(
+                    "[DataProtection] Locked genuine records — "
+                    f"companies={result['companies']} orders={result['orders']} invoices={result['invoices']}"
+                )
+        except Exception as exc:
+            print(f"[DataProtection] Lock backfill skipped: {exc}")
 
 def query_db(query, args=(), one=False):
     conn = get_db()

@@ -4,6 +4,9 @@ import datetime
 from db import init_db, execute_db, query_db, hash_password, unusable_password_hash
 
 def seed():
+    from data_protection import assert_safe_to_wipe_database
+    assert_safe_to_wipe_database()
+
     db_file = os.path.join(os.path.dirname(__file__), 'hypetex.db')
     if os.path.exists(db_file):
         try:
@@ -13,7 +16,7 @@ def seed():
     init_db()
     print("Seeding database for Brixen Consultant...")
     
-    # Clear existing data for clean re-seed
+    # Clear existing data for clean re-seed (local/test only — production wipe is blocked above)
     tables = ['webhook_events', 'role_permissions', 'permissions', 'roles', 'activity_logs', 'notifications',
               'support_messages', 'support_tickets', 'registered_agents', 'proxies', 'documents', 'addresses',
               'invoices', 'order_timeline', 'order_line_items', 'tasks', 'company_owners', 'orders', 'services', 'company_directors',

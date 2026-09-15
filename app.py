@@ -3401,11 +3401,17 @@ def record_dismissed_company_card(company):
     )
 
 
-def delete_company_card(company_id, actor=None):
+def delete_company_card(company_id, actor=None, *, force_delete_genuine=False):
     """Remove a company portfolio card. Linked orders are reassigned or hidden."""
+    import data_protection as _data_protection
     company = query_db("SELECT * FROM companies WHERE id = ?;", (company_id,), one=True)
     if not company:
         return None, 'Company not found'
+    blocked = _data_protection.refuse_manual_delete_company(
+        company, force=force_delete_genuine, actor=actor,
+    )
+    if blocked:
+        return None, blocked
     record_dismissed_company_card(company)
     replacement = match_company_for_client(company.get('user_id'), company.get('name'), exclude_id=company_id)
     replacement_row = query_db(
@@ -3435,7 +3441,7 @@ def delete_company_card(company_id, actor=None):
     return company, None
 
 
-def bulk_delete_company_cards(company_ids, actor=None):
+def bulk_delete_company_cards(company_ids, actor=None, *, force_delete_genuine=False):
     deleted = []
     errors = []
     seen = set()
@@ -3448,7 +3454,7 @@ def bulk_delete_company_cards(company_ids, actor=None):
         if cid in seen:
             continue
         seen.add(cid)
-        company, err = delete_company_card(cid, actor=actor)
+        company, err = delete_company_card(cid, actor=actor, force_delete_genuine=force_delete_genuine)
         if err:
             errors.append({'id': cid, 'message': err})
         else:
@@ -6317,13 +6323,18 @@ def heal_orders_hidden_after_duplicate_company_delete():
 
 
 def absorb_company_into(source_id, target_id):
+    import data_protection as _data_protection
     source_id = optional_record_id(source_id)
     target_id = optional_record_id(target_id)
     if not source_id or not target_id or source_id == target_id:
         return False
-    source = query_db("SELECT id, user_id FROM companies WHERE id = ?;", (source_id,), one=True)
+    source = query_db("SELECT * FROM companies WHERE id = ?;", (source_id,), one=True)
     target = query_db("SELECT id, user_id FROM companies WHERE id = ?;", (target_id,), one=True)
     if not source or not target or source.get('user_id') != target.get('user_id'):
+        return False
+    # Never auto-delete a genuine registered company — only pending placeholders may be absorbed.
+    blocked = _data_protection.refuse_auto_delete_company(source)
+    if blocked:
         return False
     execute_db("UPDATE orders SET company_id = ?, portfolio_hidden = 0 WHERE company_id = ?;", (target_id, source_id))
     execute_db("UPDATE documents SET company_id = ? WHERE company_id = ?;", (target_id, source_id))
@@ -15208,7 +15219,15 @@ try:
 except Exception:
     pass
 
-def remove_customer_accounts(customer_ids, actor=None):
+def can_force_delete_genuine(user):
+    """Owner / Super Admin may permanently remove locked genuine business records."""
+    return bool(user and str(user.get('role') or '').strip().upper() in {'SUPER_ADMIN', 'SUPERADMIN'})
+
+
+def remove_customer_accounts(customer_ids, actor=None, *, force_delete_genuine=False):
+    import data_protection as _data_protection
+    if can_force_delete_genuine(actor):
+        force_delete_genuine = True
     if not customer_ids or not isinstance(customer_ids, (list, tuple, set)):
         return 0
     ids_list = [int(x) for x in customer_ids if str(x).isdigit()]
@@ -15223,7 +15242,23 @@ def remove_customer_accounts(customer_ids, actor=None):
         placeholders = ','.join('?' for _ in chunk)
         
         targets = query_db(f"SELECT id, email, full_name FROM users WHERE role = 'CLIENT' AND id IN ({placeholders});", chunk) or []
-        found_ids = [t['id'] for t in targets]
+        found_ids = []
+        for target in targets:
+            blocked = _data_protection.refuse_client_account_purge(
+                target['id'], force=force_delete_genuine, actor=actor,
+            )
+            if blocked:
+                print(f"[remove_customer_accounts] Blocked client {target['id']}: {blocked}")
+                if actor:
+                    log_activity(
+                        actor,
+                        'CLIENT_DELETE_BLOCKED',
+                        'users',
+                        str(target['id']),
+                        blocked,
+                    )
+                continue
+            found_ids.append(target['id'])
         if not found_ids:
             continue
             
@@ -16602,7 +16637,17 @@ def application(environ, start_response):
             return json_response(start_response, {'status': 'error', 'message': 'Select at least one company'}, "400 Bad Request")
         if len(ids) > 200:
             return json_response(start_response, {'status': 'error', 'message': 'Delete up to 200 companies at a time'}, "400 Bad Request")
-        summary = bulk_delete_company_cards(ids, actor=user)
+        summary = bulk_delete_company_cards(
+            ids,
+            actor=user,
+            force_delete_genuine=bool(data.get('force_delete_genuine')) or can_force_delete_genuine(user),
+        )
+        if summary['deleted_count'] == 0 and summary.get('errors'):
+            return json_response(start_response, {
+                'status': 'error',
+                'message': summary['errors'][0].get('message') or 'Unable to delete selected companies.',
+                **summary,
+            }, "403 Forbidden")
         return json_response(start_response, {
             'status': 'success',
             'message': f"Deleted {summary['deleted_count']} compan{'y' if summary['deleted_count'] == 1 else 'ies'}.",
@@ -16757,9 +16802,17 @@ def application(environ, start_response):
             company_id = int(parts[3])
         except (TypeError, ValueError):
             return json_response(start_response, {'status': 'error', 'message': 'Company not found'}, "404 Not Found")
-        company, error = delete_company_card(company_id, actor=user)
+        force_delete = can_force_delete_genuine(user)
+        try:
+            body = parse_body(environ) or {}
+            force_delete = bool(body.get('force_delete_genuine')) or force_delete
+        except Exception:
+            pass
+        company, error = delete_company_card(company_id, actor=user, force_delete_genuine=force_delete)
         if error:
-            status_code = "404 Not Found" if error == 'Company not found' else "400 Bad Request"
+            status_code = "404 Not Found" if error == 'Company not found' else (
+                "403 Forbidden" if 'locked' in error.lower() else "400 Bad Request"
+            )
             return json_response(start_response, {'status': 'error', 'message': error}, status_code)
         return json_response(start_response, {
             'status': 'success',
@@ -17354,7 +17407,19 @@ def application(environ, start_response):
         if not target or target.get('role') != 'CLIENT':
             return json_response(start_response, {'status': 'error', 'message': 'Customer not found or not a client'}, "404 Not Found")
 
-        count = remove_customer_accounts([customer_id], actor=user)
+        count = remove_customer_accounts(
+            [customer_id],
+            actor=user,
+            force_delete_genuine=bool(data.get('force_delete_genuine')) or can_force_delete_genuine(user),
+        )
+        if count < 1:
+            return json_response(start_response, {
+                'status': 'error',
+                'message': (
+                    'This client could not be deleted. '
+                    'If records are locked, sign in as Super Admin (owner) and try again.'
+                ),
+            }, "403 Forbidden")
         return json_response(start_response, {
             'status': 'success',
             'message': f"Customer '{target.get('full_name') or target.get('email')}' has been removed successfully."
@@ -17376,11 +17441,26 @@ def application(environ, start_response):
         if not customer_ids:
             return json_response(start_response, {'status': 'error', 'message': 'No valid customer IDs provided'}, "400 Bad Request")
 
-        deleted_count = remove_customer_accounts(customer_ids, actor=user)
+        deleted_count = remove_customer_accounts(
+            customer_ids,
+            actor=user,
+            force_delete_genuine=bool(data.get('force_delete_genuine')) or can_force_delete_genuine(user),
+        )
+
+        if deleted_count < 1:
+            return json_response(start_response, {
+                'status': 'error',
+                'message': (
+                    'No customers were removed. '
+                    'If records are locked, sign in as Super Admin (owner) and try again.'
+                ),
+                'deleted_count': 0,
+            }, "403 Forbidden")
 
         return json_response(start_response, {
             'status': 'success',
-            'message': f"Successfully removed {deleted_count} customer(s)."
+            'message': f"Successfully removed {deleted_count} customer(s).",
+            'deleted_count': deleted_count,
         })
 
     if path in ('/api/admin/orders', '/api/client/orders') and method == 'POST':
@@ -17778,6 +17858,18 @@ def application(environ, start_response):
         existing = query_db("SELECT * FROM orders WHERE id = ?;", (oid,), one=True)
         if not existing:
             return json_response(start_response, {'status': 'error', 'message': 'Order not found'}, "404 Not Found")
+        import data_protection as _data_protection
+        force_delete = can_force_delete_genuine(user)
+        try:
+            body = parse_body(environ) or {}
+            force_delete = bool(body.get('force_delete_genuine')) or force_delete
+        except Exception:
+            pass
+        blocked = _data_protection.refuse_manual_delete_order(
+            existing, force=force_delete, actor=user,
+        )
+        if blocked:
+            return json_response(start_response, {'status': 'error', 'message': blocked}, "403 Forbidden")
         company_id = optional_record_id(existing.get('company_id'))
         company = query_db(
             "SELECT id, name, company_number, status, inc_date, director, reg_office FROM companies WHERE id = ?;",

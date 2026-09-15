@@ -119,6 +119,7 @@ CREATE TABLE IF NOT EXISTS companies (
     compliance_last_notification_id TEXT,
     b2b_id TEXT UNIQUE,
     client_type TEXT DEFAULT 'B2B',
+    data_locked INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
@@ -244,6 +245,7 @@ CREATE TABLE IF NOT EXISTS orders (
     b2b_client_id TEXT,
     access_email TEXT,
     access_email_password TEXT,
+    data_locked INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -295,6 +297,7 @@ CREATE TABLE IF NOT EXISTS invoices (
     payment_timing TEXT NOT NULL DEFAULT 'After work',
     deposit_amount REAL NOT NULL DEFAULT 0,
     amount_paid REAL NOT NULL DEFAULT 0,
+    data_locked INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE

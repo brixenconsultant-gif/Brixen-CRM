@@ -7425,19 +7425,30 @@ function updateCustomerSelectionState() {
     }
 }
 
+function canForceDeleteGenuine() {
+    return !!(currentUser && String(currentUser.role || '').toUpperCase() === 'SUPER_ADMIN');
+}
+
 async function deleteCustomerSingle(customerId, customerName) {
     if (!canDeleteRecords()) {
         alert('Deletion is restricted to Administrator accounts only.');
         return;
     }
     if (!customerId) return;
-    if (!confirm(`Are you sure you want to delete customer account "${customerName}"?`)) return;
+    const ownerForce = canForceDeleteGenuine();
+    const msg = ownerForce
+        ? `Delete customer "${customerName}" permanently?\n\nAs Super Admin (owner) this will also remove any locked companies, orders, and invoices linked to this account.`
+        : `Are you sure you want to delete customer account "${customerName}"?`;
+    if (!confirm(msg)) return;
     try {
         const res = await fetch('/api/admin/customers/delete', {
             method: 'POST',
             credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ customer_id: customerId })
+            body: JSON.stringify({
+                customer_id: customerId,
+                force_delete_genuine: ownerForce,
+            })
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.status !== 'success') {
@@ -7461,13 +7472,20 @@ async function deleteSelectedCustomers() {
         alert('Please select at least one customer to delete.');
         return;
     }
-    if (!confirm(`Are you sure you want to delete ${selectedIds.length} selected customer account(s)?`)) return;
+    const ownerForce = canForceDeleteGenuine();
+    const msg = ownerForce
+        ? `Delete ${selectedIds.length} selected customer account(s) permanently?\n\nAs Super Admin (owner) this will also remove locked companies, orders, and invoices linked to those accounts.`
+        : `Are you sure you want to delete ${selectedIds.length} selected customer account(s)?`;
+    if (!confirm(msg)) return;
     try {
         const res = await fetch('/api/admin/customers/bulk-delete', {
             method: 'POST',
             credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ customer_ids: selectedIds })
+            body: JSON.stringify({
+                customer_ids: selectedIds,
+                force_delete_genuine: ownerForce,
+            })
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.status !== 'success') {
@@ -12296,7 +12314,7 @@ function renderStandardizedProductStep3HTML(product) {
     const cust = universalOrderWizardState.selectedCustomer;
     const isB2B = (cust && (cust.is_b2b === 1 || cust.client_type === 'B2B'));
 
-    const inputStyle = "width:100%; box-sizing:border-box; padding:12px 16px; font-size:0.95rem; line-height:1.5; color:var(--color-text-primary); background:#ffffff; border:1px solid #cbd5e1; border-radius:8px; margin-top:6px; outline:none; transition:border-color 0.15s ease, box-shadow 0.15s ease;";
+    const inputStyle = "width:100%; box-sizing:border-box; padding:14px 18px; font-size:1.05rem; line-height:1.6; color:#0f172a; background:#ffffff; border:1px solid #cbd5e1; border-radius:10px; margin-top:8px; outline:none; transition:border-color 0.15s ease, box-shadow 0.15s ease;";
 
     const companyVal = universalOrderWizardState.formValues['company_name'] || universalOrderWizardState.formValues['proposed_company_name'] || '';
     const companyNumVal = universalOrderWizardState.formValues['company_number'] || '';
@@ -12323,7 +12341,7 @@ function renderStandardizedProductStep3HTML(product) {
             <div style="display:grid; grid-template-columns:1fr; gap:18px;">
                 <!-- 1. COMPANY NAME WITH LIVE COMPANIES HOUSE AUTOCOMPLETE -->
                 <div>
-                    <label style="font-size:0.9rem; font-weight:700; color:#1e293b; display:block;">
+                    <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
                         Company Name <span style="color:#ef4444; font-weight:700;">*</span>
                     </label>
                     <input type="text" id="wfield-company_name" class="select-filter" style="${inputStyle}" 
@@ -12339,7 +12357,7 @@ function renderStandardizedProductStep3HTML(product) {
                 <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:18px;">
                     <!-- 2. COMPANY REGISTRATION NUMBER -->
                     <div>
-                        <label style="font-size:0.9rem; font-weight:700; color:#1e293b; display:block;">
+                        <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
                             Company Registration Number <span style="color:#ef4444; font-weight:700;">*</span>
                         </label>
                         <input type="text" id="wfield-company_number" class="select-filter" style="${inputStyle}" 
@@ -12350,7 +12368,7 @@ function renderStandardizedProductStep3HTML(product) {
 
                     <!-- 3. DIRECTOR FULL NAME -->
                     <div>
-                        <label style="font-size:0.9rem; font-weight:700; color:#1e293b; display:block;">
+                        <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
                             Director Full Name <span style="color:#ef4444; font-weight:700;">*</span>
                         </label>
                         <input type="text" id="wfield-director_name" class="select-filter" style="${inputStyle}" 
@@ -12363,7 +12381,7 @@ function renderStandardizedProductStep3HTML(product) {
                 <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:18px;">
                     <!-- 4. DIRECTOR DATE OF BIRTH (MANUAL - PRIVATE) -->
                     <div>
-                        <label style="font-size:0.9rem; font-weight:700; color:#1e293b; display:block;">
+                        <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
                             Director Date of Birth (Private / Manual) <span style="color:#ef4444; font-weight:700;">*</span>
                         </label>
                         <input type="date" id="wfield-director_dob" class="select-filter" style="${inputStyle}" 
@@ -12376,7 +12394,7 @@ function renderStandardizedProductStep3HTML(product) {
 
                     <!-- 5. REGISTERED OFFICE ADDRESS -->
                     <div>
-                        <label style="font-size:0.9rem; font-weight:700; color:#1e293b; display:block;">
+                        <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
                             Registered Office Address <span style="color:#ef4444; font-weight:700;">*</span>
                         </label>
                         <input type="text" id="wfield-registered_office_address" class="select-filter" style="${inputStyle}" 
@@ -12389,7 +12407,7 @@ function renderStandardizedProductStep3HTML(product) {
                 <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:18px;">
                     <!-- 6. CLIENT EMAIL ADDRESS -->
                     <div>
-                        <label style="font-size:0.9rem; font-weight:700; color:#1e293b; display:block;">
+                        <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
                             Client Email Address <span style="color:#ef4444; font-weight:700;">*</span>
                         </label>
                         <input type="email" id="wfield-end-client-email" class="select-filter" style="${inputStyle}" 
@@ -12400,7 +12418,7 @@ function renderStandardizedProductStep3HTML(product) {
 
                     <!-- 7. CLIENT PHONE NUMBER -->
                     <div>
-                        <label style="font-size:0.9rem; font-weight:700; color:#1e293b; display:block;">
+                        <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
                             Client Phone Number
                         </label>
                         <input type="tel" id="wfield-end-client-phone" class="select-filter" style="${inputStyle}" 
@@ -12412,7 +12430,7 @@ function renderStandardizedProductStep3HTML(product) {
 
                 ${(p.name && (p.name.includes('Bank') || p.name.includes('Tide'))) ? `
                     <div>
-                        <label style="font-size:0.9rem; font-weight:700; color:#1e293b; display:block;">
+                        <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
                             Business Trading Proof (Website or Selling Platform)
                         </label>
                         <input type="text" id="wfield-trading_proof" class="select-filter" style="${inputStyle}" 
@@ -12496,7 +12514,7 @@ function renderSingleWizardFieldHTML(f, product) {
 
     return `
         <div id="wfield-wrap-${f.id}" style="${isHidden ? 'display:none;' : ''} margin-bottom:20px;">
-            <label for="wfield-${f.id}" style="font-size:0.9rem; font-weight:700; color:#1e293b; display:block;">
+            <label for="wfield-${f.id}" style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
                 ${escapeHtml(f.label)} ${f.required ? '<span style="color:#ef4444; font-weight:700;">*</span>' : ''}
             </label>
             ${inputHTML}
@@ -13329,29 +13347,54 @@ function setupCompaniesHouseLiveSearch(inputEl, options = {}) {
 
     let dropdown = document.createElement('div');
     dropdown.className = 'ch-live-search-dropdown';
-    dropdown.style.cssText = 'position:absolute; left:0; right:0; top:100%; z-index:1200; background:#ffffff; border:1px solid #cbd5e1; border-radius:8px; box-shadow:0 10px 25px -5px rgba(0,0,0,0.15); max-height:260px; overflow-y:auto; margin-top:4px; display:none;';
+    dropdown.style.cssText = 'position:absolute; left:0; right:0; top:100%; z-index:1200; background:#ffffff; border:1px solid #cbd5e1; border-radius:8px; box-shadow:0 10px 25px -5px rgba(0,0,0,0.15); max-height:280px; overflow-y:auto; margin-top:4px; display:none;';
     if (parent) parent.appendChild(dropdown);
 
+    let searchRequestId = 0;
+    const hideDropdown = () => {
+        dropdown.style.display = 'none';
+        dropdown.innerHTML = '';
+    };
+    const flashFilled = (el) => {
+        if (!el) return;
+        el.style.borderColor = '#16a34a';
+        el.style.backgroundColor = '#f0fdf4';
+        setTimeout(() => { el.style.borderColor = ''; el.style.backgroundColor = ''; }, 2500);
+    };
+    const setFieldValue = (el, value, skipInputEvent = false) => {
+        if (!el || value == null || value === '') return;
+        el.value = value;
+        if (!skipInputEvent) el.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+
     inputEl.addEventListener('input', (e) => {
+        // Selecting a result fills the field; do not restart CH search from that fill.
+        if (inputEl.dataset.chSuppressSearch === '1') return;
+
         const query = (e.target.value || '').trim();
         clearTimeout(chSearchDebounceTimer);
+        searchRequestId += 1;
         if (query.length < 2) {
-            dropdown.style.display = 'none';
-            dropdown.innerHTML = '';
+            hideDropdown();
             return;
         }
 
+        const requestId = searchRequestId;
         chSearchDebounceTimer = setTimeout(async () => {
+            if (requestId !== searchRequestId || inputEl.dataset.chSuppressSearch === '1') return;
             dropdown.style.display = 'block';
-            dropdown.innerHTML = '<div style="padding:12px; font-size:0.8rem; color:#64748b; text-align:center;"><i data-lucide="loader-2" class="spin"></i> Searching Companies House...</div>';
+            dropdown.innerHTML = '<div style="padding:14px; font-size:0.88rem; color:#64748b; text-align:center;"><i data-lucide="loader-2" class="spin"></i> Searching Companies House...</div>';
             if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
 
             try {
                 const res = await fetch(`/api/admin/companies/search?q=${encodeURIComponent(query)}`);
                 const data = await res.json().catch(() => ({}));
+                if (requestId !== searchRequestId || inputEl.dataset.chSuppressSearch === '1') return;
                 if (!res.ok || data.status !== 'success' || !data.companies || !data.companies.length) {
-                    dropdown.style.display = 'none';
-                    dropdown.innerHTML = '';
+                    dropdown.innerHTML = '<div style="padding:14px; font-size:0.88rem; color:#94a3b8; text-align:center;">No companies found on Companies House.</div>';
+                    setTimeout(() => {
+                        if (requestId === searchRequestId) hideDropdown();
+                    }, 2000);
                     return;
                 }
 
@@ -13363,73 +13406,103 @@ function setupCompaniesHouseLiveSearch(inputEl, options = {}) {
                     const regOffice = escapeHtml(c.reg_office || c.address || '');
 
                     return `
-                        <div class="ch-search-item" data-cnum="${cnum}" data-cname="${cname}" data-director="${director}" data-office="${regOffice}" style="padding:10px 14px; border-bottom:1px solid #f1f5f9; cursor:pointer; transition:background 0.15s ease;">
-                            <div style="font-weight:700; font-size:0.85rem; color:#0f172a; display:flex; justify-content:space-between; align-items:center;">
+                        <div class="ch-search-item" data-cnum="${cnum}" data-cname="${cname}" data-director="${director}" data-office="${regOffice}" style="padding:12px 16px; border-bottom:1px solid #f1f5f9; cursor:pointer; transition:background 0.15s ease;">
+                            <div style="font-weight:700; font-size:0.92rem; color:#0f172a; display:flex; justify-content:space-between; align-items:center;">
                                 <span>${cname}</span>
-                                <span style="font-size:0.75rem; font-weight:600; color:#0284c7; background:#e0f2fe; padding:2px 6px; border-radius:4px;">#${cnum}</span>
+                                <span style="font-size:0.78rem; font-weight:600; color:#0284c7; background:#e0f2fe; padding:3px 8px; border-radius:4px;">#${cnum}</span>
                             </div>
-                            <div style="font-size:0.78rem; color:#475569; margin-top:2px;">
+                            <div style="font-size:0.82rem; color:#475569; margin-top:4px;">
                                 ${director ? `<strong>Director:</strong> ${director}` : 'Status: ' + status}
-                                ${regOffice ? ` · <span style="color:#64748b;">${regOffice.substring(0, 45)}...</span>` : ''}
+                                ${regOffice ? ` · <span style="color:#64748b;">${regOffice.substring(0, 50)}...</span>` : ''}
                             </div>
                         </div>
                     `;
                 }).join('');
 
                 dropdown.querySelectorAll('.ch-search-item').forEach((item) => {
-                    item.addEventListener('mouseenter', () => { item.style.background = '#f8fafc'; });
+                    item.addEventListener('mouseenter', () => { item.style.background = '#f0f9ff'; });
                     item.addEventListener('mouseleave', () => { item.style.background = '#ffffff'; });
-                    item.addEventListener('click', () => {
-                        const selectedName = item.getAttribute('data-cname');
-                        const selectedNum = item.getAttribute('data-cnum');
-                        const selectedDirector = item.getAttribute('data-director');
-                        const selectedOffice = item.getAttribute('data-office');
+                    item.addEventListener('click', (evt) => {
+                        evt.preventDefault();
+                        evt.stopPropagation();
+                        const selectedName = item.getAttribute('data-cname') || '';
+                        const selectedNum = item.getAttribute('data-cnum') || '';
+                        const selectedDirector = item.getAttribute('data-director') || '';
+                        const selectedOffice = item.getAttribute('data-office') || '';
+
+                        // Cancel in-flight / pending searches and suppress re-entry while we fill fields.
+                        clearTimeout(chSearchDebounceTimer);
+                        searchRequestId += 1;
+                        inputEl.dataset.chSuppressSearch = '1';
+                        hideDropdown();
 
                         inputEl.value = selectedName;
-                        inputEl.dispatchEvent(new Event('input', { bubbles: true }));
-                        inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+                        if (typeof updateWizardFieldValue === 'function') {
+                            updateWizardFieldValue('company_name', selectedName);
+                            updateWizardFieldValue('proposed_company_name', selectedName);
+                            if (selectedNum) updateWizardFieldValue('company_number', selectedNum);
+                            if (selectedDirector) {
+                                updateWizardFieldValue('director_name', selectedDirector);
+                                updateWizardFieldValue('full_name', selectedDirector);
+                                updateWizardFieldValue('end_client_name', selectedDirector);
+                            }
+                            if (selectedOffice) {
+                                updateWizardFieldValue('registered_office_address', selectedOffice);
+                                updateWizardFieldValue('address', selectedOffice);
+                            }
+                        }
 
-                        // Smart container discovery for form fields
+                        const numEl = document.getElementById('wfield-company_number');
+                        const dirEl = document.getElementById('wfield-director_name');
+                        const officeEl = document.getElementById('wfield-registered_office_address');
+
+                        setFieldValue(numEl, selectedNum);
+                        setFieldValue(dirEl, selectedDirector);
+                        setFieldValue(officeEl, selectedOffice);
+                        flashFilled(numEl);
+                        flashFilled(dirEl);
+                        flashFilled(officeEl);
+
+                        if (typeof universalOrderWizardState !== 'undefined') {
+                            universalOrderWizardState.formValues['company_name'] = selectedName;
+                            universalOrderWizardState.formValues['proposed_company_name'] = selectedName;
+                            if (selectedNum) universalOrderWizardState.formValues['company_number'] = selectedNum;
+                            if (selectedDirector) {
+                                universalOrderWizardState.formValues['director_name'] = selectedDirector;
+                                universalOrderWizardState.formValues['full_name'] = selectedDirector;
+                                universalOrderWizardState.formValues['end_client_name'] = selectedDirector;
+                            }
+                            if (selectedOffice) {
+                                universalOrderWizardState.formValues['registered_office_address'] = selectedOffice;
+                                universalOrderWizardState.formValues['address'] = selectedOffice;
+                            }
+                        }
+
                         const form = inputEl.closest('form, div.modal-card, div.wizard-step-pane, div[id*="order"], body');
-
-                        let numTarget = options.numEl;
-                        let directorTarget = options.directorEl;
-                        let officeTarget = options.officeEl;
-
                         if (form) {
-                            if (!numTarget) numTarget = form.querySelector('input[id*="company-number"], input[id*="company_number"], input[id*="reg"], input[name*="reg"], input[placeholder*="reg"]');
-                            if (!directorTarget) directorTarget = form.querySelector('input[id*="director"], input[name*="director"], input[placeholder*="director"]');
-                            if (!officeTarget) officeTarget = form.querySelector('input[id*="address"], input[name*="address"], input[placeholder*="address"]');
+                            let fallbackNum = form.querySelector('input[id*="company-number"]:not([id="wfield-company_number"])');
+                            let fallbackDir = form.querySelector('input[id*="director"]:not([id="wfield-director_name"])');
+                            let fallbackOff = form.querySelector('input[id*="address"]:not([id="wfield-registered_office_address"])');
+                            setFieldValue(fallbackNum, selectedNum);
+                            setFieldValue(fallbackDir, selectedDirector);
+                            setFieldValue(fallbackOff, selectedOffice);
                         }
 
-                        if (!numTarget) numTarget = document.getElementById('create-company-number') || document.getElementById('wizard-company-number');
-                        if (!directorTarget) directorTarget = document.getElementById('create-company-director') || document.getElementById('wizard-director-name') || document.getElementById('staff-edit-director-name');
-                        if (!officeTarget) officeTarget = document.getElementById('create-company-address') || document.getElementById('wizard-registered-address');
-
-                        if (numTarget) {
-                            numTarget.value = selectedNum;
-                            numTarget.dispatchEvent(new Event('input', { bubbles: true }));
-                            numTarget.dispatchEvent(new Event('change', { bubbles: true }));
+                        if (!numEl) {
+                            let alt = document.getElementById('create-company-number') || document.getElementById('wizard-company-number');
+                            setFieldValue(alt, selectedNum);
                         }
-                        if (directorTarget && selectedDirector) {
-                            directorTarget.value = selectedDirector;
-                            directorTarget.dispatchEvent(new Event('input', { bubbles: true }));
-                            directorTarget.dispatchEvent(new Event('change', { bubbles: true }));
-                            
-                            directorTarget.style.borderColor = '#2563eb';
-                            directorTarget.style.backgroundColor = '#eff6ff';
-                            setTimeout(() => {
-                                directorTarget.style.borderColor = '';
-                                directorTarget.style.backgroundColor = '';
-                            }, 2000);
+                        if (!dirEl) {
+                            let alt = document.getElementById('create-company-director') || document.getElementById('wizard-director-name') || document.getElementById('staff-edit-director-name');
+                            setFieldValue(alt, selectedDirector);
                         }
-                        if (officeTarget && selectedOffice) {
-                            officeTarget.value = selectedOffice;
-                            officeTarget.dispatchEvent(new Event('input', { bubbles: true }));
-                            officeTarget.dispatchEvent(new Event('change', { bubbles: true }));
+                        if (!officeEl) {
+                            let alt = document.getElementById('create-company-address') || document.getElementById('wizard-registered-address');
+                            setFieldValue(alt, selectedOffice);
                         }
 
-                        dropdown.style.display = 'none';
+                        // Allow typing a new search after the selection is applied.
+                        setTimeout(() => { delete inputEl.dataset.chSuppressSearch; }, 0);
 
                         if (typeof options.onSelect === 'function') {
                             options.onSelect({ name: selectedName, number: selectedNum, director: selectedDirector, office: selectedOffice });
@@ -13437,14 +13510,14 @@ function setupCompaniesHouseLiveSearch(inputEl, options = {}) {
                     });
                 });
             } catch (err) {
-                dropdown.style.display = 'none';
+                if (requestId === searchRequestId) hideDropdown();
             }
         }, 300);
     });
 
     document.addEventListener('click', (evt) => {
         if (parent && !parent.contains(evt.target)) {
-            dropdown.style.display = 'none';
+            hideDropdown();
         }
     });
 }
