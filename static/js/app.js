@@ -12285,15 +12285,54 @@ function renderWizardStep3Form() {
     const fieldsContainer = document.getElementById('wizard-dynamic-fields-container');
     if (fieldsContainer) {
         const fields = p.form_config || [];
+        const endClientHTML = renderWizardEndClientCardHTML();
         if (fields.length === 0) {
-            fieldsContainer.innerHTML = '<div style="font-size:0.85rem; color:var(--color-text-muted);">No specific custom fields required for this product. Click Continue to proceed.</div>';
+            fieldsContainer.innerHTML = endClientHTML + '<div style="font-size:0.85rem; color:var(--color-text-muted);">No additional custom fields required for this product. Click Continue to proceed.</div>';
         } else {
-            fieldsContainer.innerHTML = fields.map(f => renderSingleWizardFieldHTML(f, p)).join('');
+            fieldsContainer.innerHTML = endClientHTML + fields.map(f => renderSingleWizardFieldHTML(f, p)).join('');
         }
     }
 
     renderWizardRepeatableSections();
     setTimeout(initAllCompaniesHouseLiveSearch, 100);
+}
+
+function renderWizardEndClientCardHTML() {
+    const cust = universalOrderWizardState.selectedCustomer;
+    if (!cust) return '';
+    const isB2B = (cust.is_b2b === 1 || cust.client_type === 'B2B');
+
+    return `
+        <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:12px; padding:16px 20px; margin-bottom:20px;">
+            <div style="font-size:0.88rem; font-weight:700; color:var(--color-text-primary); margin-bottom:4px; display:flex; align-items:center; gap:8px;">
+                <i data-lucide="user-check" style="width:16px; height:16px; color:var(--color-primary);"></i>
+                Target Client / End Person Details (Person for whom this work is being done)
+            </div>
+            <div style="font-size:0.78rem; color:var(--color-text-muted); margin-bottom:12px;">
+                ${isB2B ? `Ordering under B2B Account: <strong>${escapeHtml(cust.full_name || 'Partner')}</strong> (${escapeHtml(cust.b2b_id || 'B2B')}). Enter the actual person/client details below for whom this service is being performed.` : 'Enter the target end customer details for whom this work is being completed.'}
+            </div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px;">
+                <div>
+                    <label style="font-size:0.78rem; font-weight:700; color:var(--color-text-primary);">Target Person Full Name <span style="color:var(--color-danger);">*</span></label>
+                    <input type="text" id="wfield-end-client-name" class="select-filter" style="width:100%; margin-top:4px; font-size:0.85rem; padding:8px 12px;" 
+                           placeholder="e.g. Rohan Nasim" value="${escapeHtml(universalOrderWizardState.formValues['end_client_name'] || (isB2B ? '' : (cust.full_name || '')))}" 
+                           oninput="updateWizardFieldValue('end_client_name', this.value)">
+                </div>
+                <div>
+                    <label style="font-size:0.78rem; font-weight:700; color:var(--color-text-primary);">Target Person Email <span style="color:var(--color-danger);">*</span></label>
+                    <input type="email" id="wfield-end-client-email" class="select-filter" style="width:100%; margin-top:4px; font-size:0.85rem; padding:8px 12px;" 
+                           placeholder="e.g. rohan@client.com" value="${escapeHtml(universalOrderWizardState.formValues['end_client_email'] || (isB2B ? '' : (cust.email || '')))}" 
+                           oninput="updateWizardFieldValue('end_client_email', this.value)">
+                </div>
+                <div>
+                    <label style="font-size:0.78rem; font-weight:700; color:var(--color-text-primary);">Target Person Phone Number</label>
+                    <input type="tel" id="wfield-end-client-phone" class="select-filter" style="width:100%; margin-top:4px; font-size:0.85rem; padding:8px 12px;" 
+                           placeholder="+44 7911 123456" value="${escapeHtml(universalOrderWizardState.formValues['end_client_phone'] || (isB2B ? '' : (cust.phone || '')))}" 
+                           oninput="updateWizardFieldValue('end_client_phone', this.value)">
+                </div>
+            </div>
+        </div>
+    `;
 }
 
 function isCompanySearchMandatoryField(f, product) {
@@ -12484,39 +12523,72 @@ function validateWizardStep3Fields() {
     return null;
 }
 
+function removeWizardUploadedDoc(docReqId, index) {
+    if (!universalOrderWizardState.uploadedDocs[docReqId]) return;
+    if (Array.isArray(universalOrderWizardState.uploadedDocs[docReqId])) {
+        universalOrderWizardState.uploadedDocs[docReqId].splice(index, 1);
+        if (universalOrderWizardState.uploadedDocs[docReqId].length === 0) {
+            delete universalOrderWizardState.uploadedDocs[docReqId];
+        }
+    } else {
+        delete universalOrderWizardState.uploadedDocs[docReqId];
+    }
+    renderWizardStep4Documents();
+}
+
 function renderWizardStep4Documents() {
     const container = document.getElementById('wizard-documents-checklist');
     if (!container) return;
 
     const p = universalOrderWizardState.selectedProduct;
-    const reqs = p.document_requirements || [];
+    let reqs = (p && p.document_requirements) ? [...p.document_requirements] : [];
 
-    if (reqs.length === 0) {
-        container.innerHTML = '<div style="font-size:0.85rem; color:var(--color-text-muted); text-align:center; padding:30px;">No document uploads required for this product. Click Continue to review your order.</div>';
-        return;
+    if (!reqs.some(r => r.id === 'general_extra_docs')) {
+        reqs.push({
+            id: 'general_extra_docs',
+            name: 'Additional Package & Supporting Files',
+            description: 'Upload any extra client documents, certificates, briefs, or files (Multiple files supported).',
+            required: false,
+            allowed_extensions: ['.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx', '.zip']
+        });
     }
 
     container.innerHTML = reqs.map(doc => {
-        const uploaded = universalOrderWizardState.uploadedDocs[doc.id];
-        const statusText = uploaded ? uploaded.status : (doc.required ? 'Required' : 'Optional');
-        const statusClass = uploaded ? 'completed' : (doc.required ? 'pending' : 'info');
+        const uploadedVal = universalOrderWizardState.uploadedDocs[doc.id];
+        const uploads = Array.isArray(uploadedVal) ? uploadedVal : (uploadedVal ? [uploadedVal] : []);
+        const count = uploads.length;
+        const statusText = count > 0 ? `${count} File${count > 1 ? 's' : ''} Uploaded` : (doc.required ? 'Required' : 'Optional');
+        const statusClass = count > 0 ? 'completed' : (doc.required ? 'pending' : 'info');
+
+        const uploadedFilesHTML = uploads.map((u, idx) => `
+            <div style="display:flex; align-items:center; justify-content:space-between; background:var(--color-surface); border:1px solid var(--color-border); border-radius:8px; padding:6px 12px; margin-top:6px; font-size:0.8rem;">
+                <span style="color:var(--color-success); font-weight:600; display:flex; align-items:center; gap:6px;">
+                    <i data-lucide="check-circle" style="width:14px; height:14px;"></i> ${escapeHtml(u.file_name)}
+                </span>
+                <button type="button" style="background:none; border:none; color:var(--color-danger); cursor:pointer; font-size:0.78rem; font-weight:700; padding:2px 6px;" onclick="removeWizardUploadedDoc('${doc.id}', ${idx})">
+                    × Remove
+                </button>
+            </div>
+        `).join('');
 
         return `
-            <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:12px; padding:16px 20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
-                <div>
-                    <div style="display:flex; align-items:center; gap:8px;">
-                        <strong style="font-size:0.9rem; color:var(--color-text-primary);">${escapeHtml(doc.name)}</strong>
-                        <span class="status-badge ${statusClass}">${statusText}</span>
+            <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:12px; padding:16px 20px; margin-bottom:12px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+                    <div>
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <strong style="font-size:0.9rem; color:var(--color-text-primary);">${escapeHtml(doc.name)}</strong>
+                            <span class="status-badge ${statusClass}">${statusText}</span>
+                        </div>
+                        <p style="font-size:0.8rem; color:var(--color-text-muted); margin:4px 0 0 0;">${escapeHtml(doc.description || '')}</p>
                     </div>
-                    <p style="font-size:0.8rem; color:var(--color-text-muted); margin:4px 0 0 0;">${escapeHtml(doc.description || '')}</p>
-                    ${uploaded ? `<div style="font-size:0.78rem; color:var(--color-success); font-weight:600; margin-top:4px;">✓ ${escapeHtml(uploaded.file_name)}</div>` : ''}
+                    <div>
+                        <input type="file" id="doc-file-input-${doc.id}" multiple style="display:none;" onchange="handleWizardFileUpload('${doc.id}', this)">
+                        <button type="button" class="btn-secondary" style="font-size:0.82rem; padding:8px 14px;" onclick="document.getElementById('doc-file-input-${doc.id}').click()">
+                            <i data-lucide="upload-cloud" style="width:14px; height:14px; margin-right:4px;"></i> ${count > 0 ? '+ Upload More Files' : 'Upload File(s)'}
+                        </button>
+                    </div>
                 </div>
-                <div>
-                    <input type="file" id="doc-file-input-${doc.id}" style="display:none;" onchange="handleWizardFileUpload('${doc.id}', this)">
-                    <button type="button" class="btn-secondary" style="font-size:0.82rem; padding:8px 14px;" onclick="document.getElementById('doc-file-input-${doc.id}').click()">
-                        <i data-lucide="upload-cloud" style="width:14px; height:14px; margin-right:4px;"></i> ${uploaded ? 'Replace Document' : 'Upload File'}
-                    </button>
-                </div>
+                ${uploadedFilesHTML ? `<div style="margin-top:10px;">${uploadedFilesHTML}</div>` : ''}
             </div>
         `;
     }).join('');
@@ -12525,44 +12597,52 @@ function renderWizardStep4Documents() {
 }
 
 async function handleWizardFileUpload(docReqId, fileInput) {
-    if (!fileInput.files || !fileInput.files[0]) return;
-    const file = fileInput.files[0];
+    if (!fileInput.files || fileInput.files.length === 0) return;
+    const files = Array.from(fileInput.files);
 
-    showWizardError(`Uploading ${file.name}...`, false);
+    showWizardError(`Uploading ${files.length} document file(s)...`, false);
 
     try {
-        const b64 = await readFileAsBase64(file);
         const targetClient = universalOrderWizardState.selectedCustomer;
         const headers = { 'Content-Type': 'application/json' };
         const token = localStorage.getItem('brixen_session_token');
         if (token) headers['Authorization'] = 'Bearer ' + token;
 
-        const res = await fetch('/api/client/documents/upload', {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: headers,
-            body: JSON.stringify({
-                name: file.name,
-                category: 'Order Documents',
-                file_name: file.name,
-                file_content_base64: b64,
-                client_id: targetClient ? targetClient.id : null,
-                company_id: (targetClient && targetClient.company_id) || null
-            })
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok && (data.status === 'success' || data.doc_id || data.id)) {
-            hideWizardError();
-            universalOrderWizardState.uploadedDocs[docReqId] = {
-                document_id: data.doc_id || data.id || data.document_id,
-                file_name: file.name,
-                file_path: data.file_path || '',
-                status: 'Uploaded'
-            };
-            renderWizardStep4Documents();
-        } else {
-            showWizardError(data.message || 'File upload failed. Please try again.');
+        if (!universalOrderWizardState.uploadedDocs[docReqId]) {
+            universalOrderWizardState.uploadedDocs[docReqId] = [];
+        } else if (!Array.isArray(universalOrderWizardState.uploadedDocs[docReqId])) {
+            universalOrderWizardState.uploadedDocs[docReqId] = [universalOrderWizardState.uploadedDocs[docReqId]];
         }
+
+        for (const file of files) {
+            const b64 = await readFileAsBase64(file);
+            const res = await fetch('/api/client/documents/upload', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: headers,
+                body: JSON.stringify({
+                    name: file.name,
+                    category: 'Order Documents',
+                    file_name: file.name,
+                    file_content_base64: b64,
+                    client_id: targetClient ? targetClient.id : null,
+                    company_id: (targetClient && targetClient.company_id) || null
+                })
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok && (data.status === 'success' || data.doc_id || data.id)) {
+                universalOrderWizardState.uploadedDocs[docReqId].push({
+                    document_id: data.doc_id || data.id || data.document_id,
+                    file_name: file.name,
+                    file_path: data.file_path || '',
+                    status: 'Uploaded'
+                });
+            } else {
+                showWizardError(data.message || `File upload failed for ${file.name}.`);
+            }
+        }
+        hideWizardError();
+        renderWizardStep4Documents();
     } catch (err) {
         showWizardError('Document upload error: ' + (err.message || err));
     }

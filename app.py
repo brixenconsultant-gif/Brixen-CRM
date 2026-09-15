@@ -1559,14 +1559,44 @@ def create_manual_crm_order(data, actor=None):
     is_b2b_client = (client and (client.get('is_b2b') == 1 or client.get('client_type') == 'B2B'))
     b2b_client_id_val = client.get('b2b_id') if (is_b2b_client and client.get('b2b_id')) else None
 
+    form_vals = extras.get('form_values') if isinstance(extras.get('form_values'), dict) else {}
+    end_client_name = (
+        extras.get('end_client_name') or 
+        form_vals.get('end_client_name') or 
+        form_vals.get('full_name') or 
+        form_vals.get('contact_person') or 
+        form_vals.get('director_name') or 
+        extras.get('owner_name') or 
+        (client and client.get('full_name')) or ''
+    ).strip() or None
+
+    end_client_email = (
+        extras.get('end_client_email') or 
+        form_vals.get('end_client_email') or 
+        form_vals.get('email') or 
+        form_vals.get('forwarding_email') or 
+        extras.get('owner_form_email') or 
+        (client and client.get('email')) or ''
+    ).strip() or None
+
+    end_client_phone = (
+        extras.get('end_client_phone') or 
+        form_vals.get('end_client_phone') or 
+        form_vals.get('phone') or 
+        form_vals.get('uk_contact') or 
+        form_vals.get('contact_phone') or 
+        (client and client.get('phone')) or ''
+    ).strip() or None
+
     order_id = execute_db(
         """
         INSERT INTO orders (
             order_number, user_id, company_id, service_id, service_name,
             price, vat, total, status, progress_percent, notes, payment_mode,
-            owner_name, owner_form_email, assigned_staff_id, checkout_form_json,
+            owner_name, owner_form_email, end_client_name, end_client_email, end_client_phone,
+            assigned_staff_id, checkout_form_json,
             b2b_client_id, access_email, access_email_password
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """,
         (
             order_number,
@@ -1583,6 +1613,9 @@ def create_manual_crm_order(data, actor=None):
             payment_mode,
             owner_name or None,
             owner_email,
+            end_client_name,
+            end_client_email,
+            end_client_phone,
             (actor or {}).get('id'),
             json.dumps(checkout_form_data),
             b2b_client_id_val,
@@ -1642,16 +1675,18 @@ def create_manual_crm_order(data, actor=None):
     uploaded_docs = extras.get('uploaded_docs')
     if uploaded_docs and isinstance(uploaded_docs, dict):
         for req_key, doc_item in uploaded_docs.items():
-            if isinstance(doc_item, dict):
-                doc_id_val = doc_item.get('document_id') or doc_item.get('id')
-                if doc_id_val:
-                    try:
-                        execute_db(
-                            "UPDATE documents SET order_id = ?, company_id = COALESCE(company_id, ?) WHERE id = ?;",
-                            (order_id, company_id, int(doc_id_val))
-                        )
-                    except Exception:
-                        pass
+            items = doc_item if isinstance(doc_item, list) else [doc_item]
+            for item in items:
+                if isinstance(item, dict):
+                    doc_id_val = item.get('document_id') or item.get('id')
+                    if doc_id_val:
+                        try:
+                            execute_db(
+                                "UPDATE documents SET order_id = ?, company_id = COALESCE(company_id, ?) WHERE id = ?;",
+                                (order_id, company_id, int(doc_id_val))
+                            )
+                        except Exception:
+                            pass
 
     ensure_order_timeline(order_id)
     ensure_invoice_for_order(order_id)

@@ -287,6 +287,12 @@ def ensure_schema():
         conn.execute("ALTER TABLE orders ADD COLUMN owner_name TEXT")
     if 'owner_form_email' not in order_cols:
         conn.execute("ALTER TABLE orders ADD COLUMN owner_form_email TEXT")
+    if 'end_client_name' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN end_client_name TEXT")
+    if 'end_client_email' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN end_client_email TEXT")
+    if 'end_client_phone' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN end_client_phone TEXT")
     invoice_cols = {row[1] for row in conn.execute("PRAGMA table_info(invoices)").fetchall()}
     if 'payment_timing' not in invoice_cols:
         conn.execute("ALTER TABLE invoices ADD COLUMN payment_timing TEXT NOT NULL DEFAULT 'After work'")
