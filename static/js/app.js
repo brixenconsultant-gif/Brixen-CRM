@@ -12302,31 +12302,33 @@ function renderWizardEndClientCardHTML() {
     if (!cust) return '';
     const isB2B = (cust.is_b2b === 1 || cust.client_type === 'B2B');
 
+    const inputStyle = "width:100%; box-sizing:border-box; padding:12px 16px; font-size:0.95rem; line-height:1.5; color:var(--color-text-primary); background:#ffffff; border:1px solid #cbd5e1; border-radius:8px; margin-top:6px; outline:none; transition:border-color 0.15s ease, box-shadow 0.15s ease;";
+
     return `
-        <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:12px; padding:16px 20px; margin-bottom:20px;">
-            <div style="font-size:0.88rem; font-weight:700; color:var(--color-text-primary); margin-bottom:4px; display:flex; align-items:center; gap:8px;">
-                <i data-lucide="user-check" style="width:16px; height:16px; color:var(--color-primary);"></i>
+        <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:14px; padding:24px; margin-bottom:24px; box-shadow:0 1px 3px 0 rgba(0,0,0,0.05);">
+            <div style="font-size:1.02rem; font-weight:700; color:#0f172a; margin-bottom:6px; display:flex; align-items:center; gap:8px;">
+                <i data-lucide="user-check" style="width:18px; height:18px; color:var(--color-primary);"></i>
                 Target Client / End Person Details (Person for whom this work is being done)
             </div>
-            <div style="font-size:0.78rem; color:var(--color-text-muted); margin-bottom:12px;">
+            <div style="font-size:0.82rem; color:#64748b; margin-bottom:16px;">
                 ${isB2B ? `Ordering under B2B Account: <strong>${escapeHtml(cust.full_name || 'Partner')}</strong> (${escapeHtml(cust.b2b_id || 'B2B')}). Enter the actual person/client details below for whom this service is being performed.` : 'Enter the target end customer details for whom this work is being completed.'}
             </div>
-            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px;">
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:18px;">
                 <div>
-                    <label style="font-size:0.78rem; font-weight:700; color:var(--color-text-primary);">Target Person Full Name <span style="color:var(--color-danger);">*</span></label>
-                    <input type="text" id="wfield-end-client-name" class="select-filter" style="width:100%; margin-top:4px; font-size:0.85rem; padding:8px 12px;" 
+                    <label style="font-size:0.9rem; font-weight:700; color:#1e293b; display:block;">Target Person Full Name <span style="color:#ef4444; font-weight:700;">*</span></label>
+                    <input type="text" id="wfield-end-client-name" class="select-filter" style="${inputStyle}" 
                            placeholder="e.g. Rohan Nasim" value="${escapeHtml(universalOrderWizardState.formValues['end_client_name'] || (isB2B ? '' : (cust.full_name || '')))}" 
                            oninput="updateWizardFieldValue('end_client_name', this.value)">
                 </div>
                 <div>
-                    <label style="font-size:0.78rem; font-weight:700; color:var(--color-text-primary);">Target Person Email <span style="color:var(--color-danger);">*</span></label>
-                    <input type="email" id="wfield-end-client-email" class="select-filter" style="width:100%; margin-top:4px; font-size:0.85rem; padding:8px 12px;" 
+                    <label style="font-size:0.9rem; font-weight:700; color:#1e293b; display:block;">Target Person Email <span style="color:#ef4444; font-weight:700;">*</span></label>
+                    <input type="email" id="wfield-end-client-email" class="select-filter" style="${inputStyle}" 
                            placeholder="e.g. rohan@client.com" value="${escapeHtml(universalOrderWizardState.formValues['end_client_email'] || (isB2B ? '' : (cust.email || '')))}" 
                            oninput="updateWizardFieldValue('end_client_email', this.value)">
                 </div>
                 <div>
-                    <label style="font-size:0.78rem; font-weight:700; color:var(--color-text-primary);">Target Person Phone Number</label>
-                    <input type="tel" id="wfield-end-client-phone" class="select-filter" style="width:100%; margin-top:4px; font-size:0.85rem; padding:8px 12px;" 
+                    <label style="font-size:0.9rem; font-weight:700; color:#1e293b; display:block;">Target Person Phone Number</label>
+                    <input type="tel" id="wfield-end-client-phone" class="select-filter" style="${inputStyle}" 
                            placeholder="+44 7911 123456" value="${escapeHtml(universalOrderWizardState.formValues['end_client_phone'] || (isB2B ? '' : (cust.phone || '')))}" 
                            oninput="updateWizardFieldValue('end_client_phone', this.value)">
                 </div>
@@ -12373,22 +12375,23 @@ function renderSingleWizardFieldHTML(f, product) {
 
     let inputHTML = '';
     const fieldType = (f.type || 'text').toLowerCase();
+    const inputStyle = "width:100%; box-sizing:border-box; padding:12px 16px; font-size:0.95rem; line-height:1.5; color:var(--color-text-primary); background:#ffffff; border:1px solid #cbd5e1; border-radius:8px; margin-top:6px; outline:none; transition:border-color 0.15s ease, box-shadow 0.15s ease;";
 
     if (fieldType === 'textarea' || fieldType === 'long text') {
-        inputHTML = `<textarea id="wfield-${f.id}" class="select-filter" style="width:100%; margin-top:4px; min-height:70px; font-size:0.88rem; padding:10px 14px;" placeholder="${escapeHtml(f.placeholder || '')}" onchange="updateWizardFieldValue('${f.id}', this.value)">${escapeHtml(val)}</textarea>`;
+        inputHTML = `<textarea id="wfield-${f.id}" class="select-filter" style="${inputStyle} min-height:95px;" placeholder="${escapeHtml(f.placeholder || '')}" onchange="updateWizardFieldValue('${f.id}', this.value)">${escapeHtml(val)}</textarea>`;
     } else if (fieldType === 'dropdown' || fieldType === 'select') {
         const opts = f.options || [];
         inputHTML = `
-            <select id="wfield-${f.id}" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 14px;" onchange="updateWizardFieldValue('${f.id}', this.value)">
+            <select id="wfield-${f.id}" class="select-filter" style="${inputStyle} cursor:pointer;" onchange="updateWizardFieldValue('${f.id}', this.value)">
                 ${opts.map(o => `<option value="${escapeHtml(o)}" ${val === o ? 'selected' : ''}>${escapeHtml(o)}</option>`).join('')}
             </select>`;
     } else if (fieldType === 'radio') {
         const opts = f.options || ['YES', 'NO'];
         inputHTML = `
-            <div style="display:flex; gap:16px; margin-top:6px;">
+            <div style="display:flex; gap:20px; margin-top:8px;">
                 ${opts.map(o => `
-                    <label style="font-size:0.85rem; font-weight:600; cursor:pointer; color:var(--color-text-primary);">
-                        <input type="radio" name="wfield-${f.id}" value="${escapeHtml(o)}" ${val === o ? 'checked' : ''} onchange="updateWizardFieldValue('${f.id}', this.value)" style="accent-color:var(--color-primary);"> ${escapeHtml(o)}
+                    <label style="font-size:0.92rem; font-weight:600; cursor:pointer; color:var(--color-text-primary); display:flex; align-items:center; gap:6px;">
+                        <input type="radio" name="wfield-${f.id}" value="${escapeHtml(o)}" ${val === o ? 'checked' : ''} onchange="updateWizardFieldValue('${f.id}', this.value)" style="width:18px; height:18px; accent-color:var(--color-primary);"> ${escapeHtml(o)}
                     </label>
                 `).join('')}
             </div>`;
@@ -12396,16 +12399,16 @@ function renderSingleWizardFieldHTML(f, product) {
         const inputType = (fieldType === 'email') ? 'email' : (fieldType === 'phone') ? 'tel' : (fieldType === 'number') ? 'number' : (fieldType === 'date') ? 'date' : 'text';
         const isChSearch = isCompanySearchMandatoryField(f, p);
         const chAttr = isChSearch ? ' data-ch-search="true" autocomplete="off"' : '';
-        inputHTML = `<input type="${inputType}" id="wfield-${f.id}" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 14px;" value="${escapeHtml(val)}" placeholder="${escapeHtml(f.placeholder || '')}" ${chAttr} autocomplete="off" oninput="updateWizardFieldValue('${f.id}', this.value)">`;
+        inputHTML = `<input type="${inputType}" id="wfield-${f.id}" class="select-filter" style="${inputStyle}" value="${escapeHtml(val)}" placeholder="${escapeHtml(f.placeholder || '')}" ${chAttr} autocomplete="off" oninput="updateWizardFieldValue('${f.id}', this.value)">`;
     }
 
     return `
-        <div id="wfield-wrap-${f.id}" style="${isHidden ? 'display:none;' : ''}">
-            <label for="wfield-${f.id}" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">
-                ${escapeHtml(f.label)} ${f.required ? '<span style="color:var(--color-danger);">*</span>' : ''}
+        <div id="wfield-wrap-${f.id}" style="${isHidden ? 'display:none;' : ''} margin-bottom:20px;">
+            <label for="wfield-${f.id}" style="font-size:0.9rem; font-weight:700; color:#1e293b; display:block;">
+                ${escapeHtml(f.label)} ${f.required ? '<span style="color:#ef4444; font-weight:700;">*</span>' : ''}
             </label>
             ${inputHTML}
-            ${f.help_text ? `<div style="font-size:0.75rem; color:var(--color-text-muted); margin-top:4px;">${escapeHtml(f.help_text)}</div>` : ''}
+            ${f.help_text ? `<div style="font-size:0.82rem; color:#64748b; margin-top:6px; font-weight:500;">${escapeHtml(f.help_text)}</div>` : ''}
         </div>
     `;
 }
