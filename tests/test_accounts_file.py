@@ -149,7 +149,6 @@ class TestAccountsFile(unittest.TestCase):
         st, hd, body = make_request('/static/js/accounts-file.js')
         self.assertEqual(st, '200 OK')
         text = body if isinstance(body, str) else body.decode('utf-8')
-        self.assertIn('Load sample organisation', text)
         self.assertIn('File at Companies House', text)
         self.assertIn('It traded', text)
         self.assertIn('It slept', text)
@@ -161,6 +160,8 @@ class TestAccountsFile(unittest.TestCase):
         self.assertIn('Compile from this file', text)
         self.assertNotIn('Use the statement already on file', text)
         self.assertNotIn('maybeAutoImport', text)
+        self.assertNotIn('Load sample organisation', text)
+        self.assertNotIn('Try a sample statement', text)
 
     def test_10_sample_statement_books_and_rec(self):
         st, hd, res = make_request(

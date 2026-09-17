@@ -356,8 +356,7 @@
                     </ol>
                     <button type="button" class="btn-primary" data-accounts-screen="hmrc">Open HMRC tax</button>
                 </article>
-            </div>
-            <p class="accounts-file-help" style="margin-top:12px;">Want to see a worked example first? <button type="button" class="btn-secondary btn-table" data-accounts-action="sample-statement">Try a sample statement</button> or <button type="button" class="btn-secondary btn-table" data-accounts-action="sample">Load sample organisation</button></p>`;
+            </div>`;
     }
 
     function bankScreen(data) {
@@ -403,7 +402,6 @@
                 </div>
                 <div class="accounts-file-empty-actions">
                     <button type="button" class="btn-primary" data-accounts-action="import-statement">Compile from this file</button>
-                    <button type="button" class="btn-secondary" data-accounts-action="sample-statement">Try a sample statement</button>
                     ${(bank.imported || (bank.statements || []).length) ? '<button type="button" class="btn-secondary" data-accounts-action="reset-books">Start again from the statement</button>' : ''}
                 </div>
             </section>
