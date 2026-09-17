@@ -6841,24 +6841,27 @@ input[type="number"], input[type="date"], input[type="search"], textarea, .selec
 .accounts-file-head {
     gap: 12px;
     width: 100%;
+    align-items: flex-end;
 }
 
 .accounts-company-picker {
     display: flex;
     align-items: flex-end;
-    gap: 12px;
-    width: 100%;
-    flex-wrap: wrap;
+    gap: 8px;
+    flex: 0 1 auto;
+    width: auto;
+    max-width: 100%;
 }
 
 .accounts-file-company {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    font-size: 13px;
+    gap: 4px;
+    font-size: 12px;
     color: var(--color-text-muted, #64748b);
-    flex: 1 1 420px;
-    min-width: min(100%, 420px);
+    flex: 0 1 340px;
+    min-width: 220px;
+    max-width: 360px;
 }
 
 .accounts-company-combo {
@@ -6870,21 +6873,24 @@ input[type="number"], input[type="date"], input[type="search"], textarea, .selec
 .accounts-file-company input.accounts-company-input,
 .accounts-file-company #accounts-file-company {
     width: 100% !important;
-    max-width: none !important;
+    max-width: 360px !important;
     min-width: 0 !important;
-    min-height: 56px !important;
-    height: auto !important;
-    font-size: 18px !important;
-    font-weight: 500 !important;
-    line-height: 1.3 !important;
-    padding: 14px 18px !important;
-    border-radius: 14px !important;
+    min-height: 30px !important;
+    height: 30px !important;
+    font-size: 13px !important;
+    font-weight: 400 !important;
+    line-height: 1.2 !important;
+    padding: 4px 12px !important;
+    border-radius: 8px !important;
 }
 
 .accounts-company-picker .btn-primary {
-    min-height: 56px;
-    padding: 14px 22px;
-    font-size: 16px;
+    min-height: 24px !important;
+    height: 24px !important;
+    padding: 0 12px !important;
+    font-size: 11px !important;
+    font-weight: 600 !important;
+    border-radius: 9999px !important;
     white-space: nowrap;
 }
 
@@ -6893,16 +6899,16 @@ input[type="number"], input[type="date"], input[type="search"], textarea, .selec
     z-index: 40;
     left: 0;
     right: 0;
-    top: calc(100% + 6px);
+    top: calc(100% + 4px);
     margin: 0;
-    padding: 8px 0;
+    padding: 4px 0;
     list-style: none;
-    max-height: 380px;
+    max-height: 280px;
     overflow: auto;
     background: var(--color-surface, #fff);
-    border: 1px solid var(--color-border, #e2e8f0);
-    border-radius: 14px;
-    box-shadow: 0 12px 32px rgba(15, 23, 42, 0.12);
+    border: 1px solid var(--apple-line, #e2e8f0);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.1);
 }
 
 .accounts-company-list button {
@@ -6912,8 +6918,8 @@ input[type="number"], input[type="date"], input[type="search"], textarea, .selec
     background: none;
     border: 0;
     font: inherit;
-    font-size: 16px;
-    padding: 14px 18px;
+    font-size: 13px;
+    padding: 8px 12px;
     cursor: pointer;
     color: inherit;
 }
@@ -6924,8 +6930,8 @@ input[type="number"], input[type="date"], input[type="search"], textarea, .selec
 }
 
 .accounts-company-empty {
-    padding: 16px 18px;
-    font-size: 15px;
+    padding: 8px 12px;
+    font-size: 13px;
     color: var(--color-text-muted, #64748b);
 }
 
@@ -7220,16 +7226,27 @@ input[type="number"], input[type="date"], input[type="search"], textarea, .selec
         align-items: stretch;
     }
 
+    .accounts-file-head {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
     .accounts-company-picker,
     .accounts-file-company,
     .accounts-company-combo {
         min-width: 0;
+        max-width: none;
         width: 100%;
-        flex-basis: 100%;
+        flex: 1 1 auto;
+    }
+
+    .accounts-company-input,
+    .accounts-file-company #accounts-file-company {
+        max-width: none !important;
     }
 
     .accounts-company-picker .btn-primary {
-        width: 100%;
+        width: auto;
     }
 
     .accounts-file-nav {

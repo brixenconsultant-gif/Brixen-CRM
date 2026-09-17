@@ -291,17 +291,17 @@
                     <h1>${title}</h1>
                     <p>${h(headerMeta())}</p>
                 </div>
+                <section class="accounts-company-picker">
+                    <label class="accounts-file-company">
+                        <span>Company</span>
+                        <div class="accounts-company-combo">
+                            <input id="accounts-file-company" class="accounts-company-input" type="search" autocomplete="off" spellcheck="false" placeholder="Type the company name" value="${h(companyLabel(staged))}" ${state.companies.length ? '' : 'disabled'} aria-autocomplete="list" aria-expanded="false" aria-controls="accounts-company-list">
+                            <ul id="accounts-company-list" class="accounts-company-list" hidden role="listbox"></ul>
+                        </div>
+                    </label>
+                    <button type="button" class="btn-primary" data-accounts-action="select-company" ${state.companies.length ? '' : 'disabled'}>Select company</button>
+                </section>
             </div>
-            <section class="accounts-company-picker">
-                <label class="accounts-file-company">
-                    <span>Company</span>
-                    <div class="accounts-company-combo">
-                        <input id="accounts-file-company" class="accounts-company-input" type="search" autocomplete="off" spellcheck="false" placeholder="Type the company name" value="${h(companyLabel(staged))}" ${state.companies.length ? '' : 'disabled'} aria-autocomplete="list" aria-expanded="false" aria-controls="accounts-company-list">
-                        <ul id="accounts-company-list" class="accounts-company-list" hidden role="listbox"></ul>
-                    </div>
-                </label>
-                <button type="button" class="btn-primary" data-accounts-action="select-company" ${state.companies.length ? '' : 'disabled'}>Select company</button>
-            </section>
             ${companyFactsCard()}
             <nav class="accounts-file-nav" aria-label="Accounts workspace">${tabs}</nav>
             ${state.error ? `<div class="dash-banner-error" role="alert">${h(state.error)}</div>` : ''}
