@@ -148,7 +148,10 @@ class TestAccountsFile(unittest.TestCase):
         text = body if isinstance(body, str) else body.decode('utf-8')
         self.assertIn('Load sample organisation', text)
         self.assertIn('File at Companies House', text)
-        self.assertIn('Bank statement', text)
+        self.assertIn('It traded', text)
+        self.assertIn('It slept', text)
+        self.assertIn('HMRC tax', text)
+        self.assertIn('choose-dormant', text)
 
     def test_10_sample_statement_books_and_rec(self):
         st, hd, res = make_request(
@@ -396,6 +399,103 @@ class TestAccountsFile(unittest.TestCase):
         )
         self.assertEqual(st, '200 OK', res)
         self.assertGreaterEqual((res.get('import_result') or {}).get('imported') or 0, 2)
+
+    def test_19_dormant_path_files_without_bank(self):
+        st, hd, res = make_request(
+            f'/api/admin/accounts-file/{self.company_id}/reset-books',
+            method='POST',
+            body={},
+            cookie=self._admin_cookie(),
+        )
+        self.assertEqual(st, '200 OK', res)
+        st, hd, res = make_request(
+            f'/api/admin/accounts-file/{self.company_id}/choose-path',
+            method='POST',
+            body={'kind': 'dormant'},
+            cookie=self._admin_cookie(),
+        )
+        self.assertEqual(st, '200 OK', res)
+        self.assertEqual(res.get('filing_kind'), 'dormant')
+        self.assertEqual(res.get('next_step'), 'file')
+        self.assertTrue(res['year_end']['can_file_dormant'])
+        self.assertTrue(any(stt['id'] == 'dormant_year' for stt in res['year_end']['statements']))
+        st, hd, body = make_request(
+            f'/api/admin/accounts-file/{self.company_id}/export/filleted',
+            cookie=self._admin_cookie(),
+        )
+        self.assertEqual(st, '200 OK')
+        text = body if isinstance(body, str) else body.decode('utf-8')
+        self.assertIn('dormant throughout the year', text)
+        self.assertIn('dormant company', text.lower())
+        st, hd, res = make_request(
+            f'/api/admin/accounts-file/{self.company_id}/submit-companies-house',
+            method='POST',
+            body={'pack_kind': 'filleted'},
+            cookie=self._admin_cookie(),
+        )
+        self.assertEqual(st, '200 OK', res)
+        self.assertTrue((res.get('ch_submit') or {}).get('receipt'))
+
+    def test_20_corporation_tax_bands(self):
+        small = accounts_file.corporation_tax_estimate(40000)
+        self.assertEqual(small['band'], 'small')
+        self.assertAlmostEqual(small['tax'], 7600.00, places=2)
+        main = accounts_file.corporation_tax_estimate(250000)
+        self.assertEqual(main['band'], 'main')
+        self.assertAlmostEqual(main['tax'], 62500.00, places=2)
+        mid = accounts_file.corporation_tax_estimate(100000)
+        self.assertEqual(mid['band'], 'marginal')
+        self.assertAlmostEqual(mid['tax'], 22750.00, places=2)
+        none = accounts_file.corporation_tax_estimate(0)
+        self.assertEqual(none['band'], 'none')
+        self.assertEqual(none['tax'], 0)
+
+    def test_21_traded_path_hmrc_helper_sandbox(self):
+        st, hd, res = make_request(
+            f'/api/admin/accounts-file/{self.company_id}/choose-path',
+            method='POST',
+            body={'kind': 'traded'},
+            cookie=self._admin_cookie(),
+        )
+        self.assertEqual(st, '200 OK', res)
+        csv_text = (
+            'Date,Description,Amount,Balance\n'
+            '02/06/2026,Stripe Payout,2000.00,3000.00\n'
+            '03/06/2026,Office rent,-200.00,2800.00\n'
+        )
+        st, hd, res = make_request(
+            f'/api/admin/accounts-file/{self.company_id}/import-statement',
+            method='POST',
+            body={'csv_text': csv_text, 'filename': 'hmrc-path.csv', 'opening_balance': 1000},
+            cookie=self._admin_cookie(),
+        )
+        self.assertEqual(st, '200 OK', res)
+        self.assertEqual(res.get('filing_kind'), 'traded')
+        hmrc = res.get('hmrc') or {}
+        self.assertIn(hmrc.get('band'), ('none', 'small', 'marginal', 'main'))
+        self.assertTrue(hmrc.get('payment_due'))
+        self.assertTrue(hmrc.get('return_due'))
+        st, hd, res = make_request(
+            f'/api/admin/accounts-file/{self.company_id}/submit-hmrc',
+            method='POST',
+            body={'hmrc_utr': '1234567890'},
+            cookie=self._admin_cookie(),
+        )
+        self.assertEqual(st, '200 OK', res)
+        self.assertTrue((res.get('hmrc_submit') or {}).get('receipt', '').startswith('BRIXEN-HMRC-'))
+        self.assertEqual((res.get('organisation') or {}).get('hmrc_utr'), '1234567890')
+
+    def test_22_empty_workspace_asks_to_choose(self):
+        st, hd, res = make_request(
+            f'/api/admin/accounts-file/{self.company_id}/reset-books',
+            method='POST',
+            body={},
+            cookie=self._admin_cookie(),
+        )
+        self.assertEqual(st, '200 OK', res)
+        self.assertTrue(res.get('empty'))
+        self.assertEqual(res.get('next_step'), 'choose')
+        self.assertTrue(res.get('hmrc'))
 
 
 if __name__ == '__main__':

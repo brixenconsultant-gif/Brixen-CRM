@@ -7137,6 +7137,60 @@ input[type="number"], input[type="date"], input[type="search"], textarea, .selec
     }
 }
 
+.accounts-path-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+    margin-top: 14px;
+}
+
+.accounts-path-card {
+    background: var(--color-surface, #fff);
+    border: 1px solid var(--color-border, #e2e8f0);
+    border-radius: 14px;
+    padding: 16px 16px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.accounts-path-kicker {
+    margin: 0;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--color-text-muted, #64748b);
+    font-weight: 700;
+}
+
+.accounts-path-card h3 {
+    margin: 0;
+    font-size: 18px;
+}
+
+.accounts-path-card p {
+    margin: 0;
+    color: var(--color-text-muted, #64748b);
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.accounts-path-card .btn-primary {
+    margin-top: auto;
+    align-self: flex-start;
+}
+
+@media (max-width: 900px) {
+    .accounts-path-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+html[data-theme="dark"] .accounts-path-card {
+    background: var(--color-surface, #111827);
+    border-color: var(--color-border, #334155);
+}
+
 html[data-theme="dark"] .accounts-file-empty,
 html[data-theme="dark"] .accounts-file-card {
     background: var(--color-surface, #111827);

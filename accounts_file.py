@@ -1,8 +1,9 @@
-"""UK FRS 105 micro-entity books from bank statements, then Companies House.
+"""UK books for a director who is not an accountant.
 
-Director-first: upload or paste a UK bank statement, review categories, then
-download a micro-entity pack or send it to Companies House (live gateway when
-credentials exist, otherwise a sandbox receipt plus WebFiling upload).
+Three simple paths: traded (micro-entity from a bank statement), dormant
+(slept all year — no statement), then Companies House and a plain-English
+HMRC Corporation Tax helper. Live gateways when credentials exist; otherwise
+a sandbox receipt plus a download / GOV.UK upload.
 """
 from __future__ import annotations
 
@@ -65,6 +66,8 @@ CREATE TABLE IF NOT EXISTS ledger_books (
     sample_loaded INTEGER NOT NULL DEFAULT 0,
     exclusions_json TEXT NOT NULL DEFAULT '{}',
     notes_json TEXT NOT NULL DEFAULT '{}',
+    filing_kind TEXT NOT NULL DEFAULT '',
+    hmrc_utr TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
@@ -156,11 +159,31 @@ CREATE TABLE IF NOT EXISTS ledger_ch_filings (
     FOREIGN KEY (book_id) REFERENCES ledger_books(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_ledger_ch_filings_book ON ledger_ch_filings(book_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS ledger_hmrc_filings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'sandbox',
+    status TEXT NOT NULL DEFAULT 'recorded',
+    receipt TEXT,
+    message TEXT,
+    tax_estimate REAL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (book_id) REFERENCES ledger_books(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_ledger_hmrc_filings_book ON ledger_hmrc_filings(book_id, created_at DESC);
 """
 
 MICRO_FROM = datetime.date(2025, 4, 6)
 THRESHOLDS_NEW = (1_000_000.0, 500_000.0, 10)
 THRESHOLDS_OLD = (632_000.0, 316_000.0, 10)
+CT_LOWER = 50_000.0
+CT_UPPER = 250_000.0
+CT_SMALL_RATE = 0.19
+CT_MAIN_RATE = 0.25
+CT_MARGINAL_FRACTION = 3.0 / 200.0
+HMRC_CT_URL = 'https://www.gov.uk/file-your-company-accounts-and-tax-return'
+HMRC_DORMANT_URL = 'https://www.gov.uk/dormant-company/dormant-for-corporation-tax'
 
 PL_LABELS = {
     'A': 'Turnover',
@@ -542,9 +565,69 @@ def filing_deadline(period_end, incorporation_date=None, is_first=False, period_
     return due.isoformat(), note
 
 
+def corporation_tax_estimate(profit):
+    """FY 2023+ UK Corporation Tax for a single company with no associated companies.
+
+    Director English: 19% up to £50,000, 25% from £250,000, a blend in between.
+    """
+    taxable = money(max(0.0, money(profit)))
+    if taxable <= 0:
+        return {
+            'profit': 0.0,
+            'tax': 0.0,
+            'band': 'none',
+            'rate_pct': 0.0,
+            'plain': 'No Corporation Tax to pay on these books — there is no taxable profit.',
+        }
+    if taxable <= CT_LOWER:
+        tax = money(taxable * CT_SMALL_RATE)
+        return {
+            'profit': taxable,
+            'tax': tax,
+            'band': 'small',
+            'rate_pct': 19.0,
+            'plain': 'Small-profits rate: 19p in the pound, because profit is £50,000 or less.',
+        }
+    if taxable >= CT_UPPER:
+        tax = money(taxable * CT_MAIN_RATE)
+        return {
+            'profit': taxable,
+            'tax': tax,
+            'band': 'main',
+            'rate_pct': 25.0,
+            'plain': 'Main rate: 25p in the pound, because profit is £250,000 or more.',
+        }
+    tax = money(taxable * CT_MAIN_RATE - (CT_UPPER - taxable) * CT_MARGINAL_FRACTION)
+    return {
+        'profit': taxable,
+        'tax': tax,
+        'band': 'marginal',
+        'rate_pct': money((tax / taxable) * 100) if taxable else 0.0,
+        'plain': 'A blend between 19% and 25%, because profit sits between £50,000 and £250,000.',
+    }
+
+
+def ct_dates(period_end):
+    end = _parse_date(period_end)
+    if not end:
+        return None, None
+    payment_due = add_months(end, 9) + datetime.timedelta(days=1)
+    return_due = add_months(end, 12)
+    return payment_due.isoformat(), return_due.isoformat()
+
+
+def _book_kind(book):
+    return str((book or {}).get('filing_kind') or '').strip().lower()
+
+
 def ensure_ledger_schema():
     conn = _db()
     conn.executescript(LEDGER_SCHEMA_SQL)
+    cols = {row[1] for row in conn.execute('PRAGMA table_info(ledger_books)').fetchall()}
+    if 'filing_kind' not in cols:
+        conn.execute("ALTER TABLE ledger_books ADD COLUMN filing_kind TEXT NOT NULL DEFAULT '';")
+    if 'hmrc_utr' not in cols:
+        conn.execute("ALTER TABLE ledger_books ADD COLUMN hmrc_utr TEXT NOT NULL DEFAULT '';")
     conn.commit()
     _release(conn)
 
@@ -585,7 +668,7 @@ def list_companies(user_id=None):
         ) or []
     books = {
         int(b['company_id']): b
-        for b in (query_db("SELECT company_id, registered_name, period_end, sample_loaded FROM ledger_books;") or [])
+        for b in (query_db("SELECT company_id, registered_name, period_end, sample_loaded, filing_kind FROM ledger_books;") or [])
     }
     out = []
     for row in rows:
@@ -602,6 +685,7 @@ def list_companies(user_id=None):
             'sample_loaded': bool(book and book.get('sample_loaded')),
             'period_end': (book or {}).get('period_end'),
             'ledger_name': (book or {}).get('registered_name') or row.get('name'),
+            'filing_kind': (book or {}).get('filing_kind') or '',
         })
     return out
 
@@ -683,6 +767,10 @@ def _clear_books(book_id):
     conn.execute("DELETE FROM ledger_bank_lines WHERE book_id = ?;", (book_id,))
     conn.execute("DELETE FROM ledger_statements WHERE book_id = ?;", (book_id,))
     conn.execute("DELETE FROM ledger_ch_filings WHERE book_id = ?;", (book_id,))
+    try:
+        conn.execute("DELETE FROM ledger_hmrc_filings WHERE book_id = ?;", (book_id,))
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     _release(conn)
 
@@ -786,6 +874,27 @@ def start_blank_books(company_id, user_id=None):
     return workspace(company_id, user_id)
 
 
+def choose_path(company_id, data, user_id=None):
+    """Director picks traded (micro) or dormant. Does not require a bank statement."""
+    kind = str((data or {}).get('kind') or (data or {}).get('filing_kind') or '').strip().lower()
+    if kind not in ('traded', 'dormant'):
+        return None, 'Choose whether the company traded this year, or slept with no sales.'
+    company = _company_row(company_id, user_id)
+    if not company:
+        return None, 'Company not found'
+    book = _book_for_company(company_id)
+    if not book:
+        ws, error = start_blank_books(company_id, user_id)
+        if error:
+            return None, error
+        book = _book_for_company(company_id)
+    execute_db(
+        "UPDATE ledger_books SET filing_kind=?, updated_at=CURRENT_TIMESTAMP WHERE id=?;",
+        (kind, book['id']),
+    )
+    return workspace(company_id, user_id)
+
+
 def reset_books(company_id, user_id=None):
     """Wipe the accounts file for this company. Documents, orders and invoices stay."""
     company = _company_row(company_id, user_id)
@@ -851,6 +960,7 @@ def load_sample_books(company_id, user_id=None):
         _, error = _write_journal(book_id, journal_date, narration, lines, reference)
         if error:
             return None, error
+    execute_db("UPDATE ledger_books SET filing_kind='traded', updated_at=CURRENT_TIMESTAMP WHERE id=?;", (book_id,))
     return workspace(company_id, user_id)
 
 
@@ -885,8 +995,8 @@ def save_organisation(company_id, data, user_id=None):
         UPDATE ledger_books SET
             registered_name=?, company_number=?, registered_office=?, directors_json=?,
             incorporation_date=?, period_start=?, period_end=?, prior_period_start=?,
-            prior_period_end=?, employees=?, prior_employees=?, is_first_accounts=?,
-            exclusions_json=?, notes_json=?, updated_at=CURRENT_TIMESTAMP
+            prior_period_end=?, employees=?, prior_employees=?,             is_first_accounts=?,
+            exclusions_json=?, notes_json=?, hmrc_utr=?, updated_at=CURRENT_TIMESTAMP
         WHERE id=?;
         """,
         (
@@ -904,6 +1014,7 @@ def save_organisation(company_id, data, user_id=None):
             1 if data.get('is_first_accounts') else 0,
             json.dumps(exclusions),
             json.dumps(notes),
+            re.sub(r'\s+', '', str(data.get('hmrc_utr') if data.get('hmrc_utr') is not None else book.get('hmrc_utr') or ''))[:15],
             book['id'],
         ),
     )
@@ -1265,6 +1376,8 @@ def _public_org(book):
         'filing_due': due,
         'filing_due_note': due_note,
         'accounting_standard': 'FRS 105 (September 2024 edition)',
+        'filing_kind': _book_kind(book),
+        'hmrc_utr': str(book.get('hmrc_utr') or '').strip(),
     }
 
 
@@ -1342,42 +1455,88 @@ def _exclusion_block(org):
 
 def year_end_pack(org, pl, bs, size):
     flagged = _exclusion_block(org)
-    can_file_micro = size['qualifies'] and not flagged
+    dormant = str(org.get('filing_kind') or '') == 'dormant'
+    can_file_micro = (size['qualifies'] and not flagged) or dormant
     notes = org.get('notes') or {}
     employees = int(org.get('employees') or 0)
     director_names = ', '.join(d.get('name') for d in (org.get('directors') or []) if d.get('name')) or 'the director'
-    statements = [
-        {
-            'id': 'micro',
-            'title': 'Micro-entity statement',
-            'body': 'These accounts have been prepared in accordance with the micro-entity provisions.',
-            'law': 'CA 2006 s414(3); Companies House accounts guidance section 9.4. Shown prominently, above the director’s signature.',
-        },
-        {
-            'id': 'audit_s477',
-            'title': 'Audit exemption — section 477',
-            'body': (
-                f"For the year ending {_uk_long(org.get('period_end'))} the company was entitled to exemption from audit "
-                "under section 477 of the Companies Act 2006 relating to small companies."
-            ),
-            'law': 'CA 2006 s477; Companies House guidance section 11.1.',
-        },
-        {
-            'id': 'members_s476',
-            'title': 'Members have not required an audit',
-            'body': 'The members have not required the company to obtain an audit of its accounts for the year in question in accordance with section 476.',
-            'law': 'CA 2006 s476.',
-        },
-        {
-            'id': 'directors_s475',
-            'title': 'Directors’ responsibilities',
-            'body': (
-                "The directors acknowledge their responsibilities for complying with the requirements of the Companies Act 2006 "
-                "with respect to accounting records and the preparation of accounts."
-            ),
-            'law': 'CA 2006 s475.',
-        },
-    ]
+    if dormant:
+        statements = [
+            {
+                'id': 'dormant_year',
+                'title': 'The company slept all year',
+                'body': (
+                    f"The company was dormant throughout the year ended {_uk_long(org.get('period_end'))}. "
+                    'There were no significant accounting transactions (Companies Act 2006 section 1169).'
+                ),
+                'law': 'CA 2006 s1169.',
+            },
+            {
+                'id': 'audit_s480',
+                'title': 'Audit exemption — dormant company',
+                'body': (
+                    f"For the year ending {_uk_long(org.get('period_end'))} the company was entitled to exemption "
+                    'from audit under section 480 of the Companies Act 2006 relating to dormant companies.'
+                ),
+                'law': 'CA 2006 s480.',
+            },
+            {
+                'id': 'members_s476',
+                'title': 'Members have not required an audit',
+                'body': 'The members have not required the company to obtain an audit of its accounts for the year in question in accordance with section 476.',
+                'law': 'CA 2006 s476.',
+            },
+            {
+                'id': 'directors_s475',
+                'title': 'Directors’ responsibilities',
+                'body': (
+                    'The directors acknowledge their responsibilities for complying with the requirements of the Companies Act 2006 '
+                    'with respect to accounting records and the preparation of accounts.'
+                ),
+                'law': 'CA 2006 s475.',
+            },
+        ]
+        filing_note = (
+            'Dormant accounts are a short balance sheet plus these statements. '
+            'No bank statement is needed. File at Companies House, then tell HMRC the company slept.'
+        )
+    else:
+        statements = [
+            {
+                'id': 'micro',
+                'title': 'Micro-entity statement',
+                'body': 'These accounts have been prepared in accordance with the micro-entity provisions.',
+                'law': 'CA 2006 s414(3); Companies House accounts guidance section 9.4. Shown prominently, above the director’s signature.',
+            },
+            {
+                'id': 'audit_s477',
+                'title': 'Audit exemption — section 477',
+                'body': (
+                    f"For the year ending {_uk_long(org.get('period_end'))} the company was entitled to exemption from audit "
+                    "under section 477 of the Companies Act 2006 relating to small companies."
+                ),
+                'law': 'CA 2006 s477; Companies House guidance section 11.1.',
+            },
+            {
+                'id': 'members_s476',
+                'title': 'Members have not required an audit',
+                'body': 'The members have not required the company to obtain an audit of its accounts for the year in question in accordance with section 476.',
+                'law': 'CA 2006 s476.',
+            },
+            {
+                'id': 'directors_s475',
+                'title': 'Directors’ responsibilities',
+                'body': (
+                    "The directors acknowledge their responsibilities for complying with the requirements of the Companies Act 2006 "
+                    "with respect to accounting records and the preparation of accounts."
+                ),
+                'law': 'CA 2006 s475.',
+            },
+        ]
+        filing_note = (
+            'A micro-entity may currently omit the profit and loss account and directors’ report from the Companies House copy. '
+            'Delivery of a profit and loss account becomes mandatory for accounts delivered on or after 1 April 2028.'
+        )
     statutory_notes = [
         {
             'id': 'employees',
@@ -1410,16 +1569,15 @@ def year_end_pack(org, pl, bs, size):
     ]
     return {
         'can_file_micro': can_file_micro,
+        'can_file_dormant': dormant,
+        'filing_kind': 'dormant' if dormant else 'traded',
         'size': size,
         'exclusions': [{'key': key, 'label': label, 'flagged': bool(org.get('exclusions', {}).get(key))} for key, label in EXCLUSION_FIELDS],
         'exclusion_labels': flagged,
         'statements': statements,
         'notes': statutory_notes,
         'signed_by': director_names,
-        'filing_note': (
-            'A micro-entity may currently omit the profit and loss account and directors’ report from the Companies House copy. '
-            'Delivery of a profit and loss account becomes mandatory for accounts delivered on or after 1 April 2028.'
-        ),
+        'filing_note': filing_note,
         'ixbrl_gap': (
             'The draft iXBRL file uses FRC-style concept names and is labelled as a draft. '
             'It is not a validated Companies House software-filing package (Accounts TIS v5.9 from 1 April 2026).'
@@ -2182,6 +2340,10 @@ def import_statement(company_id, data, user_id=None, files=None):
                 "UPDATE ledger_books SET " + ", ".join(updates) + ", updated_at=CURRENT_TIMESTAMP WHERE id=?;",
                 tuple(values),
             )
+    execute_db(
+        "UPDATE ledger_books SET filing_kind='traded', updated_at=CURRENT_TIMESTAMP WHERE id=? AND (filing_kind IS NULL OR filing_kind='');",
+        (book['id'],),
+    )
     ws, error = workspace(company_id, user_id)
     if error:
         return None, error
@@ -2382,6 +2544,7 @@ def _filing_payload(book, company, ye=None):
         'webfiling_url': WEBFILING_URL,
         'needed': needed,
         'can_file_micro': bool(ye and ye.get('can_file_micro')),
+        'can_file_dormant': bool(ye and ye.get('can_file_dormant')),
         'last_filings': [{
             'mode': row.get('mode'),
             'status': row.get('status'),
@@ -2393,7 +2556,80 @@ def _filing_payload(book, company, ye=None):
     }
 
 
-def _ch_gateway_xml(company_number, auth_code, presenter_id, presenter_auth, period_end):
+def _hmrc_payload(book, company, org=None, pl=None):
+    org = org or (_public_org(book) if book else {})
+    kind = str(org.get('filing_kind') or _book_kind(book) or '')
+    profit = money((pl or {}).get('profit') or 0)
+    if kind == 'dormant':
+        profit = 0.0
+    estimate = corporation_tax_estimate(profit)
+    payment_due, return_due = ct_dates(org.get('period_end'))
+    utr = str((book or {}).get('hmrc_utr') or org.get('hmrc_utr') or '').strip()
+    filings = []
+    if book:
+        try:
+            filings = query_db(
+                """
+                SELECT mode, status, receipt, message, tax_estimate, created_at
+                FROM ledger_hmrc_filings WHERE book_id = ? ORDER BY id DESC LIMIT 8;
+                """,
+                (book['id'],),
+            ) or []
+        except sqlite3.OperationalError:
+            filings = []
+    needed = []
+    if not utr:
+        needed.append({
+            'key': 'hmrc_utr',
+            'label': 'HMRC tax number (UTR)',
+            'reason': 'On the letter HMRC sent when the company was registered for Corporation Tax. Needed only if you file the Company Tax Return yourself.',
+        })
+    if kind == 'dormant':
+        steps = [
+            'You usually pay nothing if the company slept all year and made no profit.',
+            'Tell HMRC the company is dormant (GOV.UK link below) if they do not already know.',
+            'You do not normally send a Company Tax Return for a fully dormant year once HMRC have been told.',
+        ]
+        headline = 'Usually no Corporation Tax — the company slept.'
+    else:
+        steps = [
+            'Check the profit figure from your books.',
+            f"Pay any Corporation Tax by {_uk_long(payment_due) if payment_due else '9 months and 1 day after year end'}.",
+            f"Send the Company Tax Return (CT600) by {_uk_long(return_due) if return_due else '12 months after year end'}.",
+        ]
+        headline = estimate['plain']
+    return {
+        'kind': kind or 'traded',
+        'headline': headline,
+        'profit': estimate['profit'],
+        'tax': estimate['tax'],
+        'band': estimate['band'],
+        'rate_pct': estimate['rate_pct'],
+        'plain': estimate['plain'],
+        'payment_due': payment_due,
+        'return_due': return_due,
+        'utr': utr,
+        'has_utr': bool(utr),
+        'needed': needed,
+        'steps': steps,
+        'file_url': HMRC_CT_URL,
+        'dormant_url': HMRC_DORMANT_URL,
+        'disclaimer': (
+            'This is a guide from the books in this portal. It is not a filed Company Tax Return '
+            'and not Making Tax Digital software. Download or record a sandbox receipt, then send the live return on GOV.UK if you need to.'
+        ),
+        'last_filings': [{
+            'mode': row.get('mode'),
+            'status': row.get('status'),
+            'receipt': row.get('receipt'),
+            'message': row.get('message'),
+            'tax_estimate': money(row['tax_estimate']) if row.get('tax_estimate') is not None else None,
+            'created_at': row.get('created_at'),
+        } for row in filings],
+    }
+
+
+def _ch_gateway_xml(company_number, auth_code, presenter_id, presenter_auth, period_end, filing_type='MicroEntity'):
     def esc(value):
         return html_lib.escape(str(value or ''), quote=True)
     parts = [
@@ -2410,7 +2646,9 @@ def _ch_gateway_xml(company_number, auth_code, presenter_id, presenter_auth, per
         '</Key><Key Type="AuthenticationCode">',
         esc(auth_code),
         '</Key></Keys></GovTalkDetails>',
-        '<Body><Accounts FilingType="MicroEntity" PeriodEnd="',
+        '<Body><Accounts FilingType="',
+        esc(filing_type or 'MicroEntity'),
+        '" PeriodEnd="',
         esc(period_end),
         '">Brixen FRS 105 HTML pack. Not a validated TIS v5.9 iXBRL submission.</Accounts></Body>',
         '</GovTalkMessage>',
@@ -2424,7 +2662,15 @@ def submit_companies_house(company_id, data, user_id=None):
         return None, 'Company not found'
     book = _book_for_company(company_id)
     if not book:
-        return None, 'Upload a bank statement and review the books before sending them to Companies House.'
+        return None, 'Choose Start first: did the company trade this year, or did it sleep?'
+    if _book_kind(book) != 'dormant':
+        imported = query_db(
+            "SELECT COUNT(*) AS n FROM ledger_bank_lines WHERE book_id = ?;",
+            (book['id'],),
+            one=True,
+        ) or {}
+        if int(imported.get('n') or 0) <= 0:
+            return None, 'Add the bank statement and check the numbers before sending them to Companies House.'
     pack_kind = str(data.get('pack_kind') or 'filleted').strip() or 'filleted'
     if pack_kind not in ('members', 'filleted', 'ixbrl'):
         pack_kind = 'filleted'
@@ -2453,7 +2699,10 @@ def submit_companies_house(company_id, data, user_id=None):
     )
     live_ready = bool(company_number and auth_code and presenter_id and presenter_auth)
     if live_ready and not gateway.startswith('mock:'):
-        xml = _ch_gateway_xml(company_number, auth_code, presenter_id, presenter_auth, book.get('period_end'))
+        xml = _ch_gateway_xml(
+            company_number, auth_code, presenter_id, presenter_auth, book.get('period_end'),
+            'Dormant' if _book_kind(book) == 'dormant' else 'MicroEntity',
+        )
         try:
             request = urllib.request.Request(
                 gateway,
@@ -2501,6 +2750,61 @@ def submit_companies_house(company_id, data, user_id=None):
     return ws, None
 
 
+def submit_hmrc(company_id, data, user_id=None):
+    """Record a Corporation Tax helper send. Live CT gateway only if secrets exist; otherwise sandbox."""
+    company = _company_row(company_id, user_id)
+    if not company:
+        return None, 'Company not found'
+    book = _book_for_company(company_id)
+    if not book:
+        ws, error = start_blank_books(company_id, user_id)
+        if error:
+            return None, error
+        book = _book_for_company(company_id)
+    utr = re.sub(r'\s+', '', str(data.get('hmrc_utr') or data.get('utr') or book.get('hmrc_utr') or ''))[:15]
+    if utr:
+        execute_db("UPDATE ledger_books SET hmrc_utr=?, updated_at=CURRENT_TIMESTAMP WHERE id=?;", (utr, book['id']))
+        book = _book_for_company(company_id)
+    ws, error = workspace(company_id, user_id)
+    if error:
+        return None, error
+    hmrc = ws.get('hmrc') or {}
+    tax = money(hmrc.get('tax') or 0)
+    mode = 'sandbox'
+    status = 'recorded'
+    receipt = f"BRIXEN-HMRC-{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d%H%M%S')}-{book['id']}"
+    if _book_kind(book) == 'dormant':
+        message = (
+            'Recorded as dormant for Corporation Tax. This is not a live HMRC filing. '
+            'Tell HMRC on GOV.UK if they do not already know the company slept.'
+        )
+    else:
+        message = (
+            'Sandbox receipt for the Company Tax Return helper. This is not a filed CT600. '
+            'Pay any tax shown and send the live return on GOV.UK.'
+        )
+    execute_db(
+        """
+        INSERT INTO ledger_hmrc_filings (book_id, mode, status, receipt, message, tax_estimate)
+        VALUES (?, ?, ?, ?, ?, ?);
+        """,
+        (book['id'], mode, status, receipt, message, tax),
+    )
+    ws, error = workspace(company_id, user_id)
+    if error:
+        return None, error
+    ws['hmrc_submit'] = {
+        'mode': mode,
+        'status': status,
+        'receipt': receipt,
+        'message': message,
+        'tax': tax,
+        'file_url': HMRC_CT_URL,
+        'dormant_url': HMRC_DORMANT_URL,
+    }
+    return ws, None
+
+
 def workspace(company_id, user_id=None):
     ensure_ledger_schema()
     company = _company_row(company_id, user_id)
@@ -2516,6 +2820,15 @@ def workspace(company_id, user_id=None):
         'inc_date': company.get('inc_date'),
     }
     if not book:
+        period = _default_period_from_company(company)
+        stub_org = {
+            'registered_name': crm['name'],
+            'company_number': crm['company_number'],
+            'period_start': period['period_start'],
+            'period_end': period['period_end'],
+            'filing_kind': '',
+            'hmrc_utr': '',
+        }
         return {
             'status': 'success',
             'empty': True,
@@ -2530,10 +2843,24 @@ def workspace(company_id, user_id=None):
             'year_end': None,
             'bank': _bank_payload(None, company_id=company_id, user_id=user_id),
             'filing': _filing_payload(None, company),
-            'next_step': 'import_existing' if _list_statement_documents(company_id, user_id) else 'upload',
+            'hmrc': _hmrc_payload(None, company, stub_org, {'profit': 0}),
+            'next_step': 'choose',
+            'filing_kind': '',
         }, None
     accounts = _nominal_balances(book)
     org = _public_org(book)
+    if not org.get('filing_kind'):
+        has_bank = query_db(
+            "SELECT id FROM ledger_bank_lines WHERE book_id = ? LIMIT 1;",
+            (book['id'],),
+            one=True,
+        )
+        if has_bank:
+            execute_db(
+                "UPDATE ledger_books SET filing_kind='traded', updated_at=CURRENT_TIMESTAMP WHERE id=?;",
+                (book['id'],),
+            )
+            org['filing_kind'] = 'traded'
     tb = trial_balance(accounts)
     pl = profit_and_loss(accounts)
     bs = balance_sheet(accounts, pl['profit'], pl['prior_profit'])
@@ -2554,7 +2881,13 @@ def workspace(company_id, user_id=None):
     home = _home(accounts, org, tb, pl, bs, size)
     bank = _bank_payload(book, accounts, company_id=company_id, user_id=user_id)
     filing = _filing_payload(book, company, ye)
-    if not bank['imported']:
+    hmrc = _hmrc_payload(book, company, org, pl)
+    kind = org.get('filing_kind') or ''
+    if not kind:
+        next_step = 'choose'
+    elif kind == 'dormant':
+        next_step = 'file'
+    elif not bank['imported']:
         next_step = 'import_existing' if bank.get('portal_documents') else 'upload'
     elif bank['needs_review']:
         next_step = 'review'
@@ -2585,6 +2918,18 @@ def workspace(company_id, user_id=None):
     home['next_step'] = next_step
     home['needs_review'] = bank['needs_review']
     home['imported'] = bank['imported']
+    home['filing_kind'] = kind
+    if kind == 'dormant':
+        kept = [
+            item for item in (home.get('watch_items') or [])
+            if 'bank' not in (item.get('title') or '').lower()
+            and 'transaction' not in (item.get('title') or '').lower()
+        ]
+        home['watch_items'] = [{
+            'tone': 'ok',
+            'title': 'This company slept all year',
+            'detail': 'No bank statement is needed. File the short dormant pack at Companies House, then tell HMRC.',
+        }] + kept
     return {
         'status': 'success',
         'empty': False,
@@ -2599,7 +2944,9 @@ def workspace(company_id, user_id=None):
         'year_end': ye,
         'bank': bank,
         'filing': filing,
+        'hmrc': hmrc,
         'next_step': next_step,
+        'filing_kind': kind,
         'coa_types': sorted({row[2] for row in UK_COA}),
     }, None
 
@@ -2647,29 +2994,39 @@ def render_statutory_html(ws, filleted=False):
     pl = ws['profit_and_loss']
     bs = ws['balance_sheet']
     ye = ws['year_end']
-    title = 'Accounts for filing at Companies House' if filleted else 'Accounts for the members'
-    rows_pl = ''
-    if not filleted:
-        for line in pl['lines']:
-            klass = ' class="total"' if line['is_total'] else ''
-            rows_pl += (
-                f"<tr{klass}><td>{_esc(line['label'])}</td>"
-                f"<td class='num'>{_gbp(line['current'])}</td>"
-                f"<td class='num'>{_gbp(line['prior'])}</td></tr>"
-            )
+    dormant = str(org.get('filing_kind') or '') == 'dormant' or bool(ye.get('can_file_dormant'))
+    if dormant:
+        title = 'Dormant company accounts for filing at Companies House' if filleted else 'Dormant company accounts for the members'
+        brand = 'Brixen Consultants · dormant company accounts'
         pl_block = f"""
         <h2>Profit and loss account</h2>
-        <p class="muted">FRS 105 Section C format (turnover to profit or loss) for the year ended {_esc(_uk_long(org['period_end']))}.</p>
-        <table>
-            <thead><tr><th></th><th class="num">{_esc(_uk_long(org['period_end']))}</th><th class="num">{_esc(_uk_long(org['prior_period_end']))}</th></tr></thead>
-            <tbody>{rows_pl}</tbody>
-        </table>
+        <p>The company was dormant throughout the year ended {_esc(_uk_long(org['period_end']))} and made neither a profit nor a loss.</p>
         """
     else:
-        pl_block = f"""
-        <h2>Profit and loss account</h2>
-        <p>The company has taken advantage of the micro-entity option not to deliver a copy of the profit and loss account to the registrar. This option ends for accounts delivered on or after 1 April 2028.</p>
-        """
+        title = 'Accounts for filing at Companies House' if filleted else 'Accounts for the members'
+        brand = 'Brixen Consultants · FRS 105 micro-entity accounts'
+        rows_pl = ''
+        if not filleted:
+            for line in pl['lines']:
+                klass = ' class="total"' if line['is_total'] else ''
+                rows_pl += (
+                    f"<tr{klass}><td>{_esc(line['label'])}</td>"
+                    f"<td class='num'>{_gbp(line['current'])}</td>"
+                    f"<td class='num'>{_gbp(line['prior'])}</td></tr>"
+                )
+            pl_block = f"""
+            <h2>Profit and loss account</h2>
+            <p class="muted">FRS 105 Section C format (turnover to profit or loss) for the year ended {_esc(_uk_long(org['period_end']))}.</p>
+            <table>
+                <thead><tr><th></th><th class="num">{_esc(_uk_long(org['period_end']))}</th><th class="num">{_esc(_uk_long(org['prior_period_end']))}</th></tr></thead>
+                <tbody>{rows_pl}</tbody>
+            </table>
+            """
+        else:
+            pl_block = f"""
+            <h2>Profit and loss account</h2>
+            <p>The company has taken advantage of the micro-entity option not to deliver a copy of the profit and loss account to the registrar. This option ends for accounts delivered on or after 1 April 2028.</p>
+            """
     rows_bs = ''
     for line in bs['lines']:
         klass = ' class="total"' if line['is_total'] else ''
@@ -2695,7 +3052,7 @@ def render_statutory_html(ws, filleted=False):
 </head>
 <body>
 <div class="sheet">
-  <div class="brand">Brixen Consultants · FRS 105 micro-entity accounts</div>
+  <div class="brand">{_esc(brand)}</div>
   <div class="bar"></div>
   <h1>{_esc(org['registered_name'])}</h1>
   <p>Company number {_esc(org['company_number'])}<br>{_esc(org['registered_office'])}</p>
@@ -2712,7 +3069,7 @@ def render_statutory_html(ws, filleted=False):
   <h2>Statements</h2>
   {statements_html}
   <div class="sign">
-    <p><strong>These accounts have been prepared in accordance with the micro-entity provisions.</strong></p>
+    <p><strong>These accounts have been prepared in accordance with the {'dormant company' if dormant else 'micro-entity'} provisions.</strong></p>
     <p>Approved by the board and signed on its behalf by</p>
     <p style="margin-top:36px;border-top:1px solid #0f172a;width:280px;padding-top:8px;">{_esc(ye['signed_by'])}<br>Director<br>{_esc(_uk_long(org['period_end']))}</p>
   </div>
@@ -2861,6 +3218,18 @@ def route(path, method, user, body=None, query=None):
         return ('json', '200 OK', ws)
     if action in ('submit-companies-house', 'submit_companies_house') and method == 'POST':
         ws, error = submit_companies_house(company_id, body, owner_filter)
+        if error:
+            status = '404 Not Found' if error == 'Company not found' else '400 Bad Request'
+            return ('json', status, {'status': 'error', 'message': error})
+        return ('json', '200 OK', ws)
+    if action in ('choose-path', 'choose_path') and method == 'POST':
+        ws, error = choose_path(company_id, body, owner_filter)
+        if error:
+            status = '404 Not Found' if error == 'Company not found' else '400 Bad Request'
+            return ('json', status, {'status': 'error', 'message': error})
+        return ('json', '200 OK', ws)
+    if action in ('submit-hmrc', 'submit_hmrc') and method == 'POST':
+        ws, error = submit_hmrc(company_id, body, owner_filter)
         if error:
             status = '404 Not Found' if error == 'Company not found' else '400 Bad Request'
             return ('json', status, {'status': 'error', 'message': error})

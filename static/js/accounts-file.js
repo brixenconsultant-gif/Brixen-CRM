@@ -1,18 +1,19 @@
-/* Accounts / Year end — bank statement to Companies House, inside the portal. */
+/* Accounts / Year end — simple director path: traded, dormant, HMRC. */
 (function () {
     const SCREENS = [
-        { id: 'home', group: 'Your books', label: 'Home' },
-        { id: 'bank', group: 'Your books', label: 'Bank statement' },
-        { id: 'review', group: 'Your books', label: 'Review' },
-        { id: 'reports', group: 'Your books', label: 'Reports' },
-        { id: 'file', group: 'Year end', label: 'File at Companies House' },
-        { id: 'organisation', group: 'More', label: 'Company details' },
+        { id: 'home', group: 'Start', label: 'Start' },
+        { id: 'bank', group: 'Your books', label: 'Bank' },
+        { id: 'review', group: 'Your books', label: 'Check numbers' },
+        { id: 'file', group: 'File', label: 'Companies House' },
+        { id: 'hmrc', group: 'File', label: 'HMRC tax' },
+        { id: 'organisation', group: 'Company', label: 'Company details' },
+        { id: 'reports', group: 'More', label: 'Reports' },
         { id: 'coa', group: 'More', label: 'Chart of accounts' },
         { id: 'journals', group: 'More', label: 'Manual journals' },
         { id: 'pl', group: 'More', label: 'Profit and loss' },
         { id: 'bs', group: 'More', label: 'Balance sheet' },
         { id: 'tb', group: 'More', label: 'Trial balance' },
-        { id: 'year-end', group: 'More', label: 'Statutory notes' },
+        { id: 'year-end', group: 'More', label: 'Notes on the pack' },
     ];
 
     const state = {
@@ -90,6 +91,23 @@
         return !state.workspace || state.workspace.empty;
     }
 
+    function filingKind() {
+        const data = ws();
+        return data.filing_kind || ((data.organisation || {}).filing_kind) || '';
+    }
+
+    function needsPath() {
+        return !state.companyId || isEmpty() || !filingKind();
+    }
+
+    function visibleScreens() {
+        const kind = filingKind();
+        return SCREENS.filter((s) => {
+            if (kind === 'dormant' && (s.id === 'bank' || s.id === 'review')) return false;
+            return true;
+        });
+    }
+
     async function readJson(res) {
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.status === 'error') {
@@ -116,6 +134,11 @@
         }
         const res = await fetch(`${apiBase()}/${state.companyId}`, { credentials: 'same-origin' });
         state.workspace = await readJson(res);
+        await maybeAutoImport();
+    }
+
+    async function maybeAutoImport() {
+        if (filingKind() !== 'traded') return;
         const bank = (state.workspace && state.workspace.bank) || {};
         const docs = (bank.portal_documents || []).filter((row) => !/\.(jpe?g|png|gif|webp|heic)$/i.test(row.name || ''));
         const pick = docs[0] || (bank.portal_documents || [])[0];
@@ -159,7 +182,7 @@
 
     function setScreen(screen) {
         state.screen = screen || 'home';
-        const viewName = (screen === 'file' || screen === 'year-end') ? yearEndViewName() : accountsViewName();
+        const viewName = (screen === 'file' || screen === 'year-end' || screen === 'hmrc') ? yearEndViewName() : accountsViewName();
         if (typeof syncViewHash === 'function') syncViewHash(viewName);
         document.querySelectorAll('.nav-item, .top-menu-item').forEach((item) => {
             const view = item.getAttribute('data-view');
@@ -170,25 +193,31 @@
 
     function headerMeta() {
         const org = ws().organisation;
-        if (!org) return 'Upload a bank statement. We turn it into books, then a Companies House pack.';
-        const bits = [org.registered_name];
-        if (org.company_number) bits.push(`No. ${org.company_number}`);
-        if (org.period_end) bits.push(`Year end ${ukDate(org.period_end)}`);
-        return bits.join(' · ');
+        const kind = filingKind();
+        if (!org && !kind) return 'Choose whether the company traded, or slept all year. Then we file at Companies House and show HMRC tax.';
+        const bits = [];
+        if (org && org.registered_name) bits.push(org.registered_name);
+        if (org && org.company_number) bits.push(`No. ${org.company_number}`);
+        if (org && org.period_end) bits.push(`Year end ${ukDate(org.period_end)}`);
+        if (kind === 'dormant') bits.push('Slept all year');
+        else if (kind === 'traded') bits.push('Small company accounts');
+        return bits.join(' · ') || 'Choose a path to begin.';
     }
 
     function renderShell(inner) {
         const companies = state.companies.map((row) => (
             `<option value="${Number(row.id)}" ${Number(row.id) === Number(state.companyId) ? 'selected' : ''}>${h(row.ledger_name || row.name)}${row.company_number ? ` (${h(row.company_number)})` : ''}</option>`
         )).join('');
-        const groups = ['Your books', 'Year end', 'More'];
+        const groups = ['Start', 'Your books', 'File', 'Company', 'More'];
+        const shown = visibleScreens();
         const tabs = groups.map((group) => {
-            const buttons = SCREENS.filter((s) => s.group === group).map((s) => (
+            const buttons = shown.filter((s) => s.group === group).map((s) => (
                 `<button type="button" class="${state.screen === s.id ? 'is-active' : ''}" data-accounts-screen="${s.id}">${h(s.label)}</button>`
             )).join('');
+            if (!buttons) return '';
             return `<div class="accounts-file-nav-group"><span>${h(group)}</span><div class="portfolio-filter-bar accounts-file-tabs" role="tablist" aria-label="${h(group)}">${buttons}</div></div>`;
         }).join('');
-        const title = (state.screen === 'file' || state.screen === 'year-end') ? 'Year end' : 'Accounts';
+        const title = (state.screen === 'file' || state.screen === 'year-end' || state.screen === 'hmrc') ? 'Year end' : 'Accounts';
         return `
             <div class="page-title-row accounts-file-head">
                 <div class="page-title-text">
@@ -224,9 +253,12 @@
     }
 
     function nextStepCta() {
-        const step = ws().next_step || (isEmpty() ? 'upload' : 'file');
+        const step = ws().next_step || (needsPath() ? 'choose' : 'file');
+        if (step === 'choose') {
+            return `<button type="button" class="btn-primary" data-accounts-screen="home">Choose a path</button>`;
+        }
         if (step === 'review') {
-            return `<button type="button" class="btn-primary" data-accounts-screen="review">Review categories</button>`;
+            return `<button type="button" class="btn-primary" data-accounts-screen="review">Check the numbers</button>`;
         }
         if (step === 'file') {
             return `<button type="button" class="btn-primary" data-accounts-screen="file">File at Companies House</button>`;
@@ -234,7 +266,52 @@
         if (step === 'import_existing') {
             return `<button type="button" class="btn-primary" data-accounts-action="import-statement">Use the statement already on file</button>`;
         }
-        return `<button type="button" class="btn-primary" data-accounts-screen="bank">Upload a bank statement</button>`;
+        return `<button type="button" class="btn-primary" data-accounts-screen="bank">Add a bank statement</button>`;
+    }
+
+    function pathChooser() {
+        return `
+            <div class="accounts-file-empty">
+                <h2>What did this company do this year?</h2>
+                <p>Pick one. We only ask for a bank statement if the company traded. You do not need to be an accountant.</p>
+            </div>
+            <div class="accounts-path-grid">
+                <article class="accounts-path-card">
+                    <p class="accounts-path-kicker">Most companies</p>
+                    <h3>It traded</h3>
+                    <p>Money went in or out of the bank. We build small-company accounts (the micro-entity pack Companies House expects).</p>
+                    <ol class="accounts-file-steps">
+                        <li>Add last year’s bank statement</li>
+                        <li>Check each line looks right</li>
+                        <li>Send the pack to Companies House</li>
+                        <li>See HMRC tax to pay</li>
+                    </ol>
+                    <button type="button" class="btn-primary" data-accounts-action="choose-traded">Start with the bank</button>
+                </article>
+                <article class="accounts-path-card">
+                    <p class="accounts-path-kicker">No sales</p>
+                    <h3>It slept</h3>
+                    <p>No sales and no bills — a dormant company. No bank statement. We make a short balance sheet for Companies House.</p>
+                    <ol class="accounts-file-steps">
+                        <li>We prepare dormant accounts</li>
+                        <li>Send them to Companies House</li>
+                        <li>Tell HMRC the company slept</li>
+                    </ol>
+                    <button type="button" class="btn-primary" data-accounts-action="choose-dormant">Make dormant accounts</button>
+                </article>
+                <article class="accounts-path-card">
+                    <p class="accounts-path-kicker">Tax</p>
+                    <h3>HMRC tax</h3>
+                    <p>See what Corporation Tax might be, when to pay, and when the Company Tax Return is due — in pounds and dates, not jargon.</p>
+                    <ol class="accounts-file-steps">
+                        <li>We estimate from your books</li>
+                        <li>Pay HMRC if anything is due</li>
+                        <li>Send the return on GOV.UK</li>
+                    </ol>
+                    <button type="button" class="btn-primary" data-accounts-screen="hmrc">Open HMRC tax</button>
+                </article>
+            </div>
+            <p class="accounts-file-help" style="margin-top:12px;">Want to see a worked example first? <button type="button" class="btn-secondary btn-table" data-accounts-action="sample-statement">Try a sample statement</button> or <button type="button" class="btn-secondary btn-table" data-accounts-action="sample">Load sample organisation</button></p>`;
     }
 
     function bankScreen(data) {
@@ -290,23 +367,29 @@
     }
 
     function homeScreen(data) {
-        if (isEmpty()) {
-            return `
-                <div class="accounts-file-empty">
-                    <h2>From bank statement to Companies House</h2>
-                    <p>${(data.bank && (data.bank.portal_documents || []).length) ? 'You already uploaded a statement in Documents. We will turn that into books — you do not need to upload it again.' : 'Upload last year’s UK bank CSV (or paste it). We categorise the lines, build a profit and loss and balance sheet you can check, then give you a micro-entity pack to send to Companies House.'}</p>
-                    <div class="accounts-file-empty-actions">
-                        ${nextStepCta()}
-                        <button type="button" class="btn-secondary" data-accounts-action="sample-statement">Try a sample statement</button>
-                        <button type="button" class="btn-secondary" data-accounts-action="sample">Load sample organisation</button>
-                    </div>
-                </div>
-                ${bankScreen(data)}`;
-        }
+        if (needsPath()) return pathChooser();
+        const kind = filingKind();
         const home = data.home || {};
         const items = (home.watch_items || []).map((item) => (
             `<article class="accounts-watch-item is-${h(item.tone)}"><h3>${h(item.title)}</h3><p>${h(item.detail)}</p></article>`
         )).join('');
+        if (kind === 'dormant') {
+            return `
+                <div class="accounts-file-empty">
+                    <h2>This company slept all year</h2>
+                    <p>No bank statement is needed. Check the company name and year end, download the short dormant pack, send it to Companies House, then tell HMRC.</p>
+                    <div class="accounts-file-empty-actions">
+                        <button type="button" class="btn-primary" data-accounts-screen="file">File at Companies House</button>
+                        <button type="button" class="btn-secondary" data-accounts-screen="hmrc">Tell HMRC it slept</button>
+                        <button type="button" class="btn-secondary" data-accounts-screen="organisation">Company details</button>
+                        <button type="button" class="btn-secondary" data-accounts-action="reset-books">Start again</button>
+                    </div>
+                </div>
+                <section class="accounts-file-card">
+                    <h2>What to do next</h2>
+                    <div class="accounts-watch-list">${items}</div>
+                </section>`;
+        }
         return `
             <div class="stats-grid accounts-file-stats">
                 <div class="stat-card"><div class="stat-info"><div class="label">Bank</div><div class="value">${gbp(home.bank_total)}</div></div></div>
@@ -316,8 +399,9 @@
             </div>
             <div class="accounts-file-empty-actions" style="margin: 4px 0 12px;">
                 ${nextStepCta()}
+                <button type="button" class="btn-secondary" data-accounts-screen="hmrc">HMRC tax</button>
                 <button type="button" class="btn-secondary" data-accounts-screen="reports">See the reports</button>
-                <button type="button" class="btn-secondary" data-accounts-action="reset-books">Start again from the statement</button>
+                <button type="button" class="btn-secondary" data-accounts-action="reset-books">Start again</button>
             </div>
             <div class="accounts-file-grid">
                 <section class="accounts-file-card">
@@ -342,7 +426,7 @@
 
     function reviewScreen(data) {
         if (isEmpty()) {
-            return `<div class="accounts-file-empty"><h2>Nothing to review yet</h2><p>${(data.bank && (data.bank.portal_documents || []).length) ? 'A statement is already on this company file. Use it to build the books, then check the categories here.' : 'Upload a bank statement first. We only ask you to confirm categories we are unsure about.'}</p><div class="accounts-file-empty-actions">${nextStepCta()}</div></div>`;
+            return `<div class="accounts-file-empty"><h2>Nothing to check yet</h2><p>${(data.bank && (data.bank.portal_documents || []).length) ? 'A statement is already on this company file. Use it to build the books, then check the categories here.' : 'Add a bank statement first. We only ask you to confirm categories we are unsure about.'}</p><div class="accounts-file-empty-actions">${nextStepCta()}</div></div>`;
         }
         const bank = data.bank || {};
         const rec = bank.reconciliation || {};
@@ -425,13 +509,17 @@
     }
 
     function fileScreen(data) {
-        if (isEmpty()) {
-            return `<div class="accounts-file-empty"><h2>No accounts to file yet</h2><p>${(data.bank && (data.bank.portal_documents || []).length) ? 'A statement is already on this company file. Turn it into books first, then you can send the pack to Companies House.' : 'Upload a bank statement, check the review screen, then come back here to send the pack to Companies House.'}</p><div class="accounts-file-empty-actions">${nextStepCta()}</div></div>`;
+        if (needsPath() && filingKind() !== 'dormant') {
+            return `<div class="accounts-file-empty"><h2>Choose a path first</h2><p>Tell us whether the company traded or slept this year. Then you can send the pack to Companies House.</p><div class="accounts-file-empty-actions">${nextStepCta()}</div></div>`;
+        }
+        if (isEmpty() && filingKind() !== 'dormant') {
+            return `<div class="accounts-file-empty"><h2>No accounts to file yet</h2><p>${(data.bank && (data.bank.portal_documents || []).length) ? 'A statement is already on this company file. Turn it into books first, then you can send the pack to Companies House.' : 'Add a bank statement, check the numbers, then come back here to send the pack to Companies House.'}</p><div class="accounts-file-empty-actions">${nextStepCta()}</div></div>`;
         }
         const ye = data.year_end || {};
         const org = data.organisation || {};
         const filing = data.filing || {};
         const submit = data.ch_submit;
+        const dormant = filingKind() === 'dormant' || ye.can_file_dormant;
         const needed = (filing.needed || []).map((item) => (
             `<li><strong>${h(item.label)}</strong> — ${h(item.reason)}</li>`
         )).join('');
@@ -439,24 +527,27 @@
             `<li><span>${h(row.mode)} · ${h(ukDate(row.created_at))}</span><strong>${h(row.receipt || '')}</strong></li>`
         )).join('') || '<li>Nothing sent yet.</li>';
         const size = ye.size || { details: [] };
+        const ready = dormant || ye.can_file_micro;
         return `
-            <div class="accounts-file-banner ${ye.can_file_micro ? 'is-ok' : 'is-warn'}">
-                <strong>${ye.can_file_micro ? 'These books can be filed as FRS 105 micro-entity accounts.' : 'These books cannot currently be filed as a micro-entity.'}</strong>
+            <div class="accounts-file-banner ${ready ? 'is-ok' : 'is-warn'}">
+                <strong>${dormant ? 'These are dormant company accounts. No bank statement is needed.' : (ye.can_file_micro ? 'These books can be filed as small-company (micro-entity) accounts.' : 'These books cannot currently be filed as a micro-entity.')}</strong>
                 <p>Deadline ${h(ukDate(org.filing_due))}. ${h(org.filing_due_note || '')}</p>
             </div>
             ${submit ? `<div class="accounts-file-banner is-ok"><strong>${submit.mode === 'live' ? 'Sent to Companies House' : 'Sandbox receipt'}</strong><p>${h(submit.message)}</p><p>Receipt <code>${h(submit.receipt)}</code></p></div>` : ''}
             <section class="accounts-file-card">
                 <h2>Send to Companies House</h2>
-                <p class="accounts-file-help">Two ways, both valid. Download the pack and upload it in WebFiling yourself, or let this software send it if you have a company authentication code and (optionally) a presenter / gateway login. Missing secrets never block you — we issue a sandbox receipt and keep the download.</p>
+                <p class="accounts-file-help">${dormant
+                    ? 'Download the short dormant pack and upload it in WebFiling, or let this software send it if you have a company authentication code. Missing secrets never block you — we issue a sandbox receipt and keep the download.'
+                    : 'Two ways, both valid. Download the pack and upload it in WebFiling yourself, or let this software send it if you have a company authentication code and (optionally) a presenter / gateway login. Missing secrets never block you — we issue a sandbox receipt and keep the download.'}</p>
                 <ol class="accounts-file-steps">
-                    <li>Download the <strong>Companies House pack</strong> (filleted HTML).</li>
+                    <li>Download the <strong>Companies House pack</strong>.</li>
                     <li>Open <a href="${h(filing.webfiling_url || 'https://ewf.companieshouse.gov.uk/')}" target="_blank" rel="noopener">Companies House WebFiling</a> and upload that file.</li>
                     <li>Or fill the boxes below and press <strong>Send to Companies House</strong>.</li>
                 </ol>
                 <div class="accounts-file-empty-actions">
                     <button type="button" class="btn-primary" data-accounts-export="filleted">Download Companies House pack</button>
                     <button type="button" class="btn-secondary" data-accounts-export="members">Download members’ pack</button>
-                    <button type="button" class="btn-secondary" data-accounts-export="ixbrl">Draft iXBRL</button>
+                    ${dormant ? '' : '<button type="button" class="btn-secondary" data-accounts-export="ixbrl">Draft iXBRL</button>'}
                     <a class="btn-secondary" href="${h(filing.webfiling_url || 'https://ewf.companieshouse.gov.uk/')}" target="_blank" rel="noopener">Open WebFiling</a>
                 </div>
                 ${needed ? `<div class="accounts-needed"><p>Provide only if you have them:</p><ul>${needed}</ul></div>` : ''}
@@ -468,22 +559,70 @@
                 </div>
                 <div class="accounts-file-empty-actions">
                     <button type="button" class="btn-primary" data-accounts-action="submit-ch">Send to Companies House</button>
+                    <button type="button" class="btn-secondary" data-accounts-screen="hmrc">Next: HMRC tax</button>
                 </div>
             </section>
+            ${dormant ? '' : `
             <section class="accounts-file-card">
-                <h2>Size test (plain English)</h2>
-                <p class="accounts-file-help">${size.from_6_apr_2025 ? 'Year beginning on or after 6 April 2025: turnover £1m, balance sheet total £500k, 10 employees.' : 'Year beginning before 6 April 2025: turnover £632k, balance sheet total £316k, 10 employees.'} Meet any two of the three.</p>
+                <h2>Is this a small (micro) company?</h2>
+                <p class="accounts-file-help">${size.from_6_apr_2025 ? 'Year beginning on or after 6 April 2025: sales £1m, what the company owns £500k, 10 staff.' : 'Year beginning before 6 April 2025: sales £632k, what the company owns £316k, 10 staff.'} Meet any two of the three.</p>
                 <div class="data-table-container">
                     <table class="data-table">
                         <thead><tr><th>Condition</th><th>This year</th><th>Limit</th><th></th></tr></thead>
-                        <tbody>${(size.details || []).map((row) => `<tr><td>${h(row.label)}</td><td class="num">${row.label === 'Average employees' ? String(row.actual) : gbp(row.actual)}</td><td class="num">${row.label === 'Average employees' ? `≤ ${row.limit}` : `≤ ${gbp(row.limit)}`}</td><td>${row.met ? 'Met' : 'Not met'}</td></tr>`).join('')}</tbody>
+                        <tbody>${(size.details || []).map((row) => `<tr><td>${h(row.label === 'Turnover' ? 'Sales' : (row.label === 'Balance sheet total' ? 'What the company owns' : (row.label === 'Average employees' ? 'Staff' : row.label)))}</td><td class="num">${row.label === 'Average employees' ? String(row.actual) : gbp(row.actual)}</td><td class="num">${row.label === 'Average employees' ? `≤ ${row.limit}` : `≤ ${gbp(row.limit)}`}</td><td>${row.met ? 'Met' : 'Not met'}</td></tr>`).join('')}</tbody>
                     </table>
                 </div>
-            </section>
+            </section>`}
             <section class="accounts-file-card">
                 <h2>Previous sends</h2>
                 <ul class="accounts-bank-list">${history}</ul>
                 <p class="accounts-file-help">${h(ye.ixbrl_gap || '')}</p>
+            </section>`;
+    }
+
+    function hmrcScreen(data) {
+        const hmrc = data.hmrc || {};
+        const org = data.organisation || {};
+        const submit = data.hmrc_submit;
+        const dormant = filingKind() === 'dormant' || hmrc.kind === 'dormant';
+        const needed = (hmrc.needed || []).map((item) => (
+            `<li><strong>${h(item.label)}</strong> — ${h(item.reason)}</li>`
+        )).join('');
+        const history = (hmrc.last_filings || []).map((row) => (
+            `<li><span>${h(row.mode)} · ${h(ukDate(row.created_at))}</span><strong>${h(row.receipt || '')}</strong></li>`
+        )).join('') || '<li>Nothing recorded yet.</li>';
+        const steps = (hmrc.steps || []).map((s) => `<li>${h(s)}</li>`).join('');
+        return `
+            <div class="accounts-file-banner ${dormant || !(hmrc.tax) ? 'is-ok' : 'is-warn'}">
+                <strong>${h(hmrc.headline || (dormant ? 'Usually no Corporation Tax — the company slept.' : 'HMRC Corporation Tax'))}</strong>
+                <p>${h(hmrc.plain || '')}</p>
+            </div>
+            ${submit ? `<div class="accounts-file-banner is-ok"><strong>Recorded</strong><p>${h(submit.message)}</p><p>Receipt <code>${h(submit.receipt)}</code></p></div>` : ''}
+            <div class="stats-grid accounts-file-stats">
+                <div class="stat-card"><div class="stat-info"><div class="label">Profit on the books</div><div class="value">${gbp(hmrc.profit)}</div></div></div>
+                <div class="stat-card"><div class="stat-info"><div class="label">Tax to pay (guide)</div><div class="value">${gbp(hmrc.tax)}</div></div></div>
+                <div class="stat-card"><div class="stat-info"><div class="label">Pay by</div><div class="value">${h(ukDate(hmrc.payment_due))}</div></div></div>
+                <div class="stat-card"><div class="stat-info"><div class="label">Tax return by</div><div class="value">${h(ukDate(hmrc.return_due))}</div></div></div>
+            </div>
+            <section class="accounts-file-card">
+                <h2>${dormant ? 'Tell HMRC the company slept' : 'Company Tax Return'}</h2>
+                <p class="accounts-file-help">${dormant
+                    ? 'If the company had no sales all year, you usually pay nothing. Tell HMRC it is dormant if they do not already know. You do not normally send a Company Tax Return once they have been told.'
+                    : 'This is a guide from your books — not a filed CT600. Pay any tax shown, then send the live Company Tax Return on GOV.UK. Missing the tax number never blocks you; we record a sandbox receipt.'}</p>
+                ${steps ? `<ol class="accounts-file-steps">${steps}</ol>` : ''}
+                ${needed ? `<div class="accounts-needed"><p>Provide only if you have it:</p><ul>${needed}</ul></div>` : ''}
+                <div class="accounts-org-grid" style="margin-top:12px;">
+                    <label>HMRC tax number (UTR) <input id="acc-hmrc-utr" class="select-filter" value="${h(hmrc.utr || org.hmrc_utr || '')}" maxlength="15" placeholder="10 digits from HMRC"></label>
+                </div>
+                <div class="accounts-file-empty-actions">
+                    <button type="button" class="btn-primary" data-accounts-action="submit-hmrc">${dormant ? 'Record as dormant for HMRC' : 'Record tax return (sandbox)'}</button>
+                    <a class="btn-secondary" href="${h(dormant ? (hmrc.dormant_url || 'https://www.gov.uk/dormant-company/dormant-for-corporation-tax') : (hmrc.file_url || 'https://www.gov.uk/file-your-company-accounts-and-tax-return'))}" target="_blank" rel="noopener">${dormant ? 'Open GOV.UK dormant tax' : 'Open GOV.UK tax return'}</a>
+                </div>
+                <p class="accounts-file-help">${h(hmrc.disclaimer || '')}</p>
+            </section>
+            <section class="accounts-file-card">
+                <h2>Previous records</h2>
+                <ul class="accounts-bank-list">${history}</ul>
             </section>`;
     }
 
@@ -597,6 +736,7 @@
                     <label>Prior period end <input id="acc-org-pend" type="date" class="select-filter" value="${h(org.prior_period_end || '')}"></label>
                     <label>Average employees <input id="acc-org-emp" type="number" min="0" class="select-filter" value="${h(org.employees)}"></label>
                     <label>Prior-year employees <input id="acc-org-pemp" type="number" min="0" class="select-filter" value="${h(org.prior_employees)}"></label>
+                    <label>HMRC tax number (UTR) <input id="acc-org-utr" class="select-filter" value="${h(org.hmrc_utr || '')}" maxlength="15" placeholder="10 digits from HMRC"></label>
                     <label class="accounts-check accounts-span"><input id="acc-org-first" type="checkbox" ${org.is_first_accounts ? 'checked' : ''}> First accounting period</label>
                 </div>
                 <h3>Directors</h3>
@@ -690,12 +830,14 @@
         const data = ws();
         const org = data.organisation || {};
         if (state.screen === 'home') return homeScreen(data);
+        if (state.screen === 'hmrc') return hmrcScreen(data);
         if (state.screen === 'bank') return bankScreen(data);
         if (state.screen === 'review') return reviewScreen(data);
         if (state.screen === 'reports') return reportsScreen(data);
         if (state.screen === 'file') return fileScreen(data);
-        if (isEmpty()) {
-            return `<div class="accounts-file-empty"><h2>Upload a statement first</h2><p>These extra screens fill in after the bank statement is on the books.</p><div class="accounts-file-empty-actions">${nextStepCta()}</div></div>`;
+        if (state.screen === 'organisation') return organisationScreen(data);
+        if (isEmpty() && filingKind() !== 'dormant') {
+            return `<div class="accounts-file-empty"><h2>Choose a path first</h2><p>These extra screens fill in after you pick whether the company traded or slept.</p><div class="accounts-file-empty-actions">${nextStepCta()}</div></div>`;
         }
         if (state.screen === 'coa') return coaScreen(data);
         if (state.screen === 'journals') return journalsScreen(data);
@@ -748,6 +890,7 @@
             prior_period_end: (document.getElementById('acc-org-pend') || {}).value,
             employees: (document.getElementById('acc-org-emp') || {}).value,
             prior_employees: (document.getElementById('acc-org-pemp') || {}).value,
+            hmrc_utr: (document.getElementById('acc-org-utr') || {}).value,
             is_first_accounts: !!(document.getElementById('acc-org-first') || {}).checked,
             directors,
             exclusions,
@@ -872,20 +1015,29 @@
             if (action === 'sample') {
                 await postAction('sample', {});
                 state.screen = 'home';
+            } else if (action === 'choose-traded') {
+                await postAction('choose-path', { kind: 'traded' });
+                state.screen = 'bank';
+                state.notice = 'Add last year’s bank statement. We will turn it into small-company accounts.';
+                await maybeAutoImport();
+            } else if (action === 'choose-dormant') {
+                await postAction('choose-path', { kind: 'dormant' });
+                state.screen = 'file';
+                state.notice = 'Dormant pack ready. No bank statement needed.';
             } else if (action === 'sample-statement') {
                 await postAction('sample-statement', {});
-                state.notice = 'Sample statement loaded. Check Review, then file.';
+                state.notice = 'Sample statement loaded. Check the numbers, then file.';
                 state.screen = 'review';
             } else if (action === 'reset-books') {
                 delete state.autoImported[state.companyId];
                 await postAction('reset-books', {});
-                await loadWorkspace();
-                state.notice = 'Books cleared. Using the statement already on file.';
+                state.screen = 'home';
+                state.notice = 'Books cleared. Choose whether the company traded or slept.';
             } else if (action === 'import-statement') {
                 await handleImportStatement();
             } else if (action === 'confirm-review') {
                 await postAction('confirm-review', {});
-                state.notice = 'Review marked as done.';
+                state.notice = 'Numbers marked as checked.';
                 state.screen = 'file';
             } else if (action === 'submit-ch') {
                 await postAction('submit-companies-house', {
@@ -898,6 +1050,13 @@
                 const submit = (state.workspace && state.workspace.ch_submit) || {};
                 state.notice = submit.receipt ? `Receipt ${submit.receipt}` : (submit.message || 'Filing recorded.');
                 state.screen = 'file';
+            } else if (action === 'submit-hmrc') {
+                await postAction('submit-hmrc', {
+                    hmrc_utr: (document.getElementById('acc-hmrc-utr') || {}).value,
+                });
+                const submit = (state.workspace && state.workspace.hmrc_submit) || {};
+                state.notice = submit.receipt ? `Receipt ${submit.receipt}` : (submit.message || 'HMRC tax recorded.');
+                state.screen = 'hmrc';
             } else if (action === 'start') {
                 await postAction('start', {});
                 state.screen = 'bank';
