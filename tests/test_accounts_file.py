@@ -252,6 +252,93 @@ class TestAccountsFile(unittest.TestCase):
         self.assertEqual(st, '400 Bad Request')
         self.assertIn('statement', (res.get('message') or '').lower())
 
+    def test_15_uk_bank_text_layouts(self):
+        monzo = (
+            "Personal Account statement\n"
+            "01/08/2026 - 10/08/2026\n"
+            "£1,477.66\n"
+            "Date Description (GBP) Amount Balance\n"
+            "10/08/2026 Stripe Payout\n"
+            "REF-1 250.00 1,477.66\n"
+            "09/08/2026 Office rent Acme Ltd\n"
+            "REF-2 -80.00 1,227.66\n"
+            "08/08/2026 Tesco Stores\n"
+            "REF-3 -12.50 1,307.66\n"
+        )
+        parsed, error = accounts_file.parse_bank_text(monzo)
+        self.assertIsNone(error, error)
+        self.assertEqual(len(parsed['lines']), 3)
+        self.assertEqual(parsed['lines'][0]['txn_date'], '2026-08-08')
+        self.assertTrue(any('Stripe' in row['description'] for row in parsed['lines']))
+        self.assertAlmostEqual(parsed['lines'][-1]['amount'], 250.00, places=2)
+        self.assertAlmostEqual(parsed['opening_balance'], 1320.16, places=2)
+
+        wise = (
+            "GBP statement\n"
+            "12 Sep 2025 [GMT+00:00] - 10 Sep 2026 [GMT+00:00]\n"
+            "Description Incoming Outgoing Amount\n"
+            "Sent money to Supplier Ltd -120.00 50.00\n"
+            "10 Sep 2026 | Transfer TR-1\n"
+            "Received money from Stripe 200.00 170.00\n"
+            "9 Sep 2026 | Transfer TR-2\n"
+        )
+        parsed, error = accounts_file.parse_bank_text(wise)
+        self.assertIsNone(error, error)
+        self.assertEqual(len(parsed['lines']), 2)
+        sent = next(row for row in parsed['lines'] if 'Supplier' in row['description'])
+        received = next(row for row in parsed['lines'] if 'Stripe' in row['description'])
+        self.assertLess(sent['amount'], 0)
+        self.assertGreater(received['amount'], 0)
+        self.assertEqual(sent['txn_date'], '2026-09-10')
+        self.assertEqual(received['txn_date'], '2026-09-09')
+
+        bos = (
+            "Column\nDate\n03 Aug 26.\nDescription\nTESCO STORES 070076.\nType\nDEB.\n"
+            "Money In (£)\nblank.\nMoney Out (£)\n2.00.\nBalance (£)\n22.24.\n"
+            "Date\n04 Aug 26.\nDescription\nSTRIPE PAYOUT.\nType\nFPI.\n"
+            "Money In (£)\n100.00.\nMoney Out (£)\nblank.\nBalance (£)\n122.24.\n"
+        )
+        parsed, error = accounts_file.parse_bank_text(bos)
+        self.assertIsNone(error, error)
+        self.assertEqual(len(parsed['lines']), 2)
+        self.assertEqual(parsed['lines'][0]['txn_date'], '2026-08-03')
+        self.assertAlmostEqual(parsed['lines'][0]['amount'], -2.00, places=2)
+        self.assertAlmostEqual(parsed['lines'][1]['amount'], 100.00, places=2)
+
+    def test_16_portal_document_becomes_books(self):
+        import os
+        import tempfile
+        from db import execute_db, query_db as qdb
+        csv_text = (
+            "Date,Description,Amount,Balance\n"
+            "02/05/2026,Stripe Payout,400.00,1400.00\n"
+            "03/05/2026,Office rent,-90.00,1310.00\n"
+        )
+        path = os.path.join(tempfile.gettempdir(), 'brixen_portal_statement.csv')
+        with open(path, 'w', encoding='utf-8') as handle:
+            handle.write(csv_text)
+        owner = qdb("SELECT user_id FROM companies WHERE id = ?;", (self.company_id,), one=True)
+        doc_id = execute_db(
+            """
+            INSERT INTO documents (
+                user_id, company_id, name, category, file_path, file_type, file_size,
+                status, uploaded_by, client_visible
+            ) VALUES (?, ?, 'Monzo_bank_statement_portal.csv', 'Order Documents', ?, 'CSV', '1 KB',
+                      'Approved', 'Customer Upload', 1);
+            """,
+            (owner['user_id'], self.company_id, path),
+        )
+        st, hd, res = make_request(
+            f'/api/admin/accounts-file/{self.company_id}/import-statement',
+            method='POST',
+            body={'document_id': doc_id},
+            cookie=self._admin_cookie(),
+        )
+        self.assertEqual(st, '200 OK', res)
+        self.assertGreaterEqual((res.get('import_result') or {}).get('imported') or 0, 2)
+        self.assertFalse(res.get('empty'))
+        self.assertTrue((res.get('bank') or {}).get('imported'))
+
 
 if __name__ == '__main__':
     unittest.main()

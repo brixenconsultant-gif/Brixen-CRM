@@ -17,6 +17,7 @@ import os
 import re
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 from db import execute_db, get_db, query_db
 
@@ -1404,7 +1405,7 @@ def _parse_amount(value):
     if not text or text in {'.', '-'}:
         return 0.0
     negative = text.startswith('(') and text.endswith(')')
-    text = text.replace('£', '').replace(',', '').replace('(', '').replace(')', '').strip()
+    text = text.replace('£', '').replace(',', '').replace('(', '').replace(')', '').strip().rstrip('.')
     if text.startswith('+'):
         text = text[1:]
     if text.endswith('-') and text[:-1].replace('.', '', 1).isdigit():
@@ -1420,14 +1421,18 @@ def _parse_amount(value):
     return money(-amount if negative else amount)
 
 
-def parse_uk_date(value):
-    text = str(value or '').strip()
+def parse_uk_date(value, default_year=None):
+    text = str(value or '').strip().rstrip('.')
     if not text:
         return None
     iso = _parse_date(text[:10])
-    if iso:
+    if iso and (len(text) < 11 or text[4] == '-'):
         return iso
-    for fmt in ('%d/%m/%Y', '%d/%m/%y', '%d-%m-%Y', '%d-%m-%y', '%d %b %Y', '%d %B %Y', '%d-%b-%Y', '%d-%b-%y'):
+    for fmt in (
+        '%d/%m/%Y', '%d/%m/%y', '%d-%m-%Y', '%d-%m-%y',
+        '%d %b %Y', '%d %B %Y', '%d %b %y', '%d %B %y',
+        '%d-%b-%Y', '%d-%b-%y', '%Y-%m-%d',
+    ):
         try:
             return datetime.datetime.strptime(text[:24].strip(), fmt).date()
         except ValueError:
@@ -1441,6 +1446,23 @@ def parse_uk_date(value):
             return datetime.date(year, month, day)
         except ValueError:
             return None
+    match = re.search(r'(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{2,4})', text)
+    if match:
+        chunk = f"{match.group(1)} {match.group(2)} {match.group(3)}"
+        for fmt in ('%d %b %Y', '%d %B %Y', '%d %b %y', '%d %B %y'):
+            try:
+                return datetime.datetime.strptime(chunk, fmt).date()
+            except ValueError:
+                continue
+    if default_year:
+        match = re.match(r'(\d{1,2})\s+([A-Za-z]{3,9})\b', text)
+        if match:
+            chunk = f"{match.group(1)} {match.group(2)} {default_year}"
+            for fmt in ('%d %b %Y', '%d %B %Y', '%d %b %y', '%d %B %y'):
+                try:
+                    return datetime.datetime.strptime(chunk, fmt).date()
+                except ValueError:
+                    continue
     return None
 
 
@@ -1542,6 +1564,224 @@ def parse_statement_csv(text):
     }, None
 
 
+_MONEY_RE = re.compile(r'(?<![\w])[+-]?£?[\d,]+\.\d{2}(?![\d])')
+_DATE_TOKEN_RE = re.compile(
+    r'\b\d{1,2}/\d{1,2}/\d{2,4}\b|\b\d{1,2}\s+[A-Za-z]{3,9}\s+\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b'
+)
+_SKIP_STATEMENT_LINE = re.compile(
+    r'^(sort code|account number|iban|bic|swift/?bic|column|blank\.?|your transactions|your account|type\.?|'
+    r'page \d+|logo,|if you think something|prudential|registered office|document requested by|'
+    r'description \(gbp\)|date description|money in|money out|account holder|account name)$',
+    re.I,
+)
+_WISE_AMOUNT_FIRST = re.compile(r'^(sent money|received money|card transaction|card cash)\b', re.I)
+_IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.heic', '.webp', '.gif', '.tif', '.tiff')
+_AUTO_IMPORT_MAX_BYTES = 1_600_000
+
+
+def _line_money_values(line):
+    return [_parse_amount(m.group(0)) for m in _MONEY_RE.finditer(line or '')]
+
+
+def _sign_from_words(text, amount):
+    amount = money(amount)
+    if amount < 0:
+        return amount
+    lowered = str(text or '').lower()
+    if re.search(r'\b(received|incoming|money in|deposit|faster payments in|fpi|credit)\b', lowered):
+        return abs(amount)
+    if re.search(r'\b(sent money|outgoing|money out|card transaction|paid|payment|direct debit|standing order|\bdeb\b|ddt|s/o)\b', lowered):
+        return -abs(amount)
+    return amount
+
+
+def _pack_parsed_lines(parsed, opening=None):
+    if not parsed:
+        return None, 'No dated bank transactions were found. Export CSV from your bank, or paste the rows.'
+    if len(parsed) >= 2:
+        first = _parse_date(parsed[0]['txn_date'])
+        last = _parse_date(parsed[-1]['txn_date'])
+        if first and last and first > last:
+            parsed = list(reversed(parsed))
+    if opening is None and parsed[0].get('balance') is not None:
+        opening = money(parsed[0]['balance'] - parsed[0]['amount'])
+    closing = parsed[-1].get('balance')
+    if closing is None and opening is not None:
+        closing = money(opening + sum(row['amount'] for row in parsed))
+    return {
+        'lines': parsed,
+        'opening_balance': opening,
+        'closing_balance': closing,
+    }, None
+
+
+def _parse_labeled_bank_lines(raw_lines):
+    labels = {
+        'date': re.compile(r'^date\.?$', re.I),
+        'description': re.compile(r'^description\.?$', re.I),
+        'type': re.compile(r'^type\.?$', re.I),
+        'money_in': re.compile(r'^money in', re.I),
+        'money_out': re.compile(r'^money out', re.I),
+        'balance': re.compile(r'^balance', re.I),
+    }
+    fields = {}
+    rows = []
+    opening = None
+    i = 0
+    while i < len(raw_lines):
+        line = raw_lines[i]
+        if re.match(r'^column\.?$', line, re.I):
+            i += 1
+            continue
+        match_key = None
+        for key, pattern in labels.items():
+            if pattern.search(line) and len(line) < 48:
+                match_key = key
+                break
+        if match_key:
+            value = ''
+            if i + 1 < len(raw_lines):
+                nxt = raw_lines[i + 1]
+                if not any(pat.search(nxt) and len(nxt) < 48 for pat in labels.values()) and not re.match(r'^column\.?$', nxt, re.I):
+                    value = nxt
+                    i += 1
+            if re.match(r'^blank\.?$', value, re.I):
+                value = ''
+            fields[match_key] = value
+            if match_key == 'balance' and fields.get('date'):
+                day = parse_uk_date(fields.get('date'))
+                incoming = abs(_parse_amount(fields.get('money_in')))
+                outgoing = abs(_parse_amount(fields.get('money_out')))
+                amount = money(incoming - outgoing)
+                if day and amount != 0:
+                    rows.append({
+                        'txn_date': day.isoformat(),
+                        'description': (fields.get('description') or 'Bank transaction').strip(' .'),
+                        'amount': amount,
+                        'balance': _parse_amount(fields.get('balance')) or None,
+                    })
+                fields = {}
+        else:
+            if re.search(r'balance on \d{1,2}', line, re.I):
+                amounts = _line_money_values(line)
+                if amounts and opening is None:
+                    opening = amounts[-1]
+        i += 1
+    return _pack_parsed_lines(rows, opening) if rows else (None, None)
+
+
+def _line_has_words(text):
+    return bool(re.search(r'[A-Za-z]{3,}', text or ''))
+
+
+def _strip_leading_date(line):
+    text = str(line or '').strip()
+    text = re.sub(r'^\d{1,2}/\d{1,2}/\d{2,4}\s*', '', text)
+    text = re.sub(r'^\d{4}-\d{2}-\d{2}\s*', '', text)
+    text = re.sub(r'^\d{1,2}\s+[A-Za-z]{3,9}(?:\s+\d{2,4})?\s*', '', text)
+    return text.strip(' |-')
+
+
+def _append_bank_row(parsed, day, description, amounts):
+    if not day or not amounts:
+        return
+    amount = _sign_from_words(description, amounts[0])
+    if amount == 0:
+        return
+    balance = amounts[-1] if len(amounts) > 1 else None
+    parsed.append({
+        'txn_date': day.isoformat() if hasattr(day, 'isoformat') else str(day),
+        'description': (description or 'Bank transaction')[:240],
+        'amount': money(amount),
+        'balance': money(balance) if balance is not None else None,
+    })
+
+
+def parse_bank_text(text):
+    raw_lines = [re.sub(r'\s+', ' ', ln).strip() for ln in str(text or '').splitlines()]
+    raw_lines = [ln for ln in raw_lines if ln]
+    labeled, labeled_error = _parse_labeled_bank_lines(raw_lines)
+    if labeled and len(labeled.get('lines') or []) >= 2:
+        return labeled, None
+    parsed = []
+    opening = None
+    pending_date = None
+    pending_desc = ''
+    pending_amounts = None
+    implied_year = None
+    for line in raw_lines:
+        lowered = line.lower()
+        if _SKIP_STATEMENT_LINE.match(line) or lowered.startswith('page ') or re.match(r'^\d+\s*/\s*\d+$', line):
+            continue
+        if re.search(r'^date\b.*\b(description|amount|balance|paid)\b', lowered) and not _line_money_values(line):
+            continue
+        if 'opening balance' in lowered or 'brought forward' in lowered or re.search(r'balance on \d{1,2}', lowered):
+            amounts = _line_money_values(line)
+            if amounts and opening is None:
+                opening = amounts[-1]
+            continue
+        if re.search(r'\bgbp on\b', lowered) and _line_money_values(line):
+            continue
+        amounts = _line_money_values(line)
+        date_tokens = _DATE_TOKEN_RE.findall(line)
+        if len(date_tokens) >= 2 and (not amounts or not _line_has_words(_MONEY_RE.sub('', line))):
+            for token in date_tokens:
+                day = parse_uk_date(token)
+                if day:
+                    implied_year = day.year
+            continue
+        date_chunk = line.split('|')[0].strip().rstrip('.')
+        day = parse_uk_date(date_chunk, implied_year) or parse_uk_date(line[:32], implied_year)
+        if day:
+            implied_year = day.year
+        if day and not amounts:
+            if pending_amounts:
+                held_amounts, held_desc = pending_amounts
+                _append_bank_row(parsed, day, held_desc, held_amounts)
+                pending_amounts = None
+                pending_date = None
+                pending_desc = ''
+                continue
+            pending_date = day
+            pending_desc = _strip_leading_date(line)
+            continue
+        if amounts:
+            desc = _MONEY_RE.sub('', line).strip(' |-')
+            if pending_date:
+                combined = (pending_desc + ' ' + desc).strip()
+                if not _line_has_words(combined) and len(amounts) < 2:
+                    pending_date = None
+                    pending_desc = ''
+                    continue
+                _append_bank_row(parsed, pending_date, combined or desc, amounts)
+                pending_date = None
+                pending_desc = ''
+                continue
+            if _WISE_AMOUNT_FIRST.search(line) or (not day and _line_has_words(desc) and pending_amounts is None and not parsed):
+                pending_amounts = (amounts, desc)
+                continue
+            if day:
+                _append_bank_row(parsed, day, _strip_leading_date(desc) or desc, amounts)
+                pending_date = None
+                pending_desc = ''
+                continue
+            if parsed:
+                last_day = _parse_date(parsed[-1]['txn_date'])
+                _append_bank_row(parsed, last_day, desc, amounts)
+                continue
+            if _line_has_words(desc):
+                pending_amounts = (amounts, desc)
+            continue
+        if pending_date and _line_has_words(line):
+            pending_desc = (pending_desc + ' ' + line).strip()
+    packed, error = _pack_parsed_lines(parsed, opening)
+    if packed:
+        return packed, None
+    if labeled and labeled.get('lines'):
+        return labeled, None
+    return None, labeled_error or error or 'No dated bank transactions were found in that statement. Export CSV from your bank, or paste the rows.'
+
+
 def parse_statement_pdf(payload):
     try:
         from pypdf import PdfReader
@@ -1559,47 +1799,16 @@ def parse_statement_pdf(payload):
         return None, 'That PDF could not be read. Export CSV from your bank, or paste the transactions.'
     if not text.strip():
         return None, 'This PDF has no readable text (it may be a scan). Export CSV from your bank.'
-    parsed, error = parse_statement_csv(text)
-    if parsed:
-        return parsed, None
-    lines = []
-    opening = None
-    pattern = re.compile(
-        r'(?P<date>\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{2}-\d{2})\s+(?P<desc>.+?)\s+'
-        r'(?P<amount>-?£?[\d,]+\.\d{2})(?:\s+(?P<balance>-?£?[\d,]+\.\d{2}))?$'
-    )
-    for raw_line in text.splitlines():
-        row = raw_line.strip()
-        if not row:
-            continue
-        if re.search(r'\bopening balance\b', row.lower()):
-            amounts = re.findall(r'-?£?[\d,]+\.\d{2}', row)
-            if amounts:
-                opening = _parse_amount(amounts[-1])
-            continue
-        match = pattern.search(row)
-        if not match:
-            continue
-        day = parse_uk_date(match.group('date'))
-        if not day:
-            continue
-        amount = _parse_amount(match.group('amount'))
-        if amount == 0:
-            continue
-        lines.append({
-            'txn_date': day.isoformat(),
-            'description': match.group('desc').strip(),
-            'amount': amount,
-            'balance': _parse_amount(match.group('balance')) if match.group('balance') else None,
-        })
-    if not lines:
-        return None, error or 'No dated bank transactions were found in that PDF. Export CSV from your bank.'
-    if opening is None and lines[0].get('balance') is not None:
-        opening = money(lines[0]['balance'] - lines[0]['amount'])
-    closing = lines[-1].get('balance')
-    if closing is None and opening is not None:
-        closing = money(opening + sum(row['amount'] for row in lines))
-    return {'lines': lines, 'opening_balance': opening, 'closing_balance': closing}, None
+    looks_csv = text.count(',') >= 8 or text.count('\t') >= 4
+    error = None
+    if looks_csv:
+        parsed, error = parse_statement_csv(text)
+        if parsed and len(parsed.get('lines') or []) >= 3:
+            return parsed, None
+    text_parsed, text_error = parse_bank_text(text)
+    if text_parsed:
+        return text_parsed, None
+    return None, text_error or error or 'No dated bank transactions were found in that PDF. Export CSV from your bank.'
 
 
 def _source_hash(txn_date, description, amount, index):
@@ -1651,6 +1860,121 @@ def _ensure_books(company_id, user_id=None):
     return _book_for_company(company_id), None
 
 
+def _is_image_statement(name, file_type=''):
+    lower = str(name or '').lower()
+    ctype = str(file_type or '').lower()
+    return lower.endswith(_IMAGE_EXTS) or any(token in ctype for token in ('jpeg', 'jpg', 'png', 'image/', 'heic', 'webp'))
+
+
+def is_statement_document(doc):
+    category = str((doc or {}).get('category') or '').lower()
+    name = str((doc or {}).get('name') or '').lower()
+    if 'bank statement' in category or category in ('bank statement', 'statement'):
+        return True
+    if 'bank statement' in name:
+        return True
+    if re.search(r'\b(monzo|starling|revolut|wise|tide|barclays|hsbc|lloyds|natwest|halifax|santander|bos)\b', name) and 'statement' in name:
+        return True
+    if re.search(r'\bstatement\b', name) and re.search(r'\.(pdf|csv|txt|jpg|jpeg|png)$', name):
+        return True
+    if name.endswith('.csv'):
+        return True
+    return False
+
+
+def _list_statement_documents(company_id, user_id=None):
+    company = query_db("SELECT id, user_id FROM companies WHERE id = ?;", (company_id,), one=True) or {}
+    owner_id = company.get('user_id')
+    order_rows = query_db("SELECT id FROM orders WHERE company_id = ?;", (company_id,)) or []
+    order_ids = [int(row['id']) for row in order_rows if row.get('id')]
+    clauses = ["d.company_id = ?"]
+    params = [company_id]
+    if order_ids:
+        placeholders = ','.join('?' for _ in order_ids)
+        clauses.append(f"d.order_id IN ({placeholders})")
+        params.extend(order_ids)
+    if owner_id:
+        clauses.append("(d.user_id = ? AND (d.company_id IS NULL OR d.company_id = 0))")
+        params.append(owner_id)
+    where = [f"({' OR '.join(clauses)})"]
+    if user_id is not None:
+        where.insert(0, "d.user_id = ?")
+        params = [user_id, *params]
+    sql = f"""
+        SELECT d.id, d.name, d.category, d.file_path, d.file_type, d.created_at, d.company_id
+        FROM documents d
+        WHERE {' AND '.join(where)}
+        ORDER BY d.id DESC;
+    """
+    rows = query_db(sql, tuple(params)) or []
+    out = []
+    for row in rows:
+        if is_statement_document(row):
+            out.append({
+                'id': int(row['id']),
+                'name': row.get('name') or 'Statement',
+                'category': row.get('category') or '',
+                'file_path': row.get('file_path') or '',
+                'file_type': row.get('file_type') or '',
+                'created_at': row.get('created_at'),
+            })
+    out.sort(key=lambda row: (
+        1 if _is_image_statement(row.get('name'), row.get('file_type')) else 0,
+        -int(row['id']),
+    ))
+    return out
+
+
+def _resolve_document_path(file_path):
+    text = str(file_path or '').strip()
+    if not text:
+        return None
+    path = Path(text)
+    if path.is_file():
+        return path
+    parent = path.parent
+    if parent.is_dir():
+        matches = [item for item in parent.glob(path.name + '*') if item.is_file()]
+        if matches:
+            matches.sort(key=lambda item: item.stat().st_mtime, reverse=True)
+            return matches[0]
+    return None
+
+
+def _read_statement_file(doc):
+    path = _resolve_document_path(doc.get('file_path'))
+    if not path:
+        return None, None, 0
+    try:
+        return path.read_bytes(), path.name, path.stat().st_size
+    except OSError:
+        return None, None, 0
+
+
+def parse_statement_bytes(payload, filename='', content_type=''):
+    lower = str(filename or '').lower()
+    ctype = str(content_type or '').lower()
+    if _is_image_statement(lower, ctype):
+        return None, 'That file is a photo, not a statement export. Download a PDF or CSV from your bank, or paste the rows.', 'image'
+    if lower.endswith('.pdf') or ctype.endswith('pdf') or (payload or b'')[:5] == b'%PDF-':
+        parsed, error = parse_statement_pdf(payload)
+        return parsed, error, 'pdf'
+    try:
+        csv_text = (payload or b'').decode('utf-8')
+        if '\x00' in csv_text[:400]:
+            raise UnicodeError('binary')
+        parsed, error = parse_statement_csv(csv_text)
+        if parsed:
+            return parsed, None, 'csv'
+        text_parsed, text_error = parse_bank_text(csv_text)
+        if text_parsed:
+            return text_parsed, None, 'csv'
+        return None, text_error or error, 'csv'
+    except (UnicodeError, UnicodeDecodeError):
+        parsed, error = parse_statement_pdf(payload)
+        return parsed, error, 'pdf'
+
+
 def import_statement(company_id, data, user_id=None, files=None):
     company = _company_row(company_id, user_id)
     if not company:
@@ -1662,20 +1986,62 @@ def import_statement(company_id, data, user_id=None, files=None):
     error = None
     upload = files.get('file') or files.get('statement') or files.get('csv')
     csv_text = data.get('csv_text') or data.get('paste') or data.get('text') or ''
+    if not upload and not str(csv_text or '').strip():
+        docs = _list_statement_documents(company_id, user_id)
+        wanted = _int_id(data.get('document_id'))
+        if wanted:
+            docs = [row for row in docs if int(row['id']) == wanted]
+            if not docs:
+                return None, 'That statement is not on this company file.'
+        last_error = None
+        oversized = []
+        for doc in docs:
+            payload, stored_name, size = _read_statement_file(doc)
+            if not payload:
+                last_error = f"{doc['name']} is on file but the file is missing from storage."
+                continue
+            if _is_image_statement(doc.get('name'), doc.get('file_type')):
+                last_error = f"{doc['name']} is a photo. Download a PDF or CSV from your bank, or paste the rows."
+                continue
+            if not wanted and size > _AUTO_IMPORT_MAX_BYTES:
+                oversized.append(doc['name'])
+                continue
+            filename = filename or doc.get('name') or stored_name
+            parsed, error, source = parse_statement_bytes(payload, filename, doc.get('file_type'))
+            if parsed:
+                break
+            last_error = f"{doc['name']}: {error}"
+        if not parsed and oversized and not wanted:
+            for doc in docs:
+                if doc.get('name') not in oversized:
+                    continue
+                payload, stored_name, _size = _read_statement_file(doc)
+                if not payload:
+                    continue
+                filename = filename or doc.get('name') or stored_name
+                parsed, error, source = parse_statement_bytes(payload, filename, doc.get('file_type'))
+                if parsed:
+                    break
+                last_error = f"{doc['name']}: {error}"
+        if not parsed:
+            if docs:
+                return None, last_error or 'We have a statement on file but could not read the rows. Export CSV from your bank, or paste the transactions.'
+            return None, 'Paste or upload a bank statement first. If you already uploaded one in Documents, open Accounts and we will use it.'
     if upload:
         filename = filename or upload.get('filename') or 'statement'
         payload = upload.get('bytes') or b''
-        lower = filename.lower()
-        ctype = (upload.get('content_type') or '').lower()
-        if lower.endswith('.pdf') or ctype.endswith('pdf'):
-            source = 'pdf'
-            parsed, error = parse_statement_pdf(payload)
-        else:
-            csv_text = payload.decode('utf-8', errors='replace')
-    if parsed is None:
+        parsed, error, source = parse_statement_bytes(payload, filename, upload.get('content_type'))
+    if parsed is None and str(csv_text or '').strip():
         parsed, error = parse_statement_csv(csv_text)
-    if error:
-        return None, error
+        if not parsed:
+            text_parsed, text_error = parse_bank_text(csv_text)
+            if text_parsed:
+                parsed, error = text_parsed, None
+            elif text_error:
+                error = text_error
+        source = 'csv'
+    if not parsed:
+        return None, error or 'Paste or upload a bank statement first.'
     book, error = _ensure_books(company_id, user_id)
     if error:
         return None, error
@@ -1841,7 +2207,16 @@ def load_sample_statement(company_id, user_id=None):
     )
 
 
-def _bank_payload(book, accounts=None):
+def _bank_payload(book, accounts=None, company_id=None, user_id=None):
+    portal_documents = []
+    cid = company_id or (book.get('company_id') if book else None)
+    if cid:
+        portal_documents = [{
+            'id': row['id'],
+            'name': row['name'],
+            'category': row['category'],
+            'created_at': row.get('created_at'),
+        } for row in _list_statement_documents(cid, user_id)]
     if not book:
         return {
             'statements': [],
@@ -1850,6 +2225,7 @@ def _bank_payload(book, accounts=None):
             'needs_review': 0,
             'imported': 0,
             'categories': director_categories(),
+            'portal_documents': portal_documents,
         }
     statements = query_db(
         """
@@ -1919,6 +2295,7 @@ def _bank_payload(book, accounts=None):
         'needs_review': sum(1 for item in public_lines if item['needs_review']),
         'imported': len(public_lines),
         'categories': director_categories(),
+        'portal_documents': portal_documents,
     }
 
 
@@ -2101,9 +2478,9 @@ def workspace(company_id, user_id=None):
             'balance_sheet': None,
             'trial_balance': None,
             'year_end': None,
-            'bank': _bank_payload(None),
+            'bank': _bank_payload(None, company_id=company_id, user_id=user_id),
             'filing': _filing_payload(None, company),
-            'next_step': 'upload',
+            'next_step': 'import_existing' if _list_statement_documents(company_id, user_id) else 'upload',
         }, None
     accounts = _nominal_balances(book)
     org = _public_org(book)
@@ -2125,10 +2502,10 @@ def workspace(company_id, user_id=None):
     )
     ye = year_end_pack(org, pl, bs, size)
     home = _home(accounts, org, tb, pl, bs, size)
-    bank = _bank_payload(book, accounts)
+    bank = _bank_payload(book, accounts, company_id=company_id, user_id=user_id)
     filing = _filing_payload(book, company, ye)
     if not bank['imported']:
-        next_step = 'upload'
+        next_step = 'import_existing' if bank.get('portal_documents') else 'upload'
     elif bank['needs_review']:
         next_step = 'review'
     else:

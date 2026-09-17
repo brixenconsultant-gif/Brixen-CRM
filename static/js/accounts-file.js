@@ -24,6 +24,7 @@
         loading: false,
         error: '',
         notice: '',
+        autoImported: {},
         journalLines: [
             { code: '', debit: '', credit: '', description: '' },
             { code: '', debit: '', credit: '', description: '' },
@@ -115,6 +116,26 @@
         }
         const res = await fetch(`${apiBase()}/${state.companyId}`, { credentials: 'same-origin' });
         state.workspace = await readJson(res);
+        const bank = (state.workspace && state.workspace.bank) || {};
+        const docs = (bank.portal_documents || []).filter((row) => !/\.(jpe?g|png|gif|webp|heic)$/i.test(row.name || ''));
+        const pick = docs[0] || (bank.portal_documents || [])[0];
+        if (!bank.imported && pick && !state.autoImported[state.companyId]) {
+            state.autoImported[state.companyId] = true;
+            try {
+                await postAction('import-statement', { document_id: pick.id });
+                const result = (state.workspace && state.workspace.import_result) || {};
+                if ((result.imported || 0) > 0) {
+                    state.notice = `Used ${pick.name} — imported ${result.imported} line(s).`;
+                    if (state.screen === 'home' || state.screen === 'bank' || state.screen === 'file' || state.screen === 'review') {
+                        state.screen = 'review';
+                    }
+                } else {
+                    state.notice = `Read ${pick.name}, but there were no new lines to import.`;
+                }
+            } catch (err) {
+                state.error = err.message || 'The statement on file could not be read. Export CSV from the bank, or paste the rows.';
+            }
+        }
     }
 
     async function postAction(action, payload, method) {
@@ -210,6 +231,9 @@
         if (step === 'file') {
             return `<button type="button" class="btn-primary" data-accounts-screen="file">File at Companies House</button>`;
         }
+        if (step === 'import_existing') {
+            return `<button type="button" class="btn-primary" data-accounts-action="import-statement">Use the statement already on file</button>`;
+        }
         return `<button type="button" class="btn-primary" data-accounts-screen="bank">Upload a bank statement</button>`;
     }
 
@@ -218,7 +242,10 @@
         const rec = bank.reconciliation || {};
         const statements = (bank.statements || []).map((row) => (
             `<li><span>${h(row.filename || 'Statement')}</span><strong>${row.row_count} lines</strong></li>`
-        )).join('') || '<li>No statement uploaded yet.</li>';
+        )).join('') || '<li>No statement imported into the books yet.</li>';
+        const portal = (bank.portal_documents || []).map((row) => (
+            `<li><span>${h(row.name)}</span><button type="button" class="btn-secondary btn-table" data-accounts-doc="${row.id}">Use this</button></li>`
+        )).join('');
         const recBlock = rec.statement_closing != null ? `
             <div class="accounts-file-grid">
                 <section class="accounts-file-card">
@@ -253,9 +280,11 @@
                 </div>
                 <div class="accounts-file-empty-actions">
                     <button type="button" class="btn-primary" data-accounts-action="import-statement">Turn this into books</button>
+                    ${(bank.portal_documents || []).length ? '<button type="button" class="btn-primary" data-accounts-action="import-statement">Use the statement already on file</button>' : ''}
                     <button type="button" class="btn-secondary" data-accounts-action="sample-statement">Try a sample statement</button>
                 </div>
             </section>
+            ${portal ? `<section class="accounts-file-card"><h2>Already on this company file</h2><p class="accounts-file-help">You already uploaded these. We will turn the latest readable one into books — you do not need to upload it again.</p><ul class="accounts-bank-list">${portal}</ul></section>` : ''}
             ${recBlock}`;
     }
 
@@ -264,7 +293,7 @@
             return `
                 <div class="accounts-file-empty">
                     <h2>From bank statement to Companies House</h2>
-                    <p>Upload last year’s UK bank CSV (or paste it). We categorise the lines, build a profit and loss and balance sheet you can check, then give you a micro-entity pack to send to Companies House.</p>
+                    <p>${(data.bank && (data.bank.portal_documents || []).length) ? 'You already uploaded a statement in Documents. We will turn that into books — you do not need to upload it again.' : 'Upload last year’s UK bank CSV (or paste it). We categorise the lines, build a profit and loss and balance sheet you can check, then give you a micro-entity pack to send to Companies House.'}</p>
                     <div class="accounts-file-empty-actions">
                         ${nextStepCta()}
                         <button type="button" class="btn-secondary" data-accounts-action="sample-statement">Try a sample statement</button>
@@ -311,7 +340,7 @@
 
     function reviewScreen(data) {
         if (isEmpty()) {
-            return `<div class="accounts-file-empty"><h2>Nothing to review yet</h2><p>Upload a bank statement first. We only ask you to confirm categories we are unsure about.</p><div class="accounts-file-empty-actions">${nextStepCta()}</div></div>`;
+            return `<div class="accounts-file-empty"><h2>Nothing to review yet</h2><p>${(data.bank && (data.bank.portal_documents || []).length) ? 'A statement is already on this company file. Use it to build the books, then check the categories here.' : 'Upload a bank statement first. We only ask you to confirm categories we are unsure about.'}</p><div class="accounts-file-empty-actions">${nextStepCta()}</div></div>`;
         }
         const bank = data.bank || {};
         const rec = bank.reconciliation || {};
@@ -395,7 +424,7 @@
 
     function fileScreen(data) {
         if (isEmpty()) {
-            return `<div class="accounts-file-empty"><h2>No accounts to file yet</h2><p>Upload a bank statement, check the review screen, then come back here to send the pack to Companies House.</p><div class="accounts-file-empty-actions">${nextStepCta()}</div></div>`;
+            return `<div class="accounts-file-empty"><h2>No accounts to file yet</h2><p>${(data.bank && (data.bank.portal_documents || []).length) ? 'A statement is already on this company file. Turn it into books first, then you can send the pack to Companies House.' : 'Upload a bank statement, check the review screen, then come back here to send the pack to Companies House.'}</p><div class="accounts-file-empty-actions">${nextStepCta()}</div></div>`;
         }
         const ye = data.year_end || {};
         const org = data.organisation || {};
@@ -749,6 +778,32 @@
         root.querySelectorAll('[data-accounts-export]').forEach((btn) => {
             btn.addEventListener('click', () => handleExport(btn.getAttribute('data-accounts-export')));
         });
+        root.querySelectorAll('[data-accounts-doc]').forEach((btn) => {
+            btn.addEventListener('click', async () => {
+                state.error = '';
+                state.notice = '';
+                try {
+                    await handleImportStatement(Number(btn.getAttribute('data-accounts-doc')));
+                } catch (err) {
+                    state.error = err.message || 'Could not read that statement.';
+                }
+                render();
+            });
+        });
+        const fileInput = document.getElementById('accounts-statement-file');
+        if (fileInput) {
+            fileInput.addEventListener('change', async () => {
+                if (!(fileInput.files && fileInput.files[0])) return;
+                state.error = '';
+                state.notice = '';
+                try {
+                    await handleImportStatement();
+                } catch (err) {
+                    state.error = err.message || 'Could not read that statement.';
+                }
+                render();
+            });
+        }
         root.querySelectorAll('[data-jline]').forEach((input) => {
             input.addEventListener('input', () => {
                 const i = Number(input.getAttribute('data-jline'));
@@ -773,15 +828,12 @@
         render();
     }
 
-    async function handleImportStatement() {
+    async function handleImportStatement(documentId) {
         if (!state.companyId) throw new Error('Select a company first.');
         const fileInput = document.getElementById('accounts-statement-file');
         const paste = ((document.getElementById('accounts-statement-paste') || {}).value || '').trim();
         const opening = ((document.getElementById('accounts-opening') || {}).value || '').trim();
         const file = fileInput && fileInput.files && fileInput.files[0];
-        if (!file && !paste) {
-            throw new Error('Choose a CSV or PDF, or paste the statement rows.');
-        }
         if (file) {
             const form = new FormData();
             form.append('file', file, file.name);
@@ -793,16 +845,22 @@
                 body: form,
             });
             state.workspace = await readJson(res);
-        } else {
+        } else if (paste) {
             await postAction('import-statement', {
                 csv_text: paste,
                 opening_balance: opening,
                 filename: 'pasted-statement.csv',
             });
+        } else {
+            const payload = { opening_balance: opening };
+            if (documentId) payload.document_id = documentId;
+            await postAction('import-statement', payload);
         }
         const result = (state.workspace && state.workspace.import_result) || {};
         state.notice = `Imported ${result.imported || 0} line(s)` + (result.skipped ? `, skipped ${result.skipped} duplicate(s)` : '') + '.';
-        state.screen = 'review';
+        if ((result.imported || 0) > 0 || (ws().bank || {}).imported) {
+            state.screen = 'review';
+        }
     }
 
     async function handleAction(action) {
