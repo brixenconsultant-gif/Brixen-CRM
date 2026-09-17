@@ -6840,12 +6840,14 @@ input[type="number"], input[type="date"], input[type="search"], textarea, .selec
 
 .accounts-file-head {
     gap: 12px;
+    width: 100%;
 }
 
-.accounts-file-toolbar {
+.accounts-company-picker {
     display: flex;
     align-items: flex-end;
-    gap: 10px;
+    gap: 12px;
+    width: 100%;
     flex-wrap: wrap;
 }
 
@@ -6855,22 +6857,35 @@ input[type="number"], input[type="date"], input[type="search"], textarea, .selec
     gap: 6px;
     font-size: 13px;
     color: var(--color-text-muted, #64748b);
-    min-width: min(100%, 440px);
+    flex: 1 1 420px;
+    min-width: min(100%, 420px);
 }
 
 .accounts-company-combo {
     position: relative;
-    width: min(100%, 520px);
+    width: 100%;
 }
 
-.accounts-file-company .select-filter,
-.accounts-file-company input#accounts-file-company {
-    width: 100%;
-    min-width: 0;
-    min-height: 52px;
+.accounts-company-input,
+.accounts-file-company input.accounts-company-input,
+.accounts-file-company #accounts-file-company {
+    width: 100% !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    min-height: 56px !important;
+    height: auto !important;
+    font-size: 18px !important;
+    font-weight: 500 !important;
+    line-height: 1.3 !important;
+    padding: 14px 18px !important;
+    border-radius: 14px !important;
+}
+
+.accounts-company-picker .btn-primary {
+    min-height: 56px;
+    padding: 14px 22px;
     font-size: 16px;
-    padding: 12px 16px;
-    border-radius: 14px;
+    white-space: nowrap;
 }
 
 .accounts-company-list {
@@ -6882,7 +6897,7 @@ input[type="number"], input[type="date"], input[type="search"], textarea, .selec
     margin: 0;
     padding: 8px 0;
     list-style: none;
-    max-height: 360px;
+    max-height: 380px;
     overflow: auto;
     background: var(--color-surface, #fff);
     border: 1px solid var(--color-border, #e2e8f0);
@@ -6897,8 +6912,8 @@ input[type="number"], input[type="date"], input[type="search"], textarea, .selec
     background: none;
     border: 0;
     font: inherit;
-    font-size: 15px;
-    padding: 12px 16px;
+    font-size: 16px;
+    padding: 14px 18px;
     cursor: pointer;
     color: inherit;
 }
@@ -6909,9 +6924,39 @@ input[type="number"], input[type="date"], input[type="search"], textarea, .selec
 }
 
 .accounts-company-empty {
-    padding: 14px 16px;
-    font-size: 14px;
+    padding: 16px 18px;
+    font-size: 15px;
     color: var(--color-text-muted, #64748b);
+}
+
+.accounts-company-facts {
+    background: var(--color-surface, #fff);
+    border: 1px solid var(--color-border, #e2e8f0);
+    border-radius: 14px;
+    padding: 16px;
+    overflow-x: auto;
+}
+
+.accounts-company-facts h2 {
+    font-size: 16px;
+    margin: 0 0 10px;
+}
+
+.accounts-company-facts .data-table th,
+.accounts-company-facts .data-table td {
+    font-size: 14px;
+    padding: 10px 12px;
+    white-space: nowrap;
+}
+
+.accounts-company-facts td.is-onfile {
+    color: #047857;
+    font-weight: 700;
+}
+
+.accounts-company-facts td.is-missing {
+    color: #b45309;
+    font-weight: 700;
 }
 
 .accounts-file-nav {
@@ -7175,15 +7220,15 @@ input[type="number"], input[type="date"], input[type="search"], textarea, .selec
         align-items: stretch;
     }
 
+    .accounts-company-picker,
     .accounts-file-company,
     .accounts-company-combo {
         min-width: 0;
         width: 100%;
+        flex-basis: 100%;
     }
 
-    .accounts-file-company .select-filter,
-    .accounts-file-company input#accounts-file-company {
-        min-width: 0;
+    .accounts-company-picker .btn-primary {
         width: 100%;
     }
 
@@ -7253,7 +7298,8 @@ html[data-theme="dark"] .accounts-path-card {
 
 html[data-theme="dark"] .accounts-file-empty,
 html[data-theme="dark"] .accounts-file-card,
-html[data-theme="dark"] .accounts-company-list {
+html[data-theme="dark"] .accounts-company-list,
+html[data-theme="dark"] .accounts-company-facts {
     background: var(--color-surface, #111827);
     border-color: var(--color-border, #334155);
 }

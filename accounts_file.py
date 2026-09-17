@@ -648,6 +648,7 @@ def list_companies(user_id=None):
         rows = query_db(
             """
             SELECT c.id, c.name, c.company_number, c.director, c.inc_date, c.reg_office, c.user_id,
+                   c.utr_number, c.authentication_code,
                    u.full_name AS owner_name
             FROM companies c
             LEFT JOIN users u ON u.id = c.user_id
@@ -660,6 +661,7 @@ def list_companies(user_id=None):
         rows = query_db(
             """
             SELECT c.id, c.name, c.company_number, c.director, c.inc_date, c.reg_office, c.user_id,
+                   c.utr_number, c.authentication_code,
                    u.full_name AS owner_name
             FROM companies c
             LEFT JOIN users u ON u.id = c.user_id
@@ -668,7 +670,7 @@ def list_companies(user_id=None):
         ) or []
     books = {
         int(b['company_id']): b
-        for b in (query_db("SELECT company_id, registered_name, period_end, sample_loaded, filing_kind FROM ledger_books;") or [])
+        for b in (query_db("SELECT company_id, registered_name, period_end, sample_loaded, filing_kind, hmrc_utr FROM ledger_books;") or [])
     }
     out = []
     for row in rows:
@@ -686,6 +688,9 @@ def list_companies(user_id=None):
             'period_end': (book or {}).get('period_end'),
             'ledger_name': (book or {}).get('registered_name') or row.get('name'),
             'filing_kind': (book or {}).get('filing_kind') or '',
+            'utr_number': str(row.get('utr_number') or (book or {}).get('hmrc_utr') or '').strip(),
+            'has_authentication_code': bool(str(row.get('authentication_code') or '').strip()),
+            'has_utr': bool(str(row.get('utr_number') or (book or {}).get('hmrc_utr') or '').strip()),
         })
     return out
 
@@ -2818,6 +2823,9 @@ def workspace(company_id, user_id=None):
         'director': company.get('director') or '',
         'reg_office': company.get('reg_office') or '',
         'inc_date': company.get('inc_date'),
+        'utr_number': str(company.get('utr_number') or '').strip(),
+        'has_authentication_code': bool(str(company.get('authentication_code') or '').strip()),
+        'has_utr': bool(str(company.get('utr_number') or '').strip()),
     }
     if not book:
         period = _default_period_from_company(company)
@@ -2827,7 +2835,7 @@ def workspace(company_id, user_id=None):
             'period_start': period['period_start'],
             'period_end': period['period_end'],
             'filing_kind': '',
-            'hmrc_utr': '',
+            'hmrc_utr': crm['utr_number'],
         }
         return {
             'status': 'success',
@@ -2919,6 +2927,10 @@ def workspace(company_id, user_id=None):
     home['needs_review'] = bank['needs_review']
     home['imported'] = bank['imported']
     home['filing_kind'] = kind
+    if org.get('hmrc_utr'):
+        crm['utr_number'] = org['hmrc_utr']
+        crm['has_utr'] = True
+    crm['has_authentication_code'] = bool((filing or {}).get('has_authentication_code')) or crm.get('has_authentication_code')
     if kind == 'dormant':
         kept = [
             item for item in (home.get('watch_items') or [])

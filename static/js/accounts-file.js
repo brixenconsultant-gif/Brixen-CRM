@@ -26,6 +26,7 @@
         error: '',
         notice: '',
         autoImported: {},
+        pendingCompanyId: 0,
         journalLines: [
             { code: '', debit: '', credit: '', description: '' },
             { code: '', debit: '', credit: '', description: '' },
@@ -214,8 +215,66 @@
         return state.companies.find((row) => Number(row.id) === Number(state.companyId)) || null;
     }
 
+    function companyMatches(query) {
+        const q = String(query || '').trim().toLowerCase();
+        if (!q) return [];
+        return state.companies.filter((row) => {
+            const blob = `${row.ledger_name || ''} ${row.name || ''} ${row.company_number || ''}`.toLowerCase();
+            return blob.includes(q);
+        }).slice(0, 40);
+    }
+
+    function presentLabel(onFile, value) {
+        if (onFile && value) return h(value);
+        if (onFile) return 'On file';
+        return 'Not on file';
+    }
+
+    function companyFactsCard() {
+        const row = selectedCompany();
+        const data = ws();
+        const crm = data.company || row;
+        if (!state.companyId || !crm) return '';
+        const name = crm.name || crm.ledger_name || (row && row.name) || '';
+        const number = crm.company_number || (row && row.company_number) || '';
+        const director = crm.director || (row && row.director) || ((data.organisation || {}).directors || []).map((d) => d.name).filter(Boolean).join(', ');
+        const office = crm.reg_office || (data.organisation || {}).registered_office || (row && row.reg_office) || '';
+        const auth = !!(data.filing && data.filing.has_authentication_code) || !!(row && row.has_authentication_code) || !!crm.has_authentication_code;
+        const utr = (data.organisation && data.organisation.hmrc_utr) || crm.utr_number || (row && row.utr_number) || '';
+        const hasUtr = !!String(utr || '').trim() || !!(row && row.has_utr) || !!crm.has_utr;
+        return `
+            <section class="accounts-company-facts" aria-label="Selected company details">
+                <h2>Selected company</h2>
+                <div class="data-table-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Company</th>
+                                <th>Number</th>
+                                <th>Director</th>
+                                <th>Authentication</th>
+                                <th>UTR number</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>${h(name) || 'Not on file'}</td>
+                                <td>${h(number) || 'Not on file'}</td>
+                                <td>${h(director) || 'Not on file'}</td>
+                                <td class="${auth ? 'is-onfile' : 'is-missing'}">${auth ? 'On file' : 'Not on file'}</td>
+                                <td class="${hasUtr ? 'is-onfile' : 'is-missing'}">${hasUtr ? presentLabel(true, utr) : 'Not on file'}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                ${office ? `<p class="accounts-file-help">Registered office: ${h(office)}</p>` : ''}
+                <p class="accounts-file-help">Authentication is the Companies House code — we show whether it is on file, not the code itself. UTR is the HMRC tax number.</p>
+            </section>`;
+    }
+
     function renderShell(inner) {
         const selected = selectedCompany();
+        const staged = state.companies.find((row) => Number(row.id) === Number(state.pendingCompanyId)) || selected;
         const groups = ['Start', 'Your books', 'File', 'Company', 'More'];
         const shown = visibleScreens();
         const tabs = groups.map((group) => {
@@ -232,16 +291,18 @@
                     <h1>${title}</h1>
                     <p>${h(headerMeta())}</p>
                 </div>
-                <div class="accounts-file-toolbar">
-                    <label class="accounts-file-company">
-                        <span>Company</span>
-                        <div class="accounts-company-combo">
-                            <input id="accounts-file-company" class="select-filter" type="search" autocomplete="off" spellcheck="false" placeholder="Type the company name" value="${h(companyLabel(selected))}" ${state.companies.length ? '' : 'disabled'} aria-autocomplete="list" aria-expanded="false" aria-controls="accounts-company-list">
-                            <ul id="accounts-company-list" class="accounts-company-list" hidden role="listbox"></ul>
-                        </div>
-                    </label>
-                </div>
             </div>
+            <section class="accounts-company-picker">
+                <label class="accounts-file-company">
+                    <span>Company</span>
+                    <div class="accounts-company-combo">
+                        <input id="accounts-file-company" class="accounts-company-input" type="search" autocomplete="off" spellcheck="false" placeholder="Type the company name" value="${h(companyLabel(staged))}" ${state.companies.length ? '' : 'disabled'} aria-autocomplete="list" aria-expanded="false" aria-controls="accounts-company-list">
+                        <ul id="accounts-company-list" class="accounts-company-list" hidden role="listbox"></ul>
+                    </div>
+                </label>
+                <button type="button" class="btn-primary" data-accounts-action="select-company" ${state.companies.length ? '' : 'disabled'}>Select company</button>
+            </section>
+            ${companyFactsCard()}
             <nav class="accounts-file-nav" aria-label="Accounts workspace">${tabs}</nav>
             ${state.error ? `<div class="dash-banner-error" role="alert">${h(state.error)}</div>` : ''}
             ${state.notice ? `<div class="accounts-file-banner is-ok" role="status">${h(state.notice)}</div>` : ''}
@@ -254,7 +315,7 @@
             return `
             <div class="accounts-file-empty">
                 <h2>Type the company name</h2>
-                <p>Use the company box above. Type the name (or number) and pick the match from the list. You do not need to scroll a long dropdown.</p>
+                <p>Type the name (or number) in the large box, tap the match, then press <strong>Select company</strong>. Authentication and UTR then show as On file or Not on file.</p>
             </div>`;
         }
         return `
@@ -923,17 +984,8 @@
         const list = document.getElementById('accounts-company-list');
         if (!input || !list) return;
 
-        function matches(query) {
-            const q = String(query || '').trim().toLowerCase();
-            if (!q) return [];
-            return state.companies.filter((row) => {
-                const blob = `${row.ledger_name || ''} ${row.name || ''} ${row.company_number || ''}`.toLowerCase();
-                return blob.includes(q);
-            }).slice(0, 40);
-        }
-
         function paintList() {
-            const rows = matches(input.value);
+            const rows = companyMatches(input.value);
             if (!String(input.value || '').trim()) {
                 list.innerHTML = '<li class="accounts-company-empty">Type the company name. Matching names will appear here.</li>';
             } else if (!rows.length) {
@@ -947,25 +999,23 @@
             input.setAttribute('aria-expanded', 'true');
         }
 
-        async function pick(id) {
+        function stage(id) {
             const next = Number(id || 0);
+            const chosen = state.companies.find((row) => Number(row.id) === next);
+            state.pendingCompanyId = next;
+            if (chosen) input.value = companyLabel(chosen);
             list.hidden = true;
             input.setAttribute('aria-expanded', 'false');
-            if (!next || next === Number(state.companyId)) {
-                const chosen = state.companies.find((row) => Number(row.id) === next);
-                if (chosen) input.value = companyLabel(chosen);
-                return;
-            }
-            state.companyId = next;
-            localStorage.setItem(storageKey(), String(state.companyId || ''));
-            await refresh();
         }
 
         input.addEventListener('focus', () => {
             input.select();
             paintList();
         });
-        input.addEventListener('input', paintList);
+        input.addEventListener('input', () => {
+            state.pendingCompanyId = 0;
+            paintList();
+        });
         input.addEventListener('keydown', (event) => {
             if (event.key === 'Escape') {
                 list.hidden = true;
@@ -974,14 +1024,15 @@
             if (event.key === 'Enter') {
                 event.preventDefault();
                 const first = list.querySelector('[data-company-id]');
-                if (first) pick(first.getAttribute('data-company-id'));
+                if (first) stage(first.getAttribute('data-company-id'));
+                applyCompanySelection();
             }
         });
         list.addEventListener('mousedown', (event) => {
             const btn = event.target.closest('[data-company-id]');
             if (!btn) return;
             event.preventDefault();
-            pick(btn.getAttribute('data-company-id'));
+            stage(btn.getAttribute('data-company-id'));
         });
         if (!state.comboDocBound) {
             document.addEventListener('mousedown', (event) => {
@@ -1095,6 +1146,25 @@
         }
     }
 
+    async function applyCompanySelection() {
+        const input = document.getElementById('accounts-file-company');
+        const typed = (input && input.value) || '';
+        let next = Number(state.pendingCompanyId || 0);
+        if (!next) {
+            const rows = companyMatches(typed);
+            if (rows.length) next = Number(rows[0].id);
+        }
+        if (!next) {
+            state.error = 'Type the company name, then press Select company.';
+            return;
+        }
+        state.pendingCompanyId = next;
+        state.companyId = next;
+        localStorage.setItem(storageKey(), String(state.companyId || ''));
+        state.notice = 'Company selected.';
+        await refresh();
+    }
+
     async function handleAction(action) {
         state.error = '';
         state.notice = '';
@@ -1102,6 +1172,8 @@
             if (action === 'sample') {
                 await postAction('sample', {});
                 state.screen = 'home';
+            } else if (action === 'select-company') {
+                await applyCompanySelection();
             } else if (action === 'choose-traded') {
                 await postAction('choose-path', { kind: 'traded' });
                 state.screen = 'bank';

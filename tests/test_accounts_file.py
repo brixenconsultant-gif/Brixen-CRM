@@ -49,6 +49,9 @@ class TestAccountsFile(unittest.TestCase):
         self.assertEqual(st, '200 OK')
         self.assertEqual(res.get('status'), 'success')
         self.assertTrue(res.get('companies'))
+        self.assertIn('has_authentication_code', res['companies'][0])
+        self.assertIn('has_utr', res['companies'][0])
+        self.assertIn('utr_number', res['companies'][0])
         st, hd, res = make_request(f'/api/admin/accounts-file/{self.company_id}', cookie=self._admin_cookie())
         self.assertEqual(st, '200 OK')
         self.assertTrue(res.get('empty'))
@@ -151,7 +154,8 @@ class TestAccountsFile(unittest.TestCase):
         self.assertIn('It traded', text)
         self.assertIn('It slept', text)
         self.assertIn('HMRC tax', text)
-        self.assertIn('Type the company name', text)
+        self.assertIn('Select company', text)
+        self.assertIn('UTR number', text)
 
     def test_10_sample_statement_books_and_rec(self):
         st, hd, res = make_request(
