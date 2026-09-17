@@ -282,6 +282,7 @@
                     <button type="button" class="btn-primary" data-accounts-action="import-statement">Turn this into books</button>
                     ${(bank.portal_documents || []).length ? '<button type="button" class="btn-primary" data-accounts-action="import-statement">Use the statement already on file</button>' : ''}
                     <button type="button" class="btn-secondary" data-accounts-action="sample-statement">Try a sample statement</button>
+                    ${(bank.imported || (bank.statements || []).length) ? '<button type="button" class="btn-secondary" data-accounts-action="reset-books">Start again from the statement</button>' : ''}
                 </div>
             </section>
             ${portal ? `<section class="accounts-file-card"><h2>Already on this company file</h2><p class="accounts-file-help">You already uploaded these. We will turn the latest readable one into books — you do not need to upload it again.</p><ul class="accounts-bank-list">${portal}</ul></section>` : ''}
@@ -316,6 +317,7 @@
             <div class="accounts-file-empty-actions" style="margin: 4px 0 12px;">
                 ${nextStepCta()}
                 <button type="button" class="btn-secondary" data-accounts-screen="reports">See the reports</button>
+                <button type="button" class="btn-secondary" data-accounts-action="reset-books">Start again from the statement</button>
             </div>
             <div class="accounts-file-grid">
                 <section class="accounts-file-card">
@@ -874,6 +876,11 @@
                 await postAction('sample-statement', {});
                 state.notice = 'Sample statement loaded. Check Review, then file.';
                 state.screen = 'review';
+            } else if (action === 'reset-books') {
+                delete state.autoImported[state.companyId];
+                await postAction('reset-books', {});
+                await loadWorkspace();
+                state.notice = 'Books cleared. Using the statement already on file.';
             } else if (action === 'import-statement') {
                 await handleImportStatement();
             } else if (action === 'confirm-review') {

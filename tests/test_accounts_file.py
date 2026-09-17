@@ -304,6 +304,19 @@ class TestAccountsFile(unittest.TestCase):
         self.assertEqual(parsed['lines'][0]['txn_date'], '2026-08-03')
         self.assertAlmostEqual(parsed['lines'][0]['amount'], -2.00, places=2)
         self.assertAlmostEqual(parsed['lines'][1]['amount'], 100.00, places=2)
+        self.assertIsNone(accounts_file.parse_uk_date('23-08-01'))
+        self.assertEqual(accounts_file.parse_uk_date('10/08/2026').isoformat(), '2026-08-10')
+        wise_sort = (
+            "UK sort code\n"
+            "23-08-01\n"
+            "Sent money to Supplier Ltd -120.00 50.00\n"
+            "10 Sep 2026 | Transfer TR-1\n"
+            "Received money from Stripe 200.00 170.00\n"
+            "9 Sep 2026 | Transfer TR-2\n"
+        )
+        parsed, error = accounts_file.parse_bank_text(wise_sort)
+        self.assertIsNone(error, error)
+        self.assertTrue(all(not row['txn_date'].startswith('2001') for row in parsed['lines']))
 
     def test_16_portal_document_becomes_books(self):
         import os
@@ -338,6 +351,21 @@ class TestAccountsFile(unittest.TestCase):
         self.assertGreaterEqual((res.get('import_result') or {}).get('imported') or 0, 2)
         self.assertFalse(res.get('empty'))
         self.assertTrue((res.get('bank') or {}).get('imported'))
+
+    def test_17_reset_books_clears_ledger_keeps_company(self):
+        st, hd, res = make_request(
+            f'/api/admin/accounts-file/{self.company_id}/reset-books',
+            method='POST',
+            body={},
+            cookie=self._admin_cookie(),
+        )
+        self.assertEqual(st, '200 OK', res)
+        self.assertTrue(res.get('empty'))
+        self.assertFalse((res.get('bank') or {}).get('imported'))
+        st, hd, res = make_request(f'/api/admin/accounts-file/{self.company_id}', cookie=self._admin_cookie())
+        self.assertEqual(st, '200 OK', res)
+        self.assertTrue(res.get('company'))
+        self.assertTrue(res.get('empty'))
 
 
 if __name__ == '__main__':

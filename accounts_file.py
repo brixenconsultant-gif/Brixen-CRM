@@ -762,6 +762,19 @@ def start_blank_books(company_id, user_id=None):
     return workspace(company_id, user_id)
 
 
+def reset_books(company_id, user_id=None):
+    """Wipe the accounts file for this company. Documents, orders and invoices stay."""
+    company = _company_row(company_id, user_id)
+    if not company:
+        return None, 'Company not found'
+    ensure_ledger_schema()
+    book = _book_for_company(company_id)
+    if book:
+        _clear_books(book['id'])
+        execute_db("DELETE FROM ledger_books WHERE id = ?;", (book['id'],))
+    return workspace(company_id, user_id)
+
+
 def load_sample_books(company_id, user_id=None):
     company = _company_row(company_id, user_id)
     if not company:
@@ -1425,11 +1438,14 @@ def parse_uk_date(value, default_year=None):
     text = str(value or '').strip().rstrip('.')
     if not text:
         return None
+    # UK sort codes look like 23-08-01. They are not dates.
+    if re.fullmatch(r'\d{2}-\d{2}-\d{2}', text.split()[0]):
+        return None
     iso = _parse_date(text[:10])
-    if iso and (len(text) < 11 or text[4] == '-'):
+    if iso and (len(text) < 11 or (len(text) >= 10 and text[4] == '-' and text[0:4].isdigit() and len(text[0:4]) == 4)):
         return iso
     for fmt in (
-        '%d/%m/%Y', '%d/%m/%y', '%d-%m-%Y', '%d-%m-%y',
+        '%d/%m/%Y', '%d/%m/%y', '%d-%m-%Y',
         '%d %b %Y', '%d %B %Y', '%d %b %y', '%d %B %y',
         '%d-%b-%Y', '%d-%b-%y', '%Y-%m-%d',
     ):
@@ -1439,13 +1455,17 @@ def parse_uk_date(value, default_year=None):
             continue
     match = re.search(r'(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})', text)
     if match:
-        day, month, year = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
-        if year < 100:
-            year += 2000
-        try:
-            return datetime.date(year, month, day)
-        except ValueError:
-            return None
+        token = match.group(0)
+        if '-' in token and len(match.group(3)) == 2:
+            match = None
+        else:
+            day, month, year = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+            if year < 100:
+                year += 2000
+            try:
+                return datetime.date(year, month, day)
+            except ValueError:
+                return None
     match = re.search(r'(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{2,4})', text)
     if match:
         chunk = f"{match.group(1)} {match.group(2)} {match.group(3)}"
@@ -1571,7 +1591,8 @@ _DATE_TOKEN_RE = re.compile(
 _SKIP_STATEMENT_LINE = re.compile(
     r'^(sort code|account number|iban|bic|swift/?bic|column|blank\.?|your transactions|your account|type\.?|'
     r'page \d+|logo,|if you think something|prudential|registered office|document requested by|'
-    r'description \(gbp\)|date description|money in|money out|account holder|account name)$',
+    r'description \(gbp\)|date description|money in|money out|account holder|account name|'
+    r'uk sort code|sort code)$',
     re.I,
 )
 _WISE_AMOUNT_FIRST = re.compile(r'^(sent money|received money|card transaction|card cash)\b', re.I)
@@ -1712,6 +1733,8 @@ def parse_bank_text(text):
     for line in raw_lines:
         lowered = line.lower()
         if _SKIP_STATEMENT_LINE.match(line) or lowered.startswith('page ') or re.match(r'^\d+\s*/\s*\d+$', line):
+            continue
+        if re.fullmatch(r'\d{2}-\d{2}-\d{2}', line):
             continue
         if re.search(r'^date\b.*\b(description|amount|balance|paid)\b', lowered) and not _line_money_values(line):
             continue
@@ -1918,10 +1941,13 @@ def _list_statement_documents(company_id, user_id=None):
                 'file_type': row.get('file_type') or '',
                 'created_at': row.get('created_at'),
             })
-    out.sort(key=lambda row: (
-        1 if _is_image_statement(row.get('name'), row.get('file_type')) else 0,
-        -int(row['id']),
-    ))
+    def _statement_rank(row):
+        image = 1 if _is_image_statement(row.get('name'), row.get('file_type')) else 0
+        path = _resolve_document_path(row.get('file_path'))
+        huge = 1 if path and path.stat().st_size > 400_000 else 0
+        return (image, huge, -int(row['id']))
+
+    out.sort(key=_statement_rank)
     return out
 
 
@@ -2811,6 +2837,12 @@ def route(path, method, user, body=None, query=None):
         return ('json', '200 OK', ws)
     if action in ('submit-companies-house', 'submit_companies_house') and method == 'POST':
         ws, error = submit_companies_house(company_id, body, owner_filter)
+        if error:
+            status = '404 Not Found' if error == 'Company not found' else '400 Bad Request'
+            return ('json', status, {'status': 'error', 'message': error})
+        return ('json', '200 OK', ws)
+    if action in ('reset-books', 'reset_books') and method == 'POST':
+        ws, error = reset_books(company_id, owner_filter)
         if error:
             status = '404 Not Found' if error == 'Company not found' else '400 Bad Request'
             return ('json', status, {'status': 'error', 'message': error})
