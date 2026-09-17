@@ -6852,13 +6852,66 @@ input[type="number"], input[type="date"], input[type="search"], textarea, .selec
 .accounts-file-company {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    font-size: 12px;
+    gap: 6px;
+    font-size: 13px;
     color: var(--color-text-muted, #64748b);
+    min-width: min(100%, 440px);
 }
 
-.accounts-file-company .select-filter {
-    min-width: min(100%, 280px);
+.accounts-company-combo {
+    position: relative;
+    width: min(100%, 520px);
+}
+
+.accounts-file-company .select-filter,
+.accounts-file-company input#accounts-file-company {
+    width: 100%;
+    min-width: 0;
+    min-height: 52px;
+    font-size: 16px;
+    padding: 12px 16px;
+    border-radius: 14px;
+}
+
+.accounts-company-list {
+    position: absolute;
+    z-index: 40;
+    left: 0;
+    right: 0;
+    top: calc(100% + 6px);
+    margin: 0;
+    padding: 8px 0;
+    list-style: none;
+    max-height: 360px;
+    overflow: auto;
+    background: var(--color-surface, #fff);
+    border: 1px solid var(--color-border, #e2e8f0);
+    border-radius: 14px;
+    box-shadow: 0 12px 32px rgba(15, 23, 42, 0.12);
+}
+
+.accounts-company-list button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: 0;
+    font: inherit;
+    font-size: 15px;
+    padding: 12px 16px;
+    cursor: pointer;
+    color: inherit;
+}
+
+.accounts-company-list button:hover,
+.accounts-company-list button:focus {
+    background: rgba(0, 57, 113, 0.08);
+}
+
+.accounts-company-empty {
+    padding: 14px 16px;
+    font-size: 14px;
+    color: var(--color-text-muted, #64748b);
 }
 
 .accounts-file-nav {
@@ -7122,7 +7175,14 @@ input[type="number"], input[type="date"], input[type="search"], textarea, .selec
         align-items: stretch;
     }
 
-    .accounts-file-company .select-filter {
+    .accounts-file-company,
+    .accounts-company-combo {
+        min-width: 0;
+        width: 100%;
+    }
+
+    .accounts-file-company .select-filter,
+    .accounts-file-company input#accounts-file-company {
         min-width: 0;
         width: 100%;
     }
@@ -7192,7 +7252,8 @@ html[data-theme="dark"] .accounts-path-card {
 }
 
 html[data-theme="dark"] .accounts-file-empty,
-html[data-theme="dark"] .accounts-file-card {
+html[data-theme="dark"] .accounts-file-card,
+html[data-theme="dark"] .accounts-company-list {
     background: var(--color-surface, #111827);
     border-color: var(--color-border, #334155);
 }

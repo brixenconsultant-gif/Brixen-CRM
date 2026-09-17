@@ -123,7 +123,7 @@
         const saved = Number(localStorage.getItem(storageKey()) || 0);
         const stillThere = state.companies.some((row) => Number(row.id) === saved);
         if (stillThere) state.companyId = saved;
-        else if (state.companies.length) state.companyId = Number(state.companies[0].id);
+        else if (state.companies.length === 1) state.companyId = Number(state.companies[0].id);
         else state.companyId = 0;
     }
 
@@ -204,10 +204,18 @@
         return bits.join(' · ') || 'Choose a path to begin.';
     }
 
+    function companyLabel(row) {
+        if (!row) return '';
+        const name = row.ledger_name || row.name || '';
+        return row.company_number ? `${name} (${row.company_number})` : name;
+    }
+
+    function selectedCompany() {
+        return state.companies.find((row) => Number(row.id) === Number(state.companyId)) || null;
+    }
+
     function renderShell(inner) {
-        const companies = state.companies.map((row) => (
-            `<option value="${Number(row.id)}" ${Number(row.id) === Number(state.companyId) ? 'selected' : ''}>${h(row.ledger_name || row.name)}${row.company_number ? ` (${h(row.company_number)})` : ''}</option>`
-        )).join('');
+        const selected = selectedCompany();
         const groups = ['Start', 'Your books', 'File', 'Company', 'More'];
         const shown = visibleScreens();
         const tabs = groups.map((group) => {
@@ -227,9 +235,10 @@
                 <div class="accounts-file-toolbar">
                     <label class="accounts-file-company">
                         <span>Company</span>
-                        <select id="accounts-file-company" class="select-filter" ${state.companies.length ? '' : 'disabled'}>
-                            ${companies || '<option value="">No registered companies</option>'}
-                        </select>
+                        <div class="accounts-company-combo">
+                            <input id="accounts-file-company" class="select-filter" type="search" autocomplete="off" spellcheck="false" placeholder="Type the company name" value="${h(companyLabel(selected))}" ${state.companies.length ? '' : 'disabled'} aria-autocomplete="list" aria-expanded="false" aria-controls="accounts-company-list">
+                            <ul id="accounts-company-list" class="accounts-company-list" hidden role="listbox"></ul>
+                        </div>
                     </label>
                 </div>
             </div>
@@ -241,6 +250,13 @@
     }
 
     function emptyCompany() {
+        if (state.companies.length) {
+            return `
+            <div class="accounts-file-empty">
+                <h2>Type the company name</h2>
+                <p>Use the company box above. Type the name (or number) and pick the match from the list. You do not need to scroll a long dropdown.</p>
+            </div>`;
+        }
         return `
             <div class="accounts-file-empty">
                 <h2>No company to keep books for</h2>
@@ -902,15 +918,86 @@
         };
     }
 
-    function bind(root) {
-        const select = document.getElementById('accounts-file-company');
-        if (select) {
-            select.addEventListener('change', async () => {
-                state.companyId = Number(select.value || 0);
-                localStorage.setItem(storageKey(), String(state.companyId || ''));
-                await refresh();
-            });
+    function bindCompanyPicker(root) {
+        const input = document.getElementById('accounts-file-company');
+        const list = document.getElementById('accounts-company-list');
+        if (!input || !list) return;
+
+        function matches(query) {
+            const q = String(query || '').trim().toLowerCase();
+            if (!q) return [];
+            return state.companies.filter((row) => {
+                const blob = `${row.ledger_name || ''} ${row.name || ''} ${row.company_number || ''}`.toLowerCase();
+                return blob.includes(q);
+            }).slice(0, 40);
         }
+
+        function paintList() {
+            const rows = matches(input.value);
+            if (!String(input.value || '').trim()) {
+                list.innerHTML = '<li class="accounts-company-empty">Type the company name. Matching names will appear here.</li>';
+            } else if (!rows.length) {
+                list.innerHTML = '<li class="accounts-company-empty">No company matches that name.</li>';
+            } else {
+                list.innerHTML = rows.map((row) => (
+                    `<li><button type="button" role="option" data-company-id="${Number(row.id)}">${h(companyLabel(row))}</button></li>`
+                )).join('');
+            }
+            list.hidden = false;
+            input.setAttribute('aria-expanded', 'true');
+        }
+
+        async function pick(id) {
+            const next = Number(id || 0);
+            list.hidden = true;
+            input.setAttribute('aria-expanded', 'false');
+            if (!next || next === Number(state.companyId)) {
+                const chosen = state.companies.find((row) => Number(row.id) === next);
+                if (chosen) input.value = companyLabel(chosen);
+                return;
+            }
+            state.companyId = next;
+            localStorage.setItem(storageKey(), String(state.companyId || ''));
+            await refresh();
+        }
+
+        input.addEventListener('focus', () => {
+            input.select();
+            paintList();
+        });
+        input.addEventListener('input', paintList);
+        input.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') {
+                list.hidden = true;
+                input.setAttribute('aria-expanded', 'false');
+            }
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                const first = list.querySelector('[data-company-id]');
+                if (first) pick(first.getAttribute('data-company-id'));
+            }
+        });
+        list.addEventListener('mousedown', (event) => {
+            const btn = event.target.closest('[data-company-id]');
+            if (!btn) return;
+            event.preventDefault();
+            pick(btn.getAttribute('data-company-id'));
+        });
+        if (!state.comboDocBound) {
+            document.addEventListener('mousedown', (event) => {
+                const wrap = document.querySelector('.accounts-company-combo');
+                if (!wrap || wrap.contains(event.target)) return;
+                const openList = document.getElementById('accounts-company-list');
+                const openInput = document.getElementById('accounts-file-company');
+                if (openList) openList.hidden = true;
+                if (openInput) openInput.setAttribute('aria-expanded', 'false');
+            });
+            state.comboDocBound = true;
+        }
+    }
+
+    function bind(root) {
+        bindCompanyPicker(root);
         root.querySelectorAll('[data-accounts-screen]').forEach((btn) => {
             btn.addEventListener('click', () => setScreen(btn.getAttribute('data-accounts-screen')));
         });

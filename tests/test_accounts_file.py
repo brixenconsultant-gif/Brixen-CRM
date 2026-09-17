@@ -151,7 +151,7 @@ class TestAccountsFile(unittest.TestCase):
         self.assertIn('It traded', text)
         self.assertIn('It slept', text)
         self.assertIn('HMRC tax', text)
-        self.assertIn('choose-dormant', text)
+        self.assertIn('Type the company name', text)
 
     def test_10_sample_statement_books_and_rec(self):
         st, hd, res = make_request(
