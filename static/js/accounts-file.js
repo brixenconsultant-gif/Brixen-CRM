@@ -25,7 +25,6 @@
         loading: false,
         error: '',
         notice: '',
-        autoImported: {},
         pendingCompanyId: 0,
         journalLines: [
             { code: '', debit: '', credit: '', description: '' },
@@ -135,31 +134,6 @@
         }
         const res = await fetch(`${apiBase()}/${state.companyId}`, { credentials: 'same-origin' });
         state.workspace = await readJson(res);
-        await maybeAutoImport();
-    }
-
-    async function maybeAutoImport() {
-        if (filingKind() !== 'traded') return;
-        const bank = (state.workspace && state.workspace.bank) || {};
-        const docs = (bank.portal_documents || []).filter((row) => !/\.(jpe?g|png|gif|webp|heic)$/i.test(row.name || ''));
-        const pick = docs[0] || (bank.portal_documents || [])[0];
-        if (!bank.imported && pick && !state.autoImported[state.companyId]) {
-            state.autoImported[state.companyId] = true;
-            try {
-                await postAction('import-statement', { document_id: pick.id });
-                const result = (state.workspace && state.workspace.import_result) || {};
-                if ((result.imported || 0) > 0) {
-                    state.notice = `Used ${pick.name} — imported ${result.imported} line(s).`;
-                    if (state.screen === 'home' || state.screen === 'bank' || state.screen === 'file' || state.screen === 'review') {
-                        state.screen = 'review';
-                    }
-                } else {
-                    state.notice = `Read ${pick.name}, but there were no new lines to import.`;
-                }
-            } catch (err) {
-                state.error = err.message || 'The statement on file could not be read. Export CSV from the bank, or paste the rows.';
-            }
-        }
     }
 
     async function postAction(action, payload, method) {
@@ -338,17 +312,14 @@
         if (step === 'file') {
             return `<button type="button" class="btn-primary" data-accounts-screen="file">File at Companies House</button>`;
         }
-        if (step === 'import_existing') {
-            return `<button type="button" class="btn-primary" data-accounts-action="import-statement">Use the statement already on file</button>`;
-        }
-        return `<button type="button" class="btn-primary" data-accounts-screen="bank">Add a bank statement</button>`;
+        return `<button type="button" class="btn-primary" data-accounts-screen="bank">Upload the latest statement</button>`;
     }
 
     function pathChooser() {
         return `
             <div class="accounts-file-empty">
                 <h2>What did this company do this year?</h2>
-                <p>Pick one. We only ask for a bank statement if the company traded. You do not need to be an accountant.</p>
+                <p>Pick one. If the company traded, upload the latest bank statement and we compile the accounts from that file. You do not need to be an accountant.</p>
             </div>
             <div class="accounts-path-grid">
                 <article class="accounts-path-card">
@@ -356,12 +327,12 @@
                     <h3>It traded</h3>
                     <p>Money went in or out of the bank. We build small-company accounts (the micro-entity pack Companies House expects).</p>
                     <ol class="accounts-file-steps">
-                        <li>Add last year’s bank statement</li>
+                        <li>Upload the latest bank statement</li>
                         <li>Check each line looks right</li>
                         <li>Send the pack to Companies House</li>
                         <li>See HMRC tax to pay</li>
                     </ol>
-                    <button type="button" class="btn-primary" data-accounts-action="choose-traded">Start with the bank</button>
+                    <button type="button" class="btn-primary" data-accounts-action="choose-traded">Upload the latest statement</button>
                 </article>
                 <article class="accounts-path-card">
                     <p class="accounts-path-kicker">No sales</p>
@@ -396,7 +367,7 @@
             `<li><span>${h(row.filename || 'Statement')}</span><strong>${row.row_count} lines</strong></li>`
         )).join('') || '<li>No statement imported into the books yet.</li>';
         const portal = (bank.portal_documents || []).map((row) => (
-            `<li><span>${h(row.name)}</span><button type="button" class="btn-secondary btn-table" data-accounts-doc="${row.id}">Use this</button></li>`
+            `<li><span>${h(row.name)}</span><button type="button" class="btn-secondary btn-table" data-accounts-doc="${row.id}">This is the latest</button></li>`
         )).join('');
         const recBlock = rec.statement_closing != null ? `
             <div class="accounts-file-grid">
@@ -416,11 +387,11 @@
             </div>` : '';
         return `
             <section class="accounts-file-card">
-                <h2>Upload or paste a bank statement</h2>
-                <p class="accounts-file-help">CSV from Starling, Tide, Monzo, Barclays, Lloyds, HSBC or any date / description / amount export. PDF works when the bank printed the rows as text. We only ask if a file or a Companies House code is missing.</p>
+                <h2>Upload the latest bank statement</h2>
+                <p class="accounts-file-help">We compile the accounts from the file you upload now. CSV from Starling, Tide, Monzo, Barclays, Lloyds, HSBC or any date / description / amount export. PDF works when the bank printed the rows as text. Older statements already on this company are not used unless you say one is the latest.</p>
                 <div class="accounts-upload-grid">
                     <label class="accounts-file-drop">
-                        <span>CSV or PDF file</span>
+                        <span>Latest CSV or PDF</span>
                         <input id="accounts-statement-file" type="file" accept=".csv,.txt,.pdf,text/csv,application/pdf">
                     </label>
                     <label>Opening balance (if not in the file)
@@ -431,13 +402,12 @@
                     </label>
                 </div>
                 <div class="accounts-file-empty-actions">
-                    <button type="button" class="btn-primary" data-accounts-action="import-statement">Turn this into books</button>
-                    ${(bank.portal_documents || []).length ? '<button type="button" class="btn-primary" data-accounts-action="import-statement">Use the statement already on file</button>' : ''}
+                    <button type="button" class="btn-primary" data-accounts-action="import-statement">Compile from this file</button>
                     <button type="button" class="btn-secondary" data-accounts-action="sample-statement">Try a sample statement</button>
                     ${(bank.imported || (bank.statements || []).length) ? '<button type="button" class="btn-secondary" data-accounts-action="reset-books">Start again from the statement</button>' : ''}
                 </div>
             </section>
-            ${portal ? `<section class="accounts-file-card"><h2>Already on this company file</h2><p class="accounts-file-help">You already uploaded these. We will turn the latest readable one into books — you do not need to upload it again.</p><ul class="accounts-bank-list">${portal}</ul></section>` : ''}
+            ${portal ? `<section class="accounts-file-card"><h2>Older files on this company</h2><p class="accounts-file-help">These are not used automatically. Upload the latest statement above. Only press <strong>This is the latest</strong> if that file is already the one you want compiled.</p><ul class="accounts-bank-list">${portal}</ul></section>` : ''}
             ${recBlock}`;
     }
 
@@ -501,7 +471,7 @@
 
     function reviewScreen(data) {
         if (isEmpty()) {
-            return `<div class="accounts-file-empty"><h2>Nothing to check yet</h2><p>${(data.bank && (data.bank.portal_documents || []).length) ? 'A statement is already on this company file. Use it to build the books, then check the categories here.' : 'Add a bank statement first. We only ask you to confirm categories we are unsure about.'}</p><div class="accounts-file-empty-actions">${nextStepCta()}</div></div>`;
+            return `<div class="accounts-file-empty"><h2>Nothing to check yet</h2><p>Upload the latest bank statement first. We compile the books from that file, then you confirm any categories we are unsure about.</p><div class="accounts-file-empty-actions">${nextStepCta()}</div></div>`;
         }
         const bank = data.bank || {};
         const rec = bank.reconciliation || {};
@@ -547,7 +517,7 @@
 
     function reportsScreen(data) {
         if (isEmpty()) {
-            return `<div class="accounts-file-empty"><h2>No reports yet</h2><p>Upload a statement so we can build a profit and loss, balance sheet and trial balance.</p></div>`;
+            return `<div class="accounts-file-empty"><h2>No reports yet</h2><p>Upload the latest bank statement so we can build a profit and loss, balance sheet and trial balance.</p></div>`;
         }
         const org = data.organisation || {};
         const plRows = ((data.profit_and_loss || {}).lines || []).map((line) => (
@@ -588,7 +558,7 @@
             return `<div class="accounts-file-empty"><h2>Choose a path first</h2><p>Tell us whether the company traded or slept this year. Then you can send the pack to Companies House.</p><div class="accounts-file-empty-actions">${nextStepCta()}</div></div>`;
         }
         if (isEmpty() && filingKind() !== 'dormant') {
-            return `<div class="accounts-file-empty"><h2>No accounts to file yet</h2><p>${(data.bank && (data.bank.portal_documents || []).length) ? 'A statement is already on this company file. Turn it into books first, then you can send the pack to Companies House.' : 'Add a bank statement, check the numbers, then come back here to send the pack to Companies House.'}</p><div class="accounts-file-empty-actions">${nextStepCta()}</div></div>`;
+            return `<div class="accounts-file-empty"><h2>No accounts to file yet</h2><p>Upload the latest bank statement, check the numbers, then come back here to send the pack to Companies House.</p><div class="accounts-file-empty-actions">${nextStepCta()}</div></div>`;
         }
         const ye = data.year_end || {};
         const org = data.organisation || {};
@@ -1132,13 +1102,16 @@
                 opening_balance: opening,
                 filename: 'pasted-statement.csv',
             });
+        } else if (documentId) {
+            await postAction('import-statement', {
+                opening_balance: opening,
+                document_id: documentId,
+            });
         } else {
-            const payload = { opening_balance: opening };
-            if (documentId) payload.document_id = documentId;
-            await postAction('import-statement', payload);
+            throw new Error('Upload the latest bank statement (CSV or PDF), or paste the rows. We will not use an older file on its own.');
         }
         const result = (state.workspace && state.workspace.import_result) || {};
-        state.notice = `Imported ${result.imported || 0} line(s)` + (result.skipped ? `, skipped ${result.skipped} duplicate(s)` : '') + '.';
+        state.notice = `Compiled ${result.imported || 0} line(s) from the latest statement` + (result.skipped ? `, skipped ${result.skipped} duplicate(s)` : '') + '.';
         if ((result.imported || 0) > 0 || (ws().bank || {}).imported) {
             state.screen = 'review';
         }
@@ -1175,8 +1148,7 @@
             } else if (action === 'choose-traded') {
                 await postAction('choose-path', { kind: 'traded' });
                 state.screen = 'bank';
-                state.notice = 'Add last year’s bank statement. We will turn it into small-company accounts.';
-                await maybeAutoImport();
+                state.notice = 'Upload the latest bank statement. We compile the accounts from that file only.';
             } else if (action === 'choose-dormant') {
                 await postAction('choose-path', { kind: 'dormant' });
                 state.screen = 'file';
@@ -1186,7 +1158,6 @@
                 state.notice = 'Sample statement loaded. Check the numbers, then file.';
                 state.screen = 'review';
             } else if (action === 'reset-books') {
-                delete state.autoImported[state.companyId];
                 await postAction('reset-books', {});
                 state.screen = 'home';
                 state.notice = 'Books cleared. Choose whether the company traded or slept.';

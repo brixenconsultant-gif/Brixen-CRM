@@ -157,6 +157,10 @@ class TestAccountsFile(unittest.TestCase):
         self.assertIn('Select company', text)
         self.assertIn('UTR number', text)
         self.assertIn('select-filter accounts-company-input', text)
+        self.assertIn('Upload the latest', text)
+        self.assertIn('Compile from this file', text)
+        self.assertNotIn('Use the statement already on file', text)
+        self.assertNotIn('maybeAutoImport', text)
 
     def test_10_sample_statement_books_and_rec(self):
         st, hd, res = make_request(
@@ -501,6 +505,62 @@ class TestAccountsFile(unittest.TestCase):
         self.assertTrue(res.get('empty'))
         self.assertEqual(res.get('next_step'), 'choose')
         self.assertTrue(res.get('hmrc'))
+
+    def test_22_does_not_auto_import_portal_statement(self):
+        import os
+        import tempfile
+        from db import execute_db, query_db as qdb
+        st, hd, res = make_request(
+            f'/api/admin/accounts-file/{self.company_id}/reset-books',
+            method='POST',
+            body={},
+            cookie=self._admin_cookie(),
+        )
+        self.assertEqual(st, '200 OK', res)
+        csv_text = (
+            "Date,Description,Amount,Balance\n"
+            "02/05/2026,Stripe Payout,400.00,1400.00\n"
+            "03/05/2026,Office rent,-90.00,1310.00\n"
+        )
+        path = os.path.join(tempfile.gettempdir(), 'brixen_old_portal_statement.csv')
+        with open(path, 'w', encoding='utf-8') as handle:
+            handle.write(csv_text)
+        owner = qdb("SELECT user_id FROM companies WHERE id = ?;", (self.company_id,), one=True)
+        execute_db(
+            """
+            INSERT INTO documents (
+                user_id, company_id, name, category, file_path, file_type, file_size,
+                status, uploaded_by, client_visible
+            ) VALUES (?, ?, 'Old_Monzo_bank_statement.csv', 'Order Documents', ?, 'CSV', '1 KB',
+                      'Approved', 'Customer Upload', 1);
+            """,
+            (owner['user_id'], self.company_id, path),
+        )
+        st, hd, res = make_request(
+            f'/api/admin/accounts-file/{self.company_id}/choose-path',
+            method='POST',
+            body={'kind': 'traded'},
+            cookie=self._admin_cookie(),
+        )
+        self.assertEqual(st, '200 OK', res)
+        self.assertEqual(res.get('next_step'), 'upload')
+        self.assertFalse((res.get('bank') or {}).get('imported'))
+        self.assertTrue((res.get('bank') or {}).get('portal_documents'))
+        st, hd, res = make_request(
+            f'/api/admin/accounts-file/{self.company_id}/import-statement',
+            method='POST',
+            body={},
+            cookie=self._admin_cookie(),
+        )
+        self.assertEqual(st, '400 Bad Request', res)
+        self.assertIn('latest bank statement', (res.get('message') or '').lower())
+        st, hd, res = make_request(
+            f'/api/admin/accounts-file/{self.company_id}',
+            cookie=self._admin_cookie(),
+        )
+        self.assertEqual(st, '200 OK', res)
+        self.assertFalse((res.get('bank') or {}).get('imported'))
+        self.assertEqual(res.get('next_step'), 'upload')
 
 
 if __name__ == '__main__':

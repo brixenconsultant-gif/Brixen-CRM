@@ -1782,7 +1782,6 @@ _SKIP_STATEMENT_LINE = re.compile(
 )
 _WISE_AMOUNT_FIRST = re.compile(r'^(sent money|received money|card transaction|card cash)\b', re.I)
 _IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.heic', '.webp', '.gif', '.tif', '.tiff')
-_AUTO_IMPORT_MAX_BYTES = 1_600_000
 
 
 def _line_money_values(line):
@@ -2200,46 +2199,28 @@ def import_statement(company_id, data, user_id=None, files=None):
     upload = files.get('file') or files.get('statement') or files.get('csv')
     csv_text = data.get('csv_text') or data.get('paste') or data.get('text') or ''
     if not upload and not str(csv_text or '').strip():
-        docs = _list_statement_documents(company_id, user_id)
         wanted = _int_id(data.get('document_id'))
-        if wanted:
-            docs = [row for row in docs if int(row['id']) == wanted]
-            if not docs:
-                return None, 'That statement is not on this company file.'
+        if not wanted:
+            return None, 'Upload the latest bank statement (CSV or PDF), or paste the rows. Older files on this company are not used automatically.'
+        docs = [row for row in _list_statement_documents(company_id, user_id) if int(row['id']) == wanted]
+        if not docs:
+            return None, 'That statement is not on this company file.'
         last_error = None
-        oversized = []
         for doc in docs:
-            payload, stored_name, size = _read_statement_file(doc)
+            payload, stored_name, _size = _read_statement_file(doc)
             if not payload:
                 last_error = f"{doc['name']} is on file but the file is missing from storage."
                 continue
             if _is_image_statement(doc.get('name'), doc.get('file_type')):
                 last_error = f"{doc['name']} is a photo. Download a PDF or CSV from your bank, or paste the rows."
                 continue
-            if not wanted and size > _AUTO_IMPORT_MAX_BYTES:
-                oversized.append(doc['name'])
-                continue
             filename = filename or doc.get('name') or stored_name
             parsed, error, source = parse_statement_bytes(payload, filename, doc.get('file_type'))
             if parsed:
                 break
             last_error = f"{doc['name']}: {error}"
-        if not parsed and oversized and not wanted:
-            for doc in docs:
-                if doc.get('name') not in oversized:
-                    continue
-                payload, stored_name, _size = _read_statement_file(doc)
-                if not payload:
-                    continue
-                filename = filename or doc.get('name') or stored_name
-                parsed, error, source = parse_statement_bytes(payload, filename, doc.get('file_type'))
-                if parsed:
-                    break
-                last_error = f"{doc['name']}: {error}"
         if not parsed:
-            if docs:
-                return None, last_error or 'We have a statement on file but could not read the rows. Export CSV from your bank, or paste the transactions.'
-            return None, 'Paste or upload a bank statement first. If you already uploaded one in Documents, open Accounts and we will use it.'
+            return None, last_error or 'We could not read the rows in that file. Export CSV from your bank, or paste the transactions.'
     if upload:
         filename = filename or upload.get('filename') or 'statement'
         payload = upload.get('bytes') or b''
@@ -2896,7 +2877,7 @@ def workspace(company_id, user_id=None):
     elif kind == 'dormant':
         next_step = 'file'
     elif not bank['imported']:
-        next_step = 'import_existing' if bank.get('portal_documents') else 'upload'
+        next_step = 'upload'
     elif bank['needs_review']:
         next_step = 'review'
     else:
