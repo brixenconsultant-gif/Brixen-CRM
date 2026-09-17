@@ -291,14 +291,12 @@
                     <h1>${title}</h1>
                     <p>${h(headerMeta())}</p>
                 </div>
-                <section class="accounts-company-picker">
-                    <label class="accounts-file-company">
-                        <span>Company</span>
-                        <div class="accounts-company-combo">
-                            <input id="accounts-file-company" class="accounts-company-input" type="search" autocomplete="off" spellcheck="false" placeholder="Type the company name" value="${h(companyLabel(staged))}" ${state.companies.length ? '' : 'disabled'} aria-autocomplete="list" aria-expanded="false" aria-controls="accounts-company-list">
-                            <ul id="accounts-company-list" class="accounts-company-list" hidden role="listbox"></ul>
-                        </div>
-                    </label>
+                <section class="accounts-company-picker filter-group" aria-label="Choose company">
+                    <label class="accounts-file-company" for="accounts-file-company">Company</label>
+                    <div class="accounts-company-combo">
+                        <input id="accounts-file-company" class="select-filter accounts-company-input" type="text" autocomplete="off" spellcheck="false" placeholder="Type the company name" value="${h(companyLabel(staged))}" ${state.companies.length ? '' : 'disabled'} aria-autocomplete="list" aria-expanded="false" aria-controls="accounts-company-list">
+                        <ul id="accounts-company-list" class="accounts-company-list" hidden role="listbox"></ul>
+                    </div>
                     <button type="button" class="btn-primary" data-accounts-action="select-company" ${state.companies.length ? '' : 'disabled'}>Select company</button>
                 </section>
             </div>
@@ -315,7 +313,7 @@
             return `
             <div class="accounts-file-empty">
                 <h2>Type the company name</h2>
-                <p>Type the name (or number) in the large box, tap the match, then press <strong>Select company</strong>. Authentication and UTR then show as On file or Not on file.</p>
+                <p>Type the company name (or number), tap the match, then press <strong>Select company</strong>. Authentication and UTR then show as On file or Not on file.</p>
             </div>`;
         }
         return `

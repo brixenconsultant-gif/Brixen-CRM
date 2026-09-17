@@ -156,6 +156,7 @@ class TestAccountsFile(unittest.TestCase):
         self.assertIn('HMRC tax', text)
         self.assertIn('Select company', text)
         self.assertIn('UTR number', text)
+        self.assertIn('select-filter accounts-company-input', text)
 
     def test_10_sample_statement_books_and_rec(self):
         st, hd, res = make_request(

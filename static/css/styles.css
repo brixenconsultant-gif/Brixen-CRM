@@ -6839,70 +6839,87 @@ input[type="number"], input[type="date"], input[type="search"], textarea, .selec
 }
 
 .accounts-file-head {
-    gap: 12px;
+    gap: 10px;
     width: 100%;
-    align-items: flex-end;
+    align-items: center;
+    flex-wrap: wrap;
 }
 
-.accounts-company-picker {
+.accounts-company-picker,
+.accounts-file-root .page-title-row.accounts-file-head .accounts-company-picker {
     display: flex;
-    align-items: flex-end;
+    align-items: center;
     gap: 8px;
-    flex: 0 1 auto;
-    width: auto;
+    flex: 0 0 auto !important;
+    width: auto !important;
     max-width: 100%;
+    flex-wrap: nowrap !important;
 }
 
-.accounts-file-company {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    font-size: 12px;
+.accounts-file-company,
+.accounts-file-root .page-title-row.accounts-file-head .accounts-file-company {
+    display: inline-flex;
+    align-items: center;
+    margin: 0;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
     color: var(--color-text-muted, #64748b);
-    flex: 0 1 340px;
-    min-width: 220px;
-    max-width: 360px;
+    white-space: nowrap;
+    flex: 0 0 auto !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
 }
 
-.accounts-company-combo {
+.accounts-company-combo,
+.accounts-file-root .page-title-row.accounts-file-head .accounts-company-combo {
     position: relative;
-    width: 100%;
+    width: 260px !important;
+    max-width: 260px !important;
+    flex: 0 0 260px !important;
 }
 
 .accounts-company-input,
-.accounts-file-company input.accounts-company-input,
-.accounts-file-company #accounts-file-company {
-    width: 100% !important;
-    max-width: 360px !important;
+.accounts-file-root input.select-filter.accounts-company-input,
+.accounts-file-root .page-title-row.accounts-file-head #accounts-file-company {
+    width: 260px !important;
+    max-width: 260px !important;
     min-width: 0 !important;
-    min-height: 30px !important;
-    height: 30px !important;
-    font-size: 13px !important;
-    font-weight: 400 !important;
-    line-height: 1.2 !important;
-    padding: 4px 12px !important;
-    border-radius: 8px !important;
-}
-
-.accounts-company-picker .btn-primary {
     min-height: 24px !important;
     height: 24px !important;
-    padding: 0 12px !important;
+    font-size: 11px !important;
+    font-weight: 500 !important;
+    line-height: 1 !important;
+    padding: 2px 8px !important;
+    border-radius: 6px !important;
+}
+
+.accounts-company-picker .btn-primary,
+.accounts-file-root .page-title-row.accounts-file-head .accounts-company-picker .btn-primary {
+    min-height: 24px !important;
+    height: 24px !important;
+    padding: 0 10px !important;
     font-size: 11px !important;
     font-weight: 600 !important;
     border-radius: 9999px !important;
     white-space: nowrap;
+    width: auto !important;
+    flex: 0 0 auto;
 }
 
 .accounts-company-list {
     position: absolute;
     z-index: 40;
-    left: 0;
+    left: auto;
     right: 0;
     top: calc(100% + 4px);
     margin: 0;
     padding: 4px 0;
     list-style: none;
+    width: max(100%, 320px);
+    min-width: 320px;
     max-height: 280px;
     overflow: auto;
     background: var(--color-surface, #fff);
@@ -7221,32 +7238,35 @@ input[type="number"], input[type="date"], input[type="search"], textarea, .selec
         grid-template-columns: 1fr;
     }
 
-    .accounts-file-head {
-        flex-direction: column;
-        align-items: stretch;
-    }
-
-    .accounts-file-head {
-        flex-direction: column;
-        align-items: stretch;
+    .accounts-file-head,
+    .accounts-file-root .page-title-row.accounts-file-head {
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
     }
 
     .accounts-company-picker,
+    .accounts-file-root .page-title-row.accounts-file-head .accounts-company-picker {
+        width: auto !important;
+        max-width: 100% !important;
+        flex: 0 0 auto !important;
+    }
+
     .accounts-file-company,
-    .accounts-company-combo {
-        min-width: 0;
-        max-width: none;
-        width: 100%;
-        flex: 1 1 auto;
-    }
-
-    .accounts-company-input,
-    .accounts-file-company #accounts-file-company {
+    .accounts-file-root .page-title-row.accounts-file-head .accounts-file-company,
+    .accounts-company-picker .btn-primary,
+    .accounts-file-root .page-title-row.accounts-file-head .accounts-company-picker .btn-primary {
+        width: auto !important;
         max-width: none !important;
+        flex: 0 0 auto !important;
     }
 
-    .accounts-company-picker .btn-primary {
-        width: auto;
+    .accounts-company-combo,
+    .accounts-file-root .page-title-row.accounts-file-head .accounts-company-combo,
+    .accounts-file-root .page-title-row.accounts-file-head #accounts-file-company {
+        width: 260px !important;
+        max-width: min(260px, 100%) !important;
+        flex: 0 0 auto !important;
     }
 
     .accounts-file-nav {
