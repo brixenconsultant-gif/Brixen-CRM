@@ -6827,3 +6827,276 @@ input[type="number"], input[type="date"], input[type="search"], textarea, .selec
     }
 }
 
+/* ====================================================
+   Accounts / Year end (FRS 105 ledger inside portal chrome)
+   ==================================================== */
+.accounts-file-root {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 100%;
+    min-width: 0;
+}
+
+.accounts-file-head {
+    gap: 12px;
+}
+
+.accounts-file-toolbar {
+    display: flex;
+    align-items: flex-end;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.accounts-file-company {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--color-text-muted, #64748b);
+}
+
+.accounts-file-company .select-filter {
+    min-width: min(100%, 280px);
+}
+
+.accounts-file-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 18px;
+    align-items: flex-start;
+}
+
+.accounts-file-nav-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.accounts-file-nav-group > span {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--color-text-muted, #64748b);
+}
+
+.accounts-file-tabs {
+    margin: 0;
+}
+
+.accounts-file-empty {
+    background: var(--color-surface, #fff);
+    border: 1px solid var(--color-border, #e2e8f0);
+    border-radius: 14px;
+    padding: 28px 22px;
+}
+
+.accounts-file-empty h2 {
+    font-size: 18px;
+    margin: 0 0 8px;
+}
+
+.accounts-file-empty p,
+.accounts-file-help {
+    color: var(--color-text-muted, #64748b);
+    font-size: 13px;
+    line-height: 1.45;
+    margin: 0 0 12px;
+}
+
+.accounts-file-empty-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.accounts-file-stats {
+    margin-bottom: 0;
+}
+
+.accounts-file-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+}
+
+.accounts-file-card {
+    background: var(--color-surface, #fff);
+    border: 1px solid var(--color-border, #e2e8f0);
+    border-radius: 14px;
+    padding: 16px 16px 12px;
+}
+
+.accounts-file-card h2 {
+    font-size: 16px;
+    margin: 0 0 8px;
+}
+
+.accounts-file-card h3 {
+    font-size: 14px;
+    margin: 16px 0 8px;
+}
+
+.accounts-bank-list,
+.accounts-watch-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.accounts-bank-list li {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 14px;
+}
+
+.accounts-watch-item {
+    border-radius: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--color-border, #e2e8f0);
+}
+
+.accounts-watch-item h3 {
+    font-size: 13px;
+    margin: 0 0 4px;
+}
+
+.accounts-watch-item p {
+    margin: 0;
+    font-size: 12px;
+    color: var(--color-text-muted, #64748b);
+}
+
+.accounts-watch-item.is-ok { background: rgba(16, 185, 129, 0.08); border-color: rgba(16, 185, 129, 0.28); }
+.accounts-watch-item.is-warn { background: rgba(245, 158, 11, 0.1); border-color: rgba(245, 158, 11, 0.3); }
+.accounts-watch-item.is-danger { background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
+
+.accounts-star {
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    font-size: 16px;
+    color: var(--color-text-muted, #64748b);
+}
+
+.accounts-star.is-on { color: #d4af37; }
+
+.accounts-journal { margin-bottom: 16px; }
+.accounts-journal header { font-size: 13px; margin-bottom: 6px; }
+
+.accounts-journal-form,
+.accounts-org-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.accounts-span { grid-column: 1 / -1; }
+
+.accounts-org-grid label,
+.accounts-journal-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--color-text-muted, #64748b);
+}
+
+.accounts-director-row {
+    display: grid;
+    grid-template-columns: 1fr 160px;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.accounts-exclusion-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.accounts-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+}
+
+.accounts-textarea {
+    min-height: 72px;
+    width: 100%;
+    resize: vertical;
+}
+
+.accounts-file-card .data-table .num,
+.accounts-report-table .num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.accounts-file-card tr.is-total td {
+    font-weight: 700;
+    border-top: 2px solid var(--color-border-strong, #cbd5e1);
+}
+
+.accounts-file-banner {
+    border-radius: 12px;
+    padding: 12px 14px;
+    font-size: 13px;
+}
+
+.accounts-file-banner.is-ok { background: rgba(16, 185, 129, 0.1); }
+.accounts-file-banner.is-warn { background: rgba(245, 158, 11, 0.12); }
+
+.accounts-file-note { margin-bottom: 12px; }
+.accounts-file-note h3 { margin: 0 0 4px; font-size: 14px; }
+.accounts-file-note p { margin: 0 0 4px; font-size: 13px; }
+
+.num-input { text-align: right; }
+
+@media (max-width: 900px) {
+    .accounts-file-grid,
+    .accounts-journal-form,
+    .accounts-org-grid,
+    .accounts-exclusion-grid,
+    .accounts-director-row {
+        grid-template-columns: 1fr;
+    }
+
+    .accounts-file-head {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .accounts-file-company .select-filter {
+        min-width: 0;
+        width: 100%;
+    }
+
+    .accounts-file-nav {
+        flex-direction: column;
+    }
+
+    .accounts-file-tabs {
+        width: 100%;
+        overflow-x: auto;
+    }
+}
+
+html[data-theme="dark"] .accounts-file-empty,
+html[data-theme="dark"] .accounts-file-card {
+    background: var(--color-surface, #111827);
+    border-color: var(--color-border, #334155);
+}
+
+

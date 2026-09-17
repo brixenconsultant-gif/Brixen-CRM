@@ -132,7 +132,9 @@ const VIEW_ACCESS = {
     'admin-documents': ['Documents', 'Compliance'],
     'admin-intake': ['Documents', 'Compliance'],
     'admin-invoices': ['Accounts'],
-    'admin-accountancy': ['Accountancy', 'Accounts', 'Compliance']
+    'admin-accountancy': ['Accountancy', 'Accounts', 'Compliance'],
+    'admin-accounts': ['Accountancy', 'Accounts', 'Compliance'],
+    'admin-year-end': ['Accountancy', 'Accounts', 'Compliance']
 };
 
 function hasModuleAccess(areas) {
@@ -165,7 +167,7 @@ function canOpenView(viewName) {
 function defaultPortalView() {
     if (!isAdminShellUser(currentUser)) return 'client-dashboard';
     if (canViewAdminDashboard()) return 'admin-dashboard';
-    const preferred = ['admin-orders', 'admin-customers', 'admin-documents', 'admin-invoices', 'admin-accountancy', 'admin-tasks', 'client-profile'];
+    const preferred = ['admin-orders', 'admin-customers', 'admin-documents', 'admin-invoices', 'admin-accountancy', 'admin-accounts', 'admin-tasks', 'client-profile'];
     return preferred.find(canOpenView) || 'client-profile';
 }
 
@@ -174,6 +176,8 @@ const VIEW_HASH = {
     'client-profile': 'profile',
     'client-companies': 'companies',
     'client-accountancy': 'accountancy',
+    'client-accounts': 'accounts',
+    'client-year-end': 'year-end',
     'client-addresses': 'addresses',
     'client-orders': 'orders',
     'client-invoices': 'invoices',
@@ -186,6 +190,8 @@ const VIEW_HASH = {
     'admin-customers': 'admin-customers',
     'admin-companies': 'admin-companies',
     'admin-accountancy': 'admin-accountancy',
+    'admin-accounts': 'admin-accounts',
+    'admin-year-end': 'admin-year-end',
     'admin-orders': 'admin-orders',
     'admin-tasks': 'admin-tasks',
     'admin-services': 'admin-services',
@@ -321,12 +327,19 @@ function setAuthShellState(pending, authenticated) {
     if (app) app.removeAttribute('hidden');
 }
 
+function accountsFilePanelView(viewName) {
+    if (viewName === 'client-year-end') return 'client-accounts';
+    if (viewName === 'admin-year-end') return 'admin-accounts';
+    return viewName;
+}
+
 function setActiveViewPanel(viewName) {
     document.querySelectorAll('.view-panel').forEach((panel) => {
         panel.classList.remove('is-active');
         panel.style.display = 'none';
     });
-    const targetPanel = document.getElementById(viewName ? `view-${viewName}` : '');
+    const panelView = accountsFilePanelView(viewName);
+    const targetPanel = document.getElementById(panelView ? `view-${panelView}` : '');
     if (targetPanel) {
         targetPanel.classList.add('is-active');
         targetPanel.style.display = viewName === 'login' ? 'block' : 'flex';
@@ -1256,6 +1269,12 @@ function switchView(viewName, options) {
         case 'client-dashboard': loadClientDashboard(); break;
         case 'client-companies': loadClientCompanies(); break;
         case 'client-accountancy': loadClientAccountancy(); break;
+        case 'client-accounts':
+            if (typeof loadAccountsFileView === 'function') loadAccountsFileView('client', 'home');
+            break;
+        case 'client-year-end':
+            if (typeof loadAccountsFileView === 'function') loadAccountsFileView('client', 'year-end');
+            break;
         case 'client-addresses': loadClientAddresses(); break;
         case 'client-invoices': loadClientInvoices(); break;
         case 'client-payments': loadClientPayments(); break;
@@ -1278,6 +1297,12 @@ function switchView(viewName, options) {
         case 'admin-customers': loadAdminCustomers(); break;
         case 'admin-companies': loadAdminCompanies(); break;
         case 'admin-accountancy': loadAdminAccountancy(); break;
+        case 'admin-accounts':
+            if (typeof loadAccountsFileView === 'function') loadAccountsFileView('admin', 'home');
+            break;
+        case 'admin-year-end':
+            if (typeof loadAccountsFileView === 'function') loadAccountsFileView('admin', 'year-end');
+            break;
         case 'admin-services': loadAdminServices(); break;
         case 'admin-invoices': loadAdminInvoices(); break;
         case 'admin-documents': loadAdminDocuments(); break;

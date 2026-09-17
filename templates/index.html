@@ -66,7 +66,7 @@
             if (app) app.setAttribute('hidden', '');
         });
     </script>
-    <link rel="stylesheet" href="/static/css/styles.css?v=3100.0">
+    <link rel="stylesheet" href="/static/css/styles.css?v=3201.0">
     <script src="/static/js/vendor/lucide.min.js"></script>
     <script src="/static/js/vendor/chart.umd.min.js"></script>
 </head>
@@ -111,6 +111,8 @@
                     <ul class="nav-list">
                         <li class="nav-item" data-view="client-companies" data-portfolio="Business Portfolio"><a href="#companies" onclick="event.preventDefault();switchView('client-companies')"><i data-lucide="building-2"></i> <span>Company Registered</span><span style="display:none">Business Portfolio</span></a></li>
                         <li class="nav-item" data-view="client-accountancy"><a href="#accountancy" onclick="event.preventDefault();switchView('client-accountancy')"><i data-lucide="calculator"></i> <span>Accountancy</span></a></li>
+                        <li class="nav-item" data-view="client-accounts"><a href="#accounts" onclick="event.preventDefault();switchView('client-accounts')"><i data-lucide="book-open"></i> <span>Accounts</span></a></li>
+                        <li class="nav-item" data-view="client-year-end"><a href="#year-end" onclick="event.preventDefault();switchView('client-year-end')"><i data-lucide="file-spreadsheet"></i> <span>Year end</span></a></li>
                         <li class="nav-item" data-view="client-addresses"><a href="#addresses" onclick="event.preventDefault();switchView('client-addresses')"><i data-lucide="map-pin"></i> <span>Addresses</span></a></li>
                     </ul>
                 </div>
@@ -183,6 +185,8 @@
                         <li class="nav-item" data-view="admin-customers"><a href="#admin-customers"><i data-lucide="users"></i> <span>Customers / Signups</span></a></li>
                         <li class="nav-item" data-view="admin-companies"><a href="#admin-companies" onclick="event.preventDefault();switchView('admin-companies')"><i data-lucide="building-2"></i> <span>Company Registered</span></a></li>
                         <li class="nav-item" data-view="admin-accountancy"><a href="#admin-accountancy" onclick="event.preventDefault();switchView('admin-accountancy')"><i data-lucide="calculator"></i> <span>Accountancy</span></a></li>
+                        <li class="nav-item" data-view="admin-accounts"><a href="#admin-accounts" onclick="event.preventDefault();switchView('admin-accounts')"><i data-lucide="book-open"></i> <span>Accounts</span></a></li>
+                        <li class="nav-item" data-view="admin-year-end"><a href="#admin-year-end" onclick="event.preventDefault();switchView('admin-year-end')"><i data-lucide="file-spreadsheet"></i> <span>Year end</span></a></li>
                         <li class="nav-item" data-view="admin-orders"><a href="#admin-orders"><i data-lucide="package-check"></i> <span>Orders Manager</span></a></li>
                         <li class="nav-item" data-view="admin-tasks"><a href="#admin-tasks"><i data-lucide="list-checks"></i> <span>Tasks &amp; Team</span></a></li>
                         <li class="nav-item" data-view="admin-services"><a href="#admin-services"><i data-lucide="layers"></i> <span>Services Catalog</span></a></li>
@@ -325,6 +329,12 @@
                             <li class="top-menu-item" data-view="client-accountancy">
                                 <a href="#accountancy" onclick="event.preventDefault();switchView('client-accountancy')"><i data-lucide="calculator"></i> <span>Accountancy</span></a>
                             </li>
+                            <li class="top-menu-item" data-view="client-accounts">
+                                <a href="#accounts" onclick="event.preventDefault();switchView('client-accounts')"><i data-lucide="book-open"></i> <span>Accounts</span></a>
+                            </li>
+                            <li class="top-menu-item" data-view="client-year-end">
+                                <a href="#year-end" onclick="event.preventDefault();switchView('client-year-end')"><i data-lucide="file-spreadsheet"></i> <span>Year end</span></a>
+                            </li>
                             <li class="top-menu-item" data-view="client-invoices">
                                 <a href="#invoices" onclick="event.preventDefault();switchView('client-invoices')"><i data-lucide="file-text"></i> <span>Invoices</span></a>
                             </li>
@@ -357,6 +367,12 @@
                             </li>
                             <li class="top-menu-item" data-view="admin-accountancy">
                                 <a href="#admin-accountancy" onclick="event.preventDefault();switchView('admin-accountancy')"><i data-lucide="calculator"></i> <span>Accountancy</span></a>
+                            </li>
+                            <li class="top-menu-item" data-view="admin-accounts">
+                                <a href="#admin-accounts" onclick="event.preventDefault();switchView('admin-accounts')"><i data-lucide="book-open"></i> <span>Accounts</span></a>
+                            </li>
+                            <li class="top-menu-item" data-view="admin-year-end">
+                                <a href="#admin-year-end" onclick="event.preventDefault();switchView('admin-year-end')"><i data-lucide="file-spreadsheet"></i> <span>Year end</span></a>
                             </li>
                             <li class="top-menu-item" data-view="admin-documents">
                                 <a href="#admin-documents" onclick="event.preventDefault();switchView('admin-documents')"><i data-lucide="folder-lock"></i> <span>Documents</span></a>
@@ -700,6 +716,10 @@
                     </div>
                 </div>
 
+                <div id="view-client-accounts" class="view-panel" style="display: none;">
+                    <div id="client-accounts-root" class="accounts-file-root" data-scope="client"></div>
+                </div>
+
                 <!-- 3B. COMPANY REGISTERED VIEW (ADMIN) -->
                 <div id="view-admin-companies" class="view-panel" style="display: none;">
                     <div class="portfolio-page-head">
@@ -773,6 +793,10 @@
                             <tbody id="adm-accountancy-table-body"></tbody>
                         </table>
                     </div>
+                </div>
+
+                <div id="view-admin-accounts" class="view-panel" style="display: none;">
+                    <div id="admin-accounts-root" class="accounts-file-root" data-scope="admin"></div>
                 </div>
 
                 <!-- 4. ADDRESSES VIEW -->
@@ -3843,6 +3867,7 @@
     </div>
 
     <div id="global-search-results" class="global-search-results" hidden></div>
-    <script src="/static/js/app.js?v=3102.0" defer></script>
+    <script src="/static/js/app.js?v=3201.0" defer></script>
+    <script src="/static/js/accounts-file.js?v=3201.0" defer></script>
 </body>
 </html>

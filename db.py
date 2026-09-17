@@ -479,6 +479,11 @@ def ensure_schema():
         CREATE INDEX IF NOT EXISTS idx_company_book_entries_company_period
             ON company_book_entries(company_id, period_end);
     """)
+    try:
+        from accounts_file import ensure_ledger_schema
+        ensure_ledger_schema()
+    except Exception as _ledger_err:
+        print(f"[SchemaInit] ledger tables: {_ledger_err}")
     task_cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
     if 'department' not in task_cols:
         conn.execute("ALTER TABLE tasks ADD COLUMN department TEXT")

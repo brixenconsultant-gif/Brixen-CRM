@@ -13,6 +13,7 @@ from wsgiref.simple_server import make_server, WSGIServer
 from socketserver import ThreadingMixIn
 from concurrent.futures import ThreadPoolExecutor
 from db import query_db, execute_db, hash_password, verify_password, needs_rehash, unusable_password_hash, get_db, ensure_schema
+import accounts_file as accounts_file_mod
 
 class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     """Handle static + API requests in parallel (local feel on the live portal)."""
@@ -18216,6 +18217,29 @@ def application(environ, start_response):
             'status': 'success',
             'filing': public_accounts_filing(filing, for_client=True),
         })
+
+    if path.startswith('/api/admin/accounts-file') or path.startswith('/api/client/accounts-file'):
+        if path.startswith('/api/admin/accounts-file'):
+            denied = require_permission(start_response, user, 'accountancy.manage')
+            if denied:
+                return denied
+        qs = urllib.parse.parse_qs(environ.get('QUERY_STRING', ''))
+        body = parse_body(environ) if method in ('POST', 'PUT', 'PATCH') else {}
+        result = accounts_file_mod.route(path, method, user, body=body, query=qs)
+        if result is None:
+            return json_response(start_response, {'status': 'error', 'message': 'Accounts file route not found'}, "404 Not Found")
+        kind = result[0]
+        if kind == 'file':
+            _, status, payload, content_type, filename = result
+            safe_name = re.sub(r'[^A-Za-z0-9._-]+', '-', filename or 'accounts.html')
+            start_response(status, [
+                ('Content-Type', content_type),
+                ('Content-Length', str(len(payload))),
+                ('Content-Disposition', f'attachment; filename="{safe_name}"'),
+            ])
+            return [payload]
+        _, status, payload = result
+        return json_response(start_response, payload, status)
 
     if path == '/api/admin/documents' and method == 'GET':
         denied = require_permission(start_response, user, 'documents.view')

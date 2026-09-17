@@ -532,6 +532,71 @@ CREATE TABLE IF NOT EXISTS company_book_entries (
 CREATE INDEX IF NOT EXISTS idx_company_book_entries_company_period
     ON company_book_entries(company_id, period_end);
 
+-- 17d. FRS 105 micro-entity ledger (Accounts / Year end)
+CREATE TABLE IF NOT EXISTS ledger_books (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL UNIQUE,
+    registered_name TEXT NOT NULL DEFAULT '',
+    company_number TEXT NOT NULL DEFAULT '',
+    registered_office TEXT NOT NULL DEFAULT '',
+    directors_json TEXT NOT NULL DEFAULT '[]',
+    incorporation_date DATE,
+    period_start DATE,
+    period_end DATE,
+    prior_period_start DATE,
+    prior_period_end DATE,
+    employees INTEGER NOT NULL DEFAULT 0,
+    prior_employees INTEGER NOT NULL DEFAULT 0,
+    is_first_accounts INTEGER NOT NULL DEFAULT 0,
+    sample_loaded INTEGER NOT NULL DEFAULT 0,
+    exclusions_json TEXT NOT NULL DEFAULT '{}',
+    notes_json TEXT NOT NULL DEFAULT '{}',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_ledger_books_company ON ledger_books(company_id);
+
+CREATE TABLE IF NOT EXISTS ledger_nominals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER NOT NULL,
+    code TEXT NOT NULL,
+    name TEXT NOT NULL,
+    account_type TEXT NOT NULL,
+    frs105_pl TEXT,
+    frs105_bs TEXT,
+    watched INTEGER NOT NULL DEFAULT 0,
+    opening_debit REAL NOT NULL DEFAULT 0,
+    opening_credit REAL NOT NULL DEFAULT 0,
+    prior_debit REAL NOT NULL DEFAULT 0,
+    prior_credit REAL NOT NULL DEFAULT 0,
+    UNIQUE(book_id, code),
+    FOREIGN KEY (book_id) REFERENCES ledger_books(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_ledger_nominals_book ON ledger_nominals(book_id, code);
+
+CREATE TABLE IF NOT EXISTS ledger_journals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER NOT NULL,
+    journal_date DATE NOT NULL,
+    narration TEXT NOT NULL,
+    reference TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (book_id) REFERENCES ledger_books(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_ledger_journals_book ON ledger_journals(book_id, journal_date);
+
+CREATE TABLE IF NOT EXISTS ledger_journal_lines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    journal_id INTEGER NOT NULL,
+    nominal_code TEXT NOT NULL,
+    description TEXT,
+    debit REAL NOT NULL DEFAULT 0,
+    credit REAL NOT NULL DEFAULT 0,
+    FOREIGN KEY (journal_id) REFERENCES ledger_journals(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_ledger_journal_lines_journal ON ledger_journal_lines(journal_id);
+
 -- 18. Outbound customer emails (retry until SMTP accepts)
 CREATE TABLE IF NOT EXISTS email_outbox (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
