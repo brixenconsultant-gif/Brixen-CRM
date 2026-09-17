@@ -18224,7 +18224,13 @@ def application(environ, start_response):
             if denied:
                 return denied
         qs = urllib.parse.parse_qs(environ.get('QUERY_STRING', ''))
-        body = parse_body(environ) if method in ('POST', 'PUT', 'PATCH') else {}
+        content_type = (environ.get('CONTENT_TYPE') or '').lower()
+        if method in ('POST', 'PUT', 'PATCH') and 'multipart/form-data' in content_type:
+            fields, files = parse_multipart_form(environ)
+            body = dict(fields)
+            body['_files'] = files
+        else:
+            body = parse_body(environ) if method in ('POST', 'PUT', 'PATCH') else {}
         result = accounts_file_mod.route(path, method, user, body=body, query=qs)
         if result is None:
             return json_response(start_response, {'status': 'error', 'message': 'Accounts file route not found'}, "404 Not Found")

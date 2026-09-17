@@ -7064,12 +7064,56 @@ input[type="number"], input[type="date"], input[type="search"], textarea, .selec
 
 .num-input { text-align: right; }
 
+.accounts-upload-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.accounts-file-drop {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--color-text-muted, #64748b);
+    border: 1px dashed var(--color-border, #cbd5e1);
+    border-radius: 12px;
+    padding: 12px;
+}
+
+.accounts-file-steps {
+    margin: 0 0 12px 18px;
+    padding: 0;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.accounts-file-steps a {
+    color: #003971;
+}
+
+.accounts-needed {
+    margin-top: 10px;
+    font-size: 13px;
+}
+
+.accounts-needed ul {
+    margin: 6px 0 0 18px;
+    padding: 0;
+}
+
+.accounts-file-card tr.is-review td {
+    background: rgba(245, 158, 11, 0.08);
+}
+
 @media (max-width: 900px) {
     .accounts-file-grid,
     .accounts-journal-form,
     .accounts-org-grid,
     .accounts-exclusion-grid,
-    .accounts-director-row {
+    .accounts-director-row,
+    .accounts-upload-grid {
         grid-template-columns: 1fr;
     }
 

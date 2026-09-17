@@ -1,16 +1,22 @@
-"""UK FRS 105 micro-entity ledger and statutory year-end packs.
+"""UK FRS 105 micro-entity books from bank statements, then Companies House.
 
-Lives inside the Brixen CRM portal. Not a Xero product: same information
-architecture (home, chart of accounts, journals, P&L, balance sheet, trial
-balance, year end) feeding Companies House micro-entity accounts.
+Director-first: upload or paste a UK bank statement, review categories, then
+download a micro-entity pack or send it to Companies House (live gateway when
+credentials exist, otherwise a sandbox receipt plus WebFiling upload).
 """
 from __future__ import annotations
 
 import calendar
+import csv
 import datetime
+import hashlib
 import html as html_lib
+import io
 import json
+import os
 import re
+import urllib.error
+import urllib.request
 
 from db import execute_db, get_db, query_db
 
@@ -78,6 +84,52 @@ CREATE TABLE IF NOT EXISTS ledger_journal_lines (
     FOREIGN KEY (journal_id) REFERENCES ledger_journals(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_ledger_journal_lines_journal ON ledger_journal_lines(journal_id);
+
+CREATE TABLE IF NOT EXISTS ledger_statements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER NOT NULL,
+    filename TEXT,
+    source TEXT NOT NULL DEFAULT 'csv',
+    opening_balance REAL,
+    closing_balance REAL,
+    row_count INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (book_id) REFERENCES ledger_books(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_ledger_statements_book ON ledger_statements(book_id);
+
+CREATE TABLE IF NOT EXISTS ledger_bank_lines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER NOT NULL,
+    statement_id INTEGER,
+    txn_date DATE NOT NULL,
+    description TEXT NOT NULL,
+    amount REAL NOT NULL,
+    balance REAL,
+    category_code TEXT,
+    category_label TEXT,
+    confidence TEXT NOT NULL DEFAULT 'low',
+    needs_review INTEGER NOT NULL DEFAULT 1,
+    posted_journal_id INTEGER,
+    source_hash TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(book_id, source_hash),
+    FOREIGN KEY (book_id) REFERENCES ledger_books(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_ledger_bank_lines_book ON ledger_bank_lines(book_id, needs_review);
+
+CREATE TABLE IF NOT EXISTS ledger_ch_filings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'sandbox',
+    status TEXT NOT NULL DEFAULT 'accepted',
+    receipt TEXT,
+    message TEXT,
+    pack_kind TEXT DEFAULT 'filleted',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (book_id) REFERENCES ledger_books(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_ledger_ch_filings_book ON ledger_ch_filings(book_id, created_at DESC);
 """
 
 MICRO_FROM = datetime.date(2025, 4, 6)
@@ -285,6 +337,78 @@ SAMPLE_JOURNALS = (
         ('4900', 0.0, 120.00, 'Other income'),
     )),
 )
+
+SAMPLE_STATEMENT_CSV = """Date,Description,Money in,Money out,Balance
+01/04/2025,Opening balance,,,12000.00
+05/04/2025,Stripe Payout,6200.00,,18200.00
+12/04/2025,Office rent April,,600.00,17600.00
+28/04/2025,Staff wages April,,2400.00,15200.00
+18/05/2025,ACME LTD INV-104,8400.00,,23600.00
+12/05/2025,Office rent May,,600.00,23000.00
+22/05/2025,Hiscox insurance,,480.00,22520.00
+20/06/2025,Screwfix materials,,1800.00,20720.00
+28/07/2025,Staff wages July,,2400.00,18320.00
+03/09/2025,Stripe Payout,5000.00,,23320.00
+04/10/2025,Shell fuel,,1200.00,22120.00
+28/10/2025,Staff wages October,,2400.00,19720.00
+15/11/2025,Starling monthly fee,,192.00,19528.00
+14/01/2026,Invoice 221 Thorn,5000.00,,24528.00
+28/01/2026,Staff wages January,,2400.00,22128.00
+12/03/2026,Office rent remainder,,6000.00,16128.00
+15/03/2026,Companies House / solicitor,,320.00,15808.00
+"""
+
+DIRECTOR_CATEGORIES = (
+    ('4000', 'Sales'),
+    ('4900', 'Other money in'),
+    ('5000', 'Materials and stock'),
+    ('7000', 'Wages'),
+    ('7002', 'Director pay'),
+    ('7100', 'Rent'),
+    ('7200', 'Light and heat'),
+    ('7300', 'Vehicle and fuel'),
+    ('7400', 'Travel'),
+    ('7500', 'Stationery'),
+    ('7600', 'Professional fees'),
+    ('7601', 'Accountancy'),
+    ('7700', 'Bank charges'),
+    ('7800', 'Insurance'),
+    ('8000', 'Interest'),
+    ('8100', 'Tax'),
+    ('2200', 'VAT paid'),
+    ('2220', 'Corporation tax paid'),
+    ('3200', 'Dividends'),
+)
+
+CATEGORY_RULES = (
+    (r'\b(salary|wages|payroll|paye|staff pay)\b', '7000', 'Wages'),
+    (r'\b(director(?:\'s)? pay|directors? remuneration)\b', '7002', 'Director pay'),
+    (r'\bdividends?\b', '3200', 'Dividends'),
+    (r'\b(rent|landlord)\b', '7100', 'Rent'),
+    (r'\b(british gas|edf|e\.?on\b|octopus energy|sse\b|thames water|virgin media|vodafone|\bbt\b|light and heat)\b', '7200', 'Light and heat'),
+    (r'\b(shell|bp\b|tesco petrol|fuel|petrol|parking|halfords|mot\b)\b', '7300', 'Vehicle and fuel'),
+    (r'\b(trainline|uber|tfl\b|easyjet|ryanair|booking\.com)\b', '7400', 'Travel'),
+    (r'\b(insurance|aviva|axa|hiscox)\b', '7800', 'Insurance'),
+    (r'\b(companies house|solicitor|lawyer|legal|accountant|accountancy)\b', '7600', 'Professional fees'),
+    (r'\b(bank charge|monthly (?:account )?fee|starling.*fee|tide fee|monzo plus)\b', '7700', 'Bank charges'),
+    (r'\b(corporation tax|hmrc ct)\b', '2220', 'Corporation tax paid'),
+    (r'\b(hmrc vat|vat payment)\b', '2200', 'VAT paid'),
+    (r'\bhmrc\b', '8100', 'Tax'),
+    (r'\b(screwfix|toolstation|materials|stock)\b', '5000', 'Materials and stock'),
+    (r'\b(tesco|sainsbury|amazon|ebay)\b', '5000', 'Materials and stock'),
+    (r'\b(stripe|sumup|square|shopify|invoice|payout|client payment|sales)\b', '4000', 'Sales'),
+)
+
+WEBFILING_URL = 'https://ewf.companieshouse.gov.uk/'
+CH_GATEWAY_DEFAULT = 'https://xmlgw.companieshouse.gov.uk/v1-0/xmlgw/Gateway'
+
+_DATE_HEADERS = {'date', 'transaction date', 'posted', 'completed date', 'date started', 'txn date', 'value date'}
+_DESC_HEADERS = {'description', 'narrative', 'details', 'counter party', 'counterparty', 'name', 'transaction description', 'reference'}
+_AMOUNT_HEADERS = {'amount', 'value', 'transaction amount'}
+_IN_HEADERS = {'money in', 'paid in', 'credit', 'inflow', 'credit amount', 'amount in', 'paid in (gbp)'}
+_OUT_HEADERS = {'money out', 'paid out', 'debit', 'outflow', 'debit amount', 'amount out', 'paid out (gbp)'}
+_BALANCE_HEADERS = {'balance', 'running balance', 'account balance'}
+
 
 
 def money(value):
@@ -514,6 +638,7 @@ def _insert_coa(book_id, openings=None, priors=None, watches=None):
             ),
         )
     conn.commit()
+    conn.close()
 
 
 def _clear_books(book_id):
@@ -528,7 +653,11 @@ def _clear_books(book_id):
     )
     conn.execute("DELETE FROM ledger_journals WHERE book_id = ?;", (book_id,))
     conn.execute("DELETE FROM ledger_nominals WHERE book_id = ?;", (book_id,))
+    conn.execute("DELETE FROM ledger_bank_lines WHERE book_id = ?;", (book_id,))
+    conn.execute("DELETE FROM ledger_statements WHERE book_id = ?;", (book_id,))
+    conn.execute("DELETE FROM ledger_ch_filings WHERE book_id = ?;", (book_id,))
     conn.commit()
+    conn.close()
 
 
 def _write_journal(book_id, journal_date, narration, lines, reference=None):
@@ -560,6 +689,7 @@ def _write_journal(book_id, journal_date, narration, lines, reference=None):
             (journal_id, code, description or '', money(debit), money(credit)),
         )
     conn.commit()
+    conn.close()
     return journal_id, None
 
 
@@ -1133,7 +1263,7 @@ def _home(accounts, org, tb, pl, bs, size):
         watch_items.append({
             'tone': tone,
             'title': title,
-            'detail': f"Private company deadline {due.strftime('%-d %B %Y') if due else org['filing_due']} (9 months after year end, unless first long period).",
+            'detail': f"Private company deadline {_uk_long(due) if due else org['filing_due']} (9 months after year end, unless first long period).",
         })
     if size['qualifies']:
         watch_items.append({
@@ -1261,6 +1391,689 @@ def year_end_pack(org, pl, bs, size):
     }
 
 
+def director_categories():
+    return [{'code': code, 'label': label} for code, label in DIRECTOR_CATEGORIES]
+
+
+def _norm_header(value):
+    return re.sub(r'\s+', ' ', str(value or '').strip().lower())
+
+
+def _parse_amount(value):
+    text = str(value or '').strip()
+    if not text or text in {'.', '-'}:
+        return 0.0
+    negative = text.startswith('(') and text.endswith(')')
+    text = text.replace('£', '').replace(',', '').replace('(', '').replace(')', '').strip()
+    if text.startswith('+'):
+        text = text[1:]
+    if text.endswith('-') and text[:-1].replace('.', '', 1).isdigit():
+        negative = True
+        text = text[:-1]
+    if text.startswith('-'):
+        negative = True
+        text = text[1:]
+    try:
+        amount = money(text)
+    except (TypeError, ValueError):
+        return 0.0
+    return money(-amount if negative else amount)
+
+
+def parse_uk_date(value):
+    text = str(value or '').strip()
+    if not text:
+        return None
+    iso = _parse_date(text[:10])
+    if iso:
+        return iso
+    for fmt in ('%d/%m/%Y', '%d/%m/%y', '%d-%m-%Y', '%d-%m-%y', '%d %b %Y', '%d %B %Y', '%d-%b-%Y', '%d-%b-%y'):
+        try:
+            return datetime.datetime.strptime(text[:24].strip(), fmt).date()
+        except ValueError:
+            continue
+    match = re.search(r'(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})', text)
+    if match:
+        day, month, year = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+        if year < 100:
+            year += 2000
+        try:
+            return datetime.date(year, month, day)
+        except ValueError:
+            return None
+    return None
+
+
+def categorise_line(description, amount):
+    text = str(description or '')
+    lowered = text.lower()
+    if re.search(r'\bopening balance\b', lowered):
+        return None
+    for pattern, code, label in CATEGORY_RULES:
+        if re.search(pattern, lowered):
+            return {'code': code, 'label': label, 'confidence': 'high', 'needs_review': 0}
+    if money(amount) > 0:
+        return {'code': '4000', 'label': 'Sales', 'confidence': 'low', 'needs_review': 1}
+    return {'code': '7600', 'label': 'Professional fees', 'confidence': 'low', 'needs_review': 1}
+
+
+def _pick_column(headers, names):
+    for index, header in enumerate(headers):
+        if header in names:
+            return index
+    return None
+
+
+def parse_statement_csv(text):
+    raw = (text or '').replace('\ufeff', '').strip()
+    if not raw:
+        return None, 'Paste or upload a bank statement first.'
+    sample = raw[:4096]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=',\t;|')
+    except csv.Error:
+        dialect = csv.excel
+    reader = csv.reader(io.StringIO(raw), dialect)
+    rows = [row for row in reader if any(str(cell).strip() for cell in row)]
+    if not rows:
+        return None, 'That file does not contain any statement rows.'
+    headers = [_norm_header(cell) for cell in rows[0]]
+    has_header = bool(set(headers) & (_DATE_HEADERS | _DESC_HEADERS | _AMOUNT_HEADERS | _IN_HEADERS | _OUT_HEADERS))
+    body = rows[1:] if has_header else rows
+    if not has_header:
+        headers = ['date', 'description', 'amount', 'balance'][:len(rows[0])]
+        body = rows
+        if len(rows[0]) >= 3 and parse_uk_date(rows[0][0]) is None:
+            headers = [_norm_header(cell) for cell in rows[0]]
+            body = rows[1:]
+            has_header = True
+    date_i = _pick_column(headers, _DATE_HEADERS)
+    desc_i = _pick_column(headers, _DESC_HEADERS)
+    amount_i = _pick_column(headers, _AMOUNT_HEADERS)
+    in_i = _pick_column(headers, _IN_HEADERS)
+    out_i = _pick_column(headers, _OUT_HEADERS)
+    bal_i = _pick_column(headers, _BALANCE_HEADERS)
+    if date_i is None:
+        date_i = 0
+    if desc_i is None:
+        desc_i = 1 if len(headers) > 1 else 0
+    parsed = []
+    opening = None
+    for row in body:
+        if date_i >= len(row):
+            continue
+        day = parse_uk_date(row[date_i])
+        description = str(row[desc_i] if desc_i is not None and desc_i < len(row) else '').strip()
+        if not day:
+            continue
+        if re.search(r'\bopening balance\b', description.lower()):
+            if bal_i is not None and bal_i < len(row):
+                opening = _parse_amount(row[bal_i])
+            continue
+        amount = 0.0
+        if in_i is not None or out_i is not None:
+            incoming = _parse_amount(row[in_i]) if in_i is not None and in_i < len(row) else 0.0
+            outgoing = _parse_amount(row[out_i]) if out_i is not None and out_i < len(row) else 0.0
+            amount = money(abs(incoming) - abs(outgoing))
+        elif amount_i is not None and amount_i < len(row):
+            amount = _parse_amount(row[amount_i])
+        elif len(row) > 2:
+            amount = _parse_amount(row[2])
+        if amount == 0:
+            continue
+        balance = _parse_amount(row[bal_i]) if bal_i is not None and bal_i < len(row) else None
+        parsed.append({
+            'txn_date': day.isoformat(),
+            'description': description or 'Bank transaction',
+            'amount': amount,
+            'balance': balance,
+        })
+    if not parsed:
+        return None, 'No dated bank transactions were found. Use a CSV with date, description and amount (or money in / money out).'
+    if opening is None and parsed[0].get('balance') is not None:
+        opening = money(parsed[0]['balance'] - parsed[0]['amount'])
+    closing = parsed[-1].get('balance')
+    if closing is None and opening is not None:
+        closing = money(opening + sum(row['amount'] for row in parsed))
+    return {
+        'lines': parsed,
+        'opening_balance': opening,
+        'closing_balance': closing,
+    }, None
+
+
+def parse_statement_pdf(payload):
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        try:
+            from PyPDF2 import PdfReader
+        except ImportError:
+            PdfReader = None
+    if not PdfReader:
+        return None, 'PDF reading is not available on this server. Export CSV from your bank.'
+    try:
+        reader = PdfReader(io.BytesIO(payload))
+        text = '\n'.join((page.extract_text() or '') for page in reader.pages)
+    except Exception:
+        return None, 'That PDF could not be read. Export CSV from your bank, or paste the transactions.'
+    if not text.strip():
+        return None, 'This PDF has no readable text (it may be a scan). Export CSV from your bank.'
+    parsed, error = parse_statement_csv(text)
+    if parsed:
+        return parsed, None
+    lines = []
+    opening = None
+    pattern = re.compile(
+        r'(?P<date>\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{2}-\d{2})\s+(?P<desc>.+?)\s+'
+        r'(?P<amount>-?£?[\d,]+\.\d{2})(?:\s+(?P<balance>-?£?[\d,]+\.\d{2}))?$'
+    )
+    for raw_line in text.splitlines():
+        row = raw_line.strip()
+        if not row:
+            continue
+        if re.search(r'\bopening balance\b', row.lower()):
+            amounts = re.findall(r'-?£?[\d,]+\.\d{2}', row)
+            if amounts:
+                opening = _parse_amount(amounts[-1])
+            continue
+        match = pattern.search(row)
+        if not match:
+            continue
+        day = parse_uk_date(match.group('date'))
+        if not day:
+            continue
+        amount = _parse_amount(match.group('amount'))
+        if amount == 0:
+            continue
+        lines.append({
+            'txn_date': day.isoformat(),
+            'description': match.group('desc').strip(),
+            'amount': amount,
+            'balance': _parse_amount(match.group('balance')) if match.group('balance') else None,
+        })
+    if not lines:
+        return None, error or 'No dated bank transactions were found in that PDF. Export CSV from your bank.'
+    if opening is None and lines[0].get('balance') is not None:
+        opening = money(lines[0]['balance'] - lines[0]['amount'])
+    closing = lines[-1].get('balance')
+    if closing is None and opening is not None:
+        closing = money(opening + sum(row['amount'] for row in lines))
+    return {'lines': lines, 'opening_balance': opening, 'closing_balance': closing}, None
+
+
+def _source_hash(txn_date, description, amount, index):
+    raw = f"{txn_date}|{str(description or '').strip().lower()}|{money(amount):.2f}|{index}"
+    return hashlib.sha256(raw.encode('utf-8')).hexdigest()[:40]
+
+
+def _delete_journal(journal_id):
+    if not journal_id:
+        return
+    conn = get_db()
+    conn.execute("DELETE FROM ledger_journal_lines WHERE journal_id = ?;", (journal_id,))
+    conn.execute("DELETE FROM ledger_journals WHERE id = ?;", (journal_id,))
+    conn.commit()
+    conn.close()
+
+
+def _post_bank_journal(book_id, line, category_code, description):
+    amount = money(line['amount'])
+    if amount == 0:
+        return None, 'Amount is zero.'
+    if amount > 0:
+        rows = (
+            ('1200', amount, 0.0, description),
+            (category_code, 0.0, amount, description),
+        )
+    else:
+        abs_amt = abs(amount)
+        rows = (
+            (category_code, abs_amt, 0.0, description),
+            ('1200', 0.0, abs_amt, description),
+        )
+    return _write_journal(
+        book_id,
+        line['txn_date'],
+        description[:180] or 'Bank transaction',
+        rows,
+        'BANK',
+    )
+
+
+def _ensure_books(company_id, user_id=None):
+    book = _book_for_company(company_id)
+    if book:
+        return book, None
+    ws, error = start_blank_books(company_id, user_id)
+    if error:
+        return None, error
+    return _book_for_company(company_id), None
+
+
+def import_statement(company_id, data, user_id=None, files=None):
+    company = _company_row(company_id, user_id)
+    if not company:
+        return None, 'Company not found'
+    files = files or {}
+    filename = str(data.get('filename') or '').strip()
+    source = 'csv'
+    parsed = None
+    error = None
+    upload = files.get('file') or files.get('statement') or files.get('csv')
+    csv_text = data.get('csv_text') or data.get('paste') or data.get('text') or ''
+    if upload:
+        filename = filename or upload.get('filename') or 'statement'
+        payload = upload.get('bytes') or b''
+        lower = filename.lower()
+        ctype = (upload.get('content_type') or '').lower()
+        if lower.endswith('.pdf') or ctype.endswith('pdf'):
+            source = 'pdf'
+            parsed, error = parse_statement_pdf(payload)
+        else:
+            csv_text = payload.decode('utf-8', errors='replace')
+    if parsed is None:
+        parsed, error = parse_statement_csv(csv_text)
+    if error:
+        return None, error
+    book, error = _ensure_books(company_id, user_id)
+    if error:
+        return None, error
+    opening = data.get('opening_balance')
+    if opening in (None, ''):
+        opening = parsed.get('opening_balance')
+    else:
+        opening = _parse_amount(opening)
+    closing = parsed.get('closing_balance')
+    lines = parsed['lines']
+    if opening is None:
+        opening = 0.0
+    first_date = lines[0]['txn_date']
+    last_date = lines[-1]['txn_date']
+    if money(opening) != 0:
+        bank_open = query_db(
+            "SELECT opening_debit, opening_credit FROM ledger_nominals WHERE book_id = ? AND code = '1200';",
+            (book['id'],),
+            one=True,
+        ) or {}
+        if money(bank_open.get('opening_debit')) == 0 and money(bank_open.get('opening_credit')) == 0:
+            execute_db(
+                "UPDATE ledger_nominals SET opening_debit = ? WHERE book_id = ? AND code = '1200';",
+                (money(opening), book['id']),
+            )
+            execute_db(
+                "UPDATE ledger_nominals SET opening_credit = ? WHERE book_id = ? AND code = '3100';",
+                (money(opening), book['id']),
+            )
+    existing = {
+        row['source_hash']
+        for row in (query_db("SELECT source_hash FROM ledger_bank_lines WHERE book_id = ?;", (book['id'],)) or [])
+    }
+    stmt_id = execute_db(
+        """
+        INSERT INTO ledger_statements (book_id, filename, source, opening_balance, closing_balance, row_count)
+        VALUES (?, ?, ?, ?, ?, ?);
+        """,
+        (book['id'], filename or 'pasted-statement.csv', source, money(opening) if opening is not None else None, money(closing) if closing is not None else None, len(lines)),
+    )
+    imported = 0
+    skipped = 0
+    for index, line in enumerate(lines):
+        digest = _source_hash(line['txn_date'], line['description'], line['amount'], index)
+        if digest in existing:
+            skipped += 1
+            continue
+        category = categorise_line(line['description'], line['amount'])
+        if not category:
+            skipped += 1
+            continue
+        journal_id, error = _post_bank_journal(book['id'], line, category['code'], line['description'])
+        if error:
+            return None, error
+        execute_db(
+            """
+            INSERT INTO ledger_bank_lines (
+                book_id, statement_id, txn_date, description, amount, balance,
+                category_code, category_label, confidence, needs_review, posted_journal_id, source_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            (
+                book['id'], stmt_id, line['txn_date'], line['description'], money(line['amount']),
+                money(line['balance']) if line.get('balance') is not None else None,
+                category['code'], category['label'], category['confidence'], int(category['needs_review']),
+                journal_id, digest,
+            ),
+        )
+        existing.add(digest)
+        imported += 1
+    current = _book_for_company(company_id)
+    if current and not current.get('sample_loaded'):
+        start = _parse_date(current.get('period_start'))
+        end = _parse_date(current.get('period_end'))
+        first = _parse_date(first_date)
+        last = _parse_date(last_date)
+        updates = []
+        values = []
+        if first and (not start or first < start):
+            updates.append('period_start=?')
+            values.append(first.isoformat())
+        if last and (not end or last > end):
+            updates.append('period_end=?')
+            values.append(last.isoformat())
+        if updates:
+            values.append(current['id'])
+            execute_db(
+                "UPDATE ledger_books SET " + ", ".join(updates) + ", updated_at=CURRENT_TIMESTAMP WHERE id=?;",
+                tuple(values),
+            )
+    ws, error = workspace(company_id, user_id)
+    if error:
+        return None, error
+    ws['import_result'] = {
+        'imported': imported,
+        'skipped': skipped,
+        'filename': filename or 'pasted-statement.csv',
+        'source': source,
+    }
+    return ws, None
+
+
+def recategorise_line(company_id, data, user_id=None):
+    company = _company_row(company_id, user_id)
+    if not company:
+        return None, 'Company not found'
+    book = _book_for_company(company_id)
+    if not book:
+        return None, 'Upload a bank statement first.'
+    line_id = _int_id(data.get('line_id') or data.get('id'))
+    code = str(data.get('category_code') or data.get('code') or '').strip()
+    if not line_id:
+        return None, 'Select a transaction to recategorise.'
+    labels = {item['code']: item['label'] for item in director_categories()}
+    if code not in labels:
+        return None, 'Choose a category from the list.'
+    row = query_db(
+        "SELECT * FROM ledger_bank_lines WHERE id = ? AND book_id = ?;",
+        (line_id, book['id']),
+        one=True,
+    )
+    if not row:
+        return None, 'Transaction not found.'
+    _delete_journal(row.get('posted_journal_id'))
+    journal_id, error = _post_bank_journal(
+        book['id'],
+        {'txn_date': row['txn_date'], 'amount': row['amount']},
+        code,
+        row['description'],
+    )
+    if error:
+        return None, error
+    execute_db(
+        """
+        UPDATE ledger_bank_lines
+        SET category_code=?, category_label=?, confidence='high', needs_review=0, posted_journal_id=?
+        WHERE id=?;
+        """,
+        (code, labels[code], journal_id, line_id),
+    )
+    return workspace(company_id, user_id)
+
+
+def confirm_bank_review(company_id, user_id=None):
+    company = _company_row(company_id, user_id)
+    if not company:
+        return None, 'Company not found'
+    book = _book_for_company(company_id)
+    if not book:
+        return None, 'Upload a bank statement first.'
+    execute_db("UPDATE ledger_bank_lines SET needs_review=0 WHERE book_id = ?;", (book['id'],))
+    return workspace(company_id, user_id)
+
+
+def load_sample_statement(company_id, user_id=None):
+    started, error = start_blank_books(company_id, user_id)
+    if error:
+        return None, error
+    return import_statement(
+        company_id,
+        {'csv_text': SAMPLE_STATEMENT_CSV, 'filename': 'sample-starling.csv', 'opening_balance': 12000},
+        user_id,
+    )
+
+
+def _bank_payload(book, accounts=None):
+    if not book:
+        return {
+            'statements': [],
+            'lines': [],
+            'reconciliation': None,
+            'needs_review': 0,
+            'imported': 0,
+            'categories': director_categories(),
+        }
+    statements = query_db(
+        """
+        SELECT id, filename, source, opening_balance, closing_balance, row_count, created_at
+        FROM ledger_statements WHERE book_id = ? ORDER BY id;
+        """,
+        (book['id'],),
+    ) or []
+    lines = query_db(
+        """
+        SELECT id, statement_id, txn_date, description, amount, balance, category_code, category_label,
+               confidence, needs_review, posted_journal_id
+        FROM ledger_bank_lines WHERE book_id = ? ORDER BY txn_date, id;
+        """,
+        (book['id'],),
+    ) or []
+    public_lines = []
+    for row in lines:
+        public_lines.append({
+            'id': int(row['id']),
+            'date': row['txn_date'],
+            'description': row['description'],
+            'amount': money(row['amount']),
+            'balance': money(row['balance']) if row['balance'] is not None else None,
+            'category_code': row['category_code'],
+            'category_label': row['category_label'] or '',
+            'confidence': row['confidence'],
+            'needs_review': bool(row['needs_review']),
+            'money_in': money(row['amount']) if money(row['amount']) > 0 else 0.0,
+            'money_out': money(-row['amount']) if money(row['amount']) < 0 else 0.0,
+        })
+    opening = None
+    stated_closing = None
+    if statements:
+        opening = statements[0].get('opening_balance')
+        stated_closing = statements[-1].get('closing_balance')
+    movement = money(sum(item['amount'] for item in public_lines))
+    summed_closing = money((opening or 0) + movement) if opening is not None else None
+    statement_agrees = None
+    if stated_closing is not None and summed_closing is not None:
+        statement_agrees = abs(stated_closing - summed_closing) < 0.02
+    ledger_bank = 0.0
+    if accounts:
+        ledger_bank = money(sum(a['ytd_net'] for a in accounts if a['account_type'] == 'BANK'))
+    target = stated_closing if stated_closing is not None else summed_closing
+    books_agrees = abs(ledger_bank - target) < 0.02 if target is not None else None
+    return {
+        'statements': [{
+            'id': int(row['id']),
+            'filename': row.get('filename') or '',
+            'source': row.get('source') or 'csv',
+            'opening_balance': money(row['opening_balance']) if row['opening_balance'] is not None else None,
+            'closing_balance': money(row['closing_balance']) if row['closing_balance'] is not None else None,
+            'row_count': int(row['row_count'] or 0),
+            'created_at': row.get('created_at'),
+        } for row in statements],
+        'lines': public_lines,
+        'reconciliation': {
+            'statement_opening': money(opening) if opening is not None else None,
+            'statement_closing': money(stated_closing) if stated_closing is not None else None,
+            'summed_closing': summed_closing,
+            'statement_agrees': statement_agrees,
+            'ledger_bank': ledger_bank,
+            'difference': money(ledger_bank - target) if target is not None else None,
+            'books_agrees': books_agrees,
+        },
+        'needs_review': sum(1 for item in public_lines if item['needs_review']),
+        'imported': len(public_lines),
+        'categories': director_categories(),
+    }
+
+
+def _filing_payload(book, company, ye=None):
+    filings = []
+    if book:
+        filings = query_db(
+            """
+            SELECT mode, status, receipt, message, pack_kind, created_at
+            FROM ledger_ch_filings WHERE book_id = ? ORDER BY id DESC LIMIT 8;
+            """,
+            (book['id'],),
+        ) or []
+    number = (book or {}).get('company_number') or (company or {}).get('company_number') or ''
+    has_auth = bool(str((company or {}).get('authentication_code') or '').strip())
+    needed = []
+    if not str(number).strip():
+        needed.append({
+            'key': 'company_number',
+            'label': 'Company number',
+            'reason': 'Needed on the accounts pack and for Companies House.',
+        })
+    if not has_auth:
+        needed.append({
+            'key': 'authentication_code',
+            'label': 'Companies House authentication code',
+            'reason': 'Needed only if you want this software to send the pack. You can still download it and upload it in WebFiling.',
+        })
+    presenter = bool(os.environ.get('CH_PRESENTER_ID') and (os.environ.get('CH_PRESENTER_AUTH') or os.environ.get('CH_XML_GATEWAY_PASSWORD')))
+    return {
+        'company_number': number,
+        'has_authentication_code': has_auth,
+        'has_presenter_credentials': presenter,
+        'webfiling_url': WEBFILING_URL,
+        'needed': needed,
+        'can_file_micro': bool(ye and ye.get('can_file_micro')),
+        'last_filings': [{
+            'mode': row.get('mode'),
+            'status': row.get('status'),
+            'receipt': row.get('receipt'),
+            'message': row.get('message'),
+            'pack_kind': row.get('pack_kind'),
+            'created_at': row.get('created_at'),
+        } for row in filings],
+    }
+
+
+def _ch_gateway_xml(company_number, auth_code, presenter_id, presenter_auth, period_end):
+    def esc(value):
+        return html_lib.escape(str(value or ''), quote=True)
+    parts = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<GovTalkMessage xmlns="http://www.govtalk.gov.uk/CM/envelope">',
+        '<Header><MessageDetails><Class>Accounts</Class><Qualifier>request</Qualifier><Function>submit</Function></MessageDetails>',
+        '<SenderDetails><IDAuthentication><SenderID>',
+        esc(presenter_id),
+        '</SenderID><Authentication><Method>clear</Method><Value>',
+        esc(presenter_auth),
+        '</Value></Authentication></IDAuthentication></SenderDetails></Header>',
+        '<GovTalkDetails><Keys><Key Type="CompanyNumber">',
+        esc(company_number),
+        '</Key><Key Type="AuthenticationCode">',
+        esc(auth_code),
+        '</Key></Keys></GovTalkDetails>',
+        '<Body><Accounts FilingType="MicroEntity" PeriodEnd="',
+        esc(period_end),
+        '">Brixen FRS 105 HTML pack. Not a validated TIS v5.9 iXBRL submission.</Accounts></Body>',
+        '</GovTalkMessage>',
+    ]
+    return ''.join(parts)
+
+
+def submit_companies_house(company_id, data, user_id=None):
+    company = _company_row(company_id, user_id)
+    if not company:
+        return None, 'Company not found'
+    book = _book_for_company(company_id)
+    if not book:
+        return None, 'Upload a bank statement and review the books before sending them to Companies House.'
+    pack_kind = str(data.get('pack_kind') or 'filleted').strip() or 'filleted'
+    if pack_kind not in ('members', 'filleted', 'ixbrl'):
+        pack_kind = 'filleted'
+    payload, error, _ctype, filename = export_pack(company_id, pack_kind, user_id)
+    if error:
+        return None, error
+    company_number = re.sub(r'\D', '', str(data.get('company_number') or book.get('company_number') or company.get('company_number') or ''))[:8]
+    auth_code = str(data.get('authentication_code') or company.get('authentication_code') or '').strip()
+    presenter_id = str(data.get('presenter_id') or os.environ.get('CH_PRESENTER_ID') or '').strip()
+    presenter_auth = str(
+        data.get('presenter_auth') or data.get('api_key') or os.environ.get('CH_PRESENTER_AUTH')
+        or os.environ.get('CH_XML_GATEWAY_PASSWORD') or ''
+    ).strip()
+    gateway = (os.environ.get('CH_XML_GATEWAY_URL') or CH_GATEWAY_DEFAULT).strip()
+    if auth_code and not str(company.get('authentication_code') or '').strip():
+        execute_db("UPDATE companies SET authentication_code = ? WHERE id = ?;", (auth_code, company_id))
+    if company_number and not str(book.get('company_number') or '').strip():
+        execute_db("UPDATE ledger_books SET company_number = ? WHERE id = ?;", (company_number, book['id']))
+    mode = 'sandbox'
+    status = 'accepted'
+    receipt = f"BRIXEN-SANDBOX-{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d%H%M%S')}-{book['id']}"
+    message = (
+        'No Companies House software-filing credentials on this server. '
+        'Download the Companies House pack and upload it in WebFiling. '
+        'This sandbox receipt is not a Companies House filing.'
+    )
+    live_ready = bool(company_number and auth_code and presenter_id and presenter_auth)
+    if live_ready and not gateway.startswith('mock:'):
+        xml = _ch_gateway_xml(company_number, auth_code, presenter_id, presenter_auth, book.get('period_end'))
+        try:
+            request = urllib.request.Request(
+                gateway,
+                data=xml.encode('utf-8'),
+                headers={'Content-Type': 'text/xml; charset=utf-8'},
+                method='POST',
+            )
+            with urllib.request.urlopen(request, timeout=12) as response:
+                body = response.read().decode('utf-8', errors='replace')
+            mode = 'live'
+            status = 'submitted'
+            receipt_match = re.search(r'(?:ReceiptNumber|CorrelationID)>([^<]+)', body)
+            receipt = (receipt_match.group(1).strip() if receipt_match else f'CH-{book["id"]}-{int(datetime.datetime.now(datetime.timezone.utc).timestamp())}')
+            message = f'Companies House gateway accepted the submission. Pack {filename} was sent.'
+        except Exception as exc:
+            mode = 'sandbox'
+            status = 'sandbox'
+            message = (
+                f'The Companies House gateway did not accept the filing ({exc}). '
+                'A sandbox receipt was issued instead. Download the pack and upload it in WebFiling.'
+            )
+    elif live_ready and gateway.startswith('mock:'):
+        mode = 'sandbox'
+        message = 'Mock Companies House gateway: sandbox receipt issued. Download the pack or use WebFiling for a real filing.'
+    execute_db(
+        """
+        INSERT INTO ledger_ch_filings (book_id, mode, status, receipt, message, pack_kind)
+        VALUES (?, ?, ?, ?, ?, ?);
+        """,
+        (book['id'], mode, status, receipt, message, pack_kind),
+    )
+    ws, error = workspace(company_id, user_id)
+    if error:
+        return None, error
+    ws['ch_submit'] = {
+        'mode': mode,
+        'status': status,
+        'receipt': receipt,
+        'message': message,
+        'pack_kind': pack_kind,
+        'filename': filename,
+        'webfiling_url': WEBFILING_URL,
+        'bytes': len(payload or b''),
+    }
+    return ws, None
+
+
 def workspace(company_id, user_id=None):
     ensure_ledger_schema()
     company = _company_row(company_id, user_id)
@@ -1288,6 +2101,9 @@ def workspace(company_id, user_id=None):
             'balance_sheet': None,
             'trial_balance': None,
             'year_end': None,
+            'bank': _bank_payload(None),
+            'filing': _filing_payload(None, company),
+            'next_step': 'upload',
         }, None
     accounts = _nominal_balances(book)
     org = _public_org(book)
@@ -1309,6 +2125,39 @@ def workspace(company_id, user_id=None):
     )
     ye = year_end_pack(org, pl, bs, size)
     home = _home(accounts, org, tb, pl, bs, size)
+    bank = _bank_payload(book, accounts)
+    filing = _filing_payload(book, company, ye)
+    if not bank['imported']:
+        next_step = 'upload'
+    elif bank['needs_review']:
+        next_step = 'review'
+    else:
+        next_step = 'file'
+    rec = bank.get('reconciliation') or {}
+    if rec.get('books_agrees') is False:
+        home['watch_items'] = list(home.get('watch_items') or [])
+        home['watch_items'].insert(0, {
+            'tone': 'warn',
+            'title': 'Bank does not yet match the statement',
+            'detail': f"Books show £{abs(rec.get('ledger_bank') or 0):,.2f}; the statement closes at £{abs(rec.get('statement_closing') or rec.get('summed_closing') or 0):,.2f}.",
+        })
+    elif rec.get('books_agrees'):
+        home['watch_items'] = list(home.get('watch_items') or [])
+        home['watch_items'].insert(0, {
+            'tone': 'ok',
+            'title': 'Bank matches the statement',
+            'detail': f"Closing balance £{(rec.get('ledger_bank') or 0):,.2f}.",
+        })
+    if bank['needs_review']:
+        home['watch_items'] = list(home.get('watch_items') or [])
+        home['watch_items'].insert(0, {
+            'tone': 'warn',
+            'title': f"{bank['needs_review']} transaction(s) need a quick look",
+            'detail': 'Open Review and confirm each category before you file.',
+        })
+    home['next_step'] = next_step
+    home['needs_review'] = bank['needs_review']
+    home['imported'] = bank['imported']
     return {
         'status': 'success',
         'empty': False,
@@ -1321,6 +2170,9 @@ def workspace(company_id, user_id=None):
         'balance_sheet': bs,
         'trial_balance': tb,
         'year_end': ye,
+        'bank': bank,
+        'filing': filing,
+        'next_step': next_step,
         'coa_types': sorted({row[2] for row in UK_COA}),
     }, None
 
@@ -1516,6 +2368,9 @@ def route(path, method, user, body=None, query=None):
         return None
     body = body or {}
     query = query or {}
+    files = {}
+    if isinstance(body, dict):
+        files = body.pop('_files', None) or {}
     is_admin = path.startswith('/api/admin/accounts-file')
     if not user:
         return ('json', '401 Unauthorized', {'status': 'error', 'message': 'Not authenticated'})
@@ -1549,6 +2404,36 @@ def route(path, method, user, body=None, query=None):
     action = parts[4] if len(parts) > 4 else ''
     if action == 'sample' and method == 'POST':
         ws, error = load_sample_books(company_id, owner_filter)
+        if error:
+            status = '404 Not Found' if error == 'Company not found' else '400 Bad Request'
+            return ('json', status, {'status': 'error', 'message': error})
+        return ('json', '200 OK', ws)
+    if action in ('sample-statement', 'sample_statement') and method == 'POST':
+        ws, error = load_sample_statement(company_id, owner_filter)
+        if error:
+            status = '404 Not Found' if error == 'Company not found' else '400 Bad Request'
+            return ('json', status, {'status': 'error', 'message': error})
+        return ('json', '200 OK', ws)
+    if action in ('import-statement', 'import_statement') and method == 'POST':
+        ws, error = import_statement(company_id, body, owner_filter, files=files)
+        if error:
+            status = '404 Not Found' if error == 'Company not found' else '400 Bad Request'
+            return ('json', status, {'status': 'error', 'message': error})
+        return ('json', '200 OK', ws)
+    if action in ('recategorise', 'recategorize') and method == 'POST':
+        ws, error = recategorise_line(company_id, body, owner_filter)
+        if error:
+            status = '404 Not Found' if error == 'Company not found' else '400 Bad Request'
+            return ('json', status, {'status': 'error', 'message': error})
+        return ('json', '200 OK', ws)
+    if action in ('confirm-review', 'confirm_review') and method == 'POST':
+        ws, error = confirm_bank_review(company_id, owner_filter)
+        if error:
+            status = '404 Not Found' if error == 'Company not found' else '400 Bad Request'
+            return ('json', status, {'status': 'error', 'message': error})
+        return ('json', '200 OK', ws)
+    if action in ('submit-companies-house', 'submit_companies_house') and method == 'POST':
+        ws, error = submit_companies_house(company_id, body, owner_filter)
         if error:
             status = '404 Not Found' if error == 'Company not found' else '400 Bad Request'
             return ('json', status, {'status': 'error', 'message': error})

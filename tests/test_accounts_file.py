@@ -145,7 +145,112 @@ class TestAccountsFile(unittest.TestCase):
     def test_09_static_accounts_script(self):
         st, hd, body = make_request('/static/js/accounts-file.js')
         self.assertEqual(st, '200 OK')
-        self.assertIn('Load sample organisation', body if isinstance(body, str) else body.decode('utf-8'))
+        text = body if isinstance(body, str) else body.decode('utf-8')
+        self.assertIn('Load sample organisation', text)
+        self.assertIn('File at Companies House', text)
+        self.assertIn('Bank statement', text)
+
+    def test_10_sample_statement_books_and_rec(self):
+        st, hd, res = make_request(
+            f'/api/admin/accounts-file/{self.company_id}/sample-statement',
+            method='POST',
+            body={},
+            cookie=self._admin_cookie(),
+        )
+        self.assertEqual(st, '200 OK', res)
+        self.assertFalse(res.get('empty'))
+        bank = res.get('bank') or {}
+        self.assertGreaterEqual(bank.get('imported') or 0, 10)
+        rec = bank.get('reconciliation') or {}
+        self.assertTrue(res['trial_balance']['agrees'], res['trial_balance'])
+        self.assertTrue(res['balance_sheet']['balances'], res['balance_sheet'])
+        self.assertAlmostEqual(rec.get('statement_closing') or 0, 15808.00, places=2)
+        self.assertAlmostEqual(rec.get('ledger_bank') or 0, 15808.00, places=2)
+        self.assertTrue(rec.get('books_agrees'), rec)
+        self.assertTrue(rec.get('statement_agrees'), rec)
+        self.assertAlmostEqual(res['profit_and_loss']['profit'], 3808.00, places=2)
+        self.assertTrue(any(line['category_code'] == '4000' for line in bank.get('lines') or []))
+
+    def test_11_csv_paste_and_recategorise(self):
+        st, hd, res = make_request(
+            f'/api/admin/accounts-file/{self.company_id}/start',
+            method='POST',
+            body={},
+            cookie=self._admin_cookie(),
+        )
+        self.assertEqual(st, '200 OK', res)
+        csv_text = (
+            'Date,Description,Amount,Balance\n'
+            '01/04/2026,Opening balance,0,1000.00\n'
+            '02/04/2026,Stripe Payout,250.00,1250.00\n'
+            '03/04/2026,Mystery shop,-40.00,1210.00\n'
+        )
+        st, hd, res = make_request(
+            f'/api/admin/accounts-file/{self.company_id}/import-statement',
+            method='POST',
+            body={'csv_text': csv_text, 'filename': 'mini.csv', 'opening_balance': 1000},
+            cookie=self._admin_cookie(),
+        )
+        self.assertEqual(st, '200 OK', res)
+        lines = (res.get('bank') or {}).get('lines') or []
+        mystery = next((row for row in lines if 'Mystery' in (row.get('description') or '')), None)
+        self.assertIsNotNone(mystery)
+        self.assertTrue(mystery.get('needs_review'))
+        st, hd, res = make_request(
+            f'/api/admin/accounts-file/{self.company_id}/recategorise',
+            method='POST',
+            body={'line_id': mystery['id'], 'category_code': '7500'},
+            cookie=self._admin_cookie(),
+        )
+        self.assertEqual(st, '200 OK', res)
+        updated = next(row for row in res['bank']['lines'] if row['id'] == mystery['id'])
+        self.assertEqual(updated['category_code'], '7500')
+        self.assertFalse(updated['needs_review'])
+        self.assertTrue(res['trial_balance']['agrees'])
+
+    def test_12_submit_companies_house_sandbox(self):
+        st, hd, res = make_request(
+            f'/api/admin/accounts-file/{self.company_id}/submit-companies-house',
+            method='POST',
+            body={'pack_kind': 'filleted'},
+            cookie=self._admin_cookie(),
+        )
+        self.assertEqual(st, '200 OK', res)
+        submit = res.get('ch_submit') or {}
+        self.assertEqual(submit.get('mode'), 'sandbox')
+        self.assertTrue(str(submit.get('receipt') or '').startswith('BRIXEN-SANDBOX-'))
+        self.assertTrue((res.get('filing') or {}).get('last_filings'))
+        self.assertIn('ewf.companieshouse.gov.uk', (res.get('filing') or {}).get('webfiling_url') or '')
+
+    def test_13_pdf_statement_when_text_is_present(self):
+        from fpdf import FPDF
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font('Helvetica', size=10)
+        for row in (
+            '01/05/2026 Opening balance 500.00',
+            '02/05/2026 Stripe Payout 100.00 600.00',
+            '03/05/2026 Office rent -80.00 520.00',
+        ):
+            pdf.cell(0, 8, row)
+            pdf.ln()
+        payload = pdf.output()
+        if isinstance(payload, bytearray):
+            payload = bytes(payload)
+        parsed, error = accounts_file.parse_statement_pdf(payload)
+        self.assertIsNone(error, error)
+        self.assertGreaterEqual(len(parsed['lines']), 2)
+        self.assertTrue(any('Stripe' in line['description'] for line in parsed['lines']))
+
+    def test_14_missing_file_asks_for_statement(self):
+        st, hd, res = make_request(
+            f'/api/admin/accounts-file/{self.company_id}/import-statement',
+            method='POST',
+            body={'csv_text': ''},
+            cookie=self._admin_cookie(),
+        )
+        self.assertEqual(st, '400 Bad Request')
+        self.assertIn('statement', (res.get('message') or '').lower())
 
 
 if __name__ == '__main__':
