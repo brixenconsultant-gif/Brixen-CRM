@@ -317,6 +317,14 @@ class TestAccountsFile(unittest.TestCase):
         parsed, error = accounts_file.parse_bank_text(wise_sort)
         self.assertIsNone(error, error)
         self.assertTrue(all(not row['txn_date'].startswith('2001') for row in parsed['lines']))
+        self.assertTrue(accounts_file.is_statement_document({
+            'name': 'Monzo_bank_statement_2026-08-01-2026-08-10_5996.pdf',
+            'category': 'Order Documents',
+        }))
+        self.assertTrue(accounts_file.is_statement_document({
+            'name': 'statement_133367598_GBP_2025-09-12_2026-09-10.pdf',
+            'category': 'Order Documents',
+        }))
 
     def test_16_portal_document_becomes_books(self):
         import os

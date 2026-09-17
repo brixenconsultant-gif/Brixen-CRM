@@ -1914,13 +1914,14 @@ def _is_image_statement(name, file_type=''):
 def is_statement_document(doc):
     category = str((doc or {}).get('category') or '').lower()
     name = str((doc or {}).get('name') or '').lower()
+    slug = re.sub(r'[^a-z0-9]+', ' ', name)
     if 'bank statement' in category or category in ('bank statement', 'statement'):
         return True
-    if 'bank statement' in name:
+    if 'bank statement' in name or 'bank statement' in slug:
         return True
-    if re.search(r'\b(monzo|starling|revolut|wise|tide|barclays|hsbc|lloyds|natwest|halifax|santander|bos)\b', name) and 'statement' in name:
+    if re.search(r'\b(monzo|starling|revolut|wise|tide|barclays|hsbc|lloyds|natwest|halifax|santander|bos)\b', slug) and 'statement' in slug:
         return True
-    if re.search(r'\bstatement\b', name) and re.search(r'\.(pdf|csv|txt|jpg|jpeg|png)$', name):
+    if 'statement' in slug and re.search(r'\.(pdf|csv|txt|jpg|jpeg|png)$', name):
         return True
     if name.endswith('.csv'):
         return True
@@ -1966,8 +1967,9 @@ def _list_statement_documents(company_id, user_id=None):
     def _statement_rank(row):
         image = 1 if _is_image_statement(row.get('name'), row.get('file_type')) else 0
         path = _resolve_document_path(row.get('file_path'))
+        missing = 0 if path and path.is_file() else 1
         huge = 1 if path and path.stat().st_size > 400_000 else 0
-        return (image, huge, -int(row['id']))
+        return (missing, image, huge, -int(row['id']))
 
     out.sort(key=_statement_rank)
     return out
