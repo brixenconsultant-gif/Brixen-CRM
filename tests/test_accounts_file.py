@@ -367,6 +367,28 @@ class TestAccountsFile(unittest.TestCase):
         self.assertTrue(res.get('company'))
         self.assertTrue(res.get('empty'))
 
+    def test_18_import_after_reset_does_not_500(self):
+        st, hd, res = make_request(
+            f'/api/admin/accounts-file/{self.company_id}/start',
+            method='POST',
+            body={},
+            cookie=self._admin_cookie(),
+        )
+        self.assertEqual(st, '200 OK', res)
+        csv_text = (
+            'Date,Description,Amount,Balance\n'
+            '02/06/2026,Stripe Payout,150.00,1150.00\n'
+            '03/06/2026,Office rent,-50.00,1100.00\n'
+        )
+        st, hd, res = make_request(
+            f'/api/admin/accounts-file/{self.company_id}/import-statement',
+            method='POST',
+            body={'csv_text': csv_text, 'filename': 'after-reset.csv', 'opening_balance': 1000},
+            cookie=self._admin_cookie(),
+        )
+        self.assertEqual(st, '200 OK', res)
+        self.assertGreaterEqual((res.get('import_result') or {}).get('imported') or 0, 2)
+
 
 if __name__ == '__main__':
     unittest.main()

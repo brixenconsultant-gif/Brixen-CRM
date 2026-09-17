@@ -19,7 +19,32 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import sqlite3
+
+import db as db_mod
 from db import execute_db, get_db, query_db
+
+
+def _release(conn):
+    """Do not close the live thread-local connection. Local tests open a fresh one."""
+    if conn is None or hasattr(db_mod, 'close_db'):
+        return
+    try:
+        conn.close()
+    except Exception:
+        pass
+
+
+def _db():
+    conn = get_db()
+    try:
+        conn.execute('SELECT 1')
+        return conn
+    except sqlite3.ProgrammingError:
+        closer = getattr(db_mod, 'close_db', None)
+        if callable(closer):
+            closer()
+        return get_db()
 
 LEDGER_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS ledger_books (
@@ -518,9 +543,10 @@ def filing_deadline(period_end, incorporation_date=None, is_first=False, period_
 
 
 def ensure_ledger_schema():
-    conn = get_db()
+    conn = _db()
     conn.executescript(LEDGER_SCHEMA_SQL)
     conn.commit()
+    _release(conn)
 
 
 def _company_row(company_id, user_id=None):
@@ -622,7 +648,7 @@ def _insert_coa(book_id, openings=None, priors=None, watches=None):
     openings = openings or {}
     priors = priors or {}
     watches = watches or {}
-    conn = get_db()
+    conn = _db()
     for code, name, atype, pl, bs, watched in UK_COA:
         od, oc = openings.get(code, (0.0, 0.0))
         pd, pc = priors.get(code, (0.0, 0.0))
@@ -639,11 +665,11 @@ def _insert_coa(book_id, openings=None, priors=None, watches=None):
             ),
         )
     conn.commit()
-    conn.close()
+    _release(conn)
 
 
 def _clear_books(book_id):
-    conn = get_db()
+    conn = _db()
     conn.execute(
         """
         DELETE FROM ledger_journal_lines WHERE journal_id IN (
@@ -658,7 +684,7 @@ def _clear_books(book_id):
     conn.execute("DELETE FROM ledger_statements WHERE book_id = ?;", (book_id,))
     conn.execute("DELETE FROM ledger_ch_filings WHERE book_id = ?;", (book_id,))
     conn.commit()
-    conn.close()
+    _release(conn)
 
 
 def _write_journal(book_id, journal_date, narration, lines, reference=None):
@@ -672,7 +698,7 @@ def _write_journal(book_id, journal_date, narration, lines, reference=None):
     for line in lines:
         if line[0] not in codes:
             return None, f'Nominal {line[0]} is not on this chart of accounts.'
-    conn = get_db()
+    conn = _db()
     cur = conn.execute(
         """
         INSERT INTO ledger_journals (book_id, journal_date, narration, reference)
@@ -690,7 +716,7 @@ def _write_journal(book_id, journal_date, narration, lines, reference=None):
             (journal_id, code, description or '', money(debit), money(credit)),
         )
     conn.commit()
-    conn.close()
+    _release(conn)
     return journal_id, None
 
 
@@ -719,10 +745,9 @@ def start_blank_books(company_id, user_id=None):
         }),
         **period,
     }
-    conn = get_db()
     if existing:
         _clear_books(existing['id'])
-        conn.execute(
+        execute_db(
             """
             UPDATE ledger_books SET
                 registered_name=?, company_number=?, registered_office=?, directors_json=?,
@@ -739,7 +764,6 @@ def start_blank_books(company_id, user_id=None):
                 payload['exclusions_json'], payload['notes_json'], existing['id'],
             ),
         )
-        conn.commit()
         book_id = existing['id']
     else:
         book_id = execute_db(
@@ -781,13 +805,12 @@ def load_sample_books(company_id, user_id=None):
         return None, 'Company not found'
     ensure_ledger_schema()
     existing = _book_for_company(company_id)
-    conn = get_db()
     directors_json = json.dumps(SAMPLE_ORG['directors'])
     notes_json = json.dumps(SAMPLE_ORG['notes'])
     exclusions_json = json.dumps({key: False for key, _ in EXCLUSION_FIELDS})
     if existing:
         _clear_books(existing['id'])
-        conn.execute(
+        execute_db(
             """
             UPDATE ledger_books SET
                 registered_name=?, company_number=?, registered_office=?, directors_json=?,
@@ -804,7 +827,6 @@ def load_sample_books(company_id, user_id=None):
                 existing['id'],
             ),
         )
-        conn.commit()
         book_id = existing['id']
     else:
         book_id = execute_db(
@@ -1842,11 +1864,11 @@ def _source_hash(txn_date, description, amount, index):
 def _delete_journal(journal_id):
     if not journal_id:
         return
-    conn = get_db()
+    conn = _db()
     conn.execute("DELETE FROM ledger_journal_lines WHERE journal_id = ?;", (journal_id,))
     conn.execute("DELETE FROM ledger_journals WHERE id = ?;", (journal_id,))
     conn.commit()
-    conn.close()
+    _release(conn)
 
 
 def _post_bank_journal(book_id, line, category_code, description):
