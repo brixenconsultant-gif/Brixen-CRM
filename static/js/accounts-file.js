@@ -1,4 +1,4 @@
-/* Accounts / Year end — simple director path: traded, dormant, HMRC. */
+/* Accounts File — lives inside the Accountancy tab (traded / dormant / HMRC). */
 (function () {
     const SCREENS = [
         { id: 'home', group: 'Start', label: 'Start' },
@@ -147,21 +147,17 @@
         return state.workspace;
     }
 
-    function yearEndViewName() {
-        return state.scope === 'admin' ? 'admin-year-end' : 'client-year-end';
-    }
-
-    function accountsViewName() {
-        return state.scope === 'admin' ? 'admin-accounts' : 'client-accounts';
+    function portalViewName() {
+        return state.scope === 'admin' ? 'admin-accountancy' : 'client-accountancy';
     }
 
     function setScreen(screen) {
         state.screen = screen || 'home';
-        const viewName = (screen === 'file' || screen === 'year-end' || screen === 'hmrc') ? yearEndViewName() : accountsViewName();
-        if (typeof syncViewHash === 'function') syncViewHash(viewName);
+        setAccountancyPane(state.scope, 'accounts', { skipLoad: true });
+        if (typeof syncViewHash === 'function') syncViewHash(portalViewName());
         document.querySelectorAll('.nav-item, .top-menu-item').forEach((item) => {
             const view = item.getAttribute('data-view');
-            item.classList.toggle('active', view === viewName);
+            item.classList.toggle('active', view === portalViewName());
         });
         render();
     }
@@ -258,11 +254,11 @@
             if (!buttons) return '';
             return `<div class="accounts-file-nav-group"><span>${h(group)}</span><div class="portfolio-filter-bar accounts-file-tabs" role="tablist" aria-label="${h(group)}">${buttons}</div></div>`;
         }).join('');
-        const title = (state.screen === 'file' || state.screen === 'year-end' || state.screen === 'hmrc') ? 'Year end' : 'Accounts';
+        const title = 'Accounts';
         return `
             <div class="page-title-row accounts-file-head">
                 <div class="page-title-text">
-                    <h1>${title}</h1>
+                    <h2>${title}</h2>
                     <p>${h(headerMeta())}</p>
                 </div>
                 <section class="accounts-company-picker filter-group" aria-label="Choose company">
@@ -1249,10 +1245,11 @@
         }
     }
 
-    window.loadAccountsFileView = async function loadAccountsFileView(scope, screen) {
+    async function loadAccountsFileView(scope, screen) {
         state.scope = scope === 'admin' ? 'admin' : 'client';
         if (screen === 'year-end') state.screen = 'file';
         else state.screen = screen || 'home';
+        setAccountancyPane(state.scope, 'accounts', { skipLoad: true });
         state.loading = true;
         state.error = '';
         state.notice = '';
@@ -1266,54 +1263,177 @@
             state.loading = false;
             render();
         }
-    };
+    }
+    window.loadAccountsFileView = loadAccountsFileView;
+
+    function accountancyViewId(scope) {
+        return scope === 'admin' ? 'view-admin-accountancy' : 'view-client-accountancy';
+    }
+
+    function hideLegacyAccountsNav() {
+        ['client-accounts', 'client-year-end', 'admin-accounts', 'admin-year-end'].forEach((view) => {
+            document.querySelectorAll(`[data-view="${view}"]`).forEach((el) => {
+                el.hidden = true;
+                el.style.display = 'none';
+            });
+        });
+        ['view-client-accounts', 'view-admin-accounts', 'view-client-year-end', 'view-admin-year-end'].forEach((id) => {
+            const panel = document.getElementById(id);
+            if (!panel) return;
+            const root = panel.querySelector('.accounts-file-root');
+            if (root) return;
+            panel.remove();
+        });
+    }
+
+    function ensureAccountancyChrome(scope) {
+        scope = scope === 'admin' ? 'admin' : 'client';
+        const view = document.getElementById(accountancyViewId(scope));
+        if (!view) return;
+        const prefix = scope;
+        if (!view.querySelector('.accountancy-inner-tabs')) {
+            const tabs = document.createElement('div');
+            tabs.className = 'portfolio-filter-bar accountancy-inner-tabs';
+            tabs.setAttribute('role', 'tablist');
+            tabs.setAttribute('aria-label', 'Accountancy sections');
+            tabs.innerHTML = `
+                <button type="button" class="is-active" data-accountancy-pane="accounts" data-accountancy-scope="${scope}">Accounts</button>
+                <button type="button" data-accountancy-pane="filing" data-accountancy-scope="${scope}">Filing status</button>`;
+            tabs.addEventListener('click', (event) => {
+                const btn = event.target.closest('[data-accountancy-pane]');
+                if (!btn || btn.tagName !== 'BUTTON') return;
+                event.preventDefault();
+                setAccountancyPane(scope, btn.getAttribute('data-accountancy-pane'));
+            });
+            const titleRow = view.querySelector('.page-title-row');
+            if (titleRow && titleRow.nextSibling) view.insertBefore(tabs, titleRow.nextSibling);
+            else view.insertBefore(tabs, view.firstChild);
+        }
+        let accountsPane = document.getElementById(`${prefix}-accountancy-pane-accounts`);
+        if (!accountsPane) {
+            accountsPane = document.createElement('div');
+            accountsPane.id = `${prefix}-accountancy-pane-accounts`;
+            accountsPane.className = 'accountancy-pane';
+            view.appendChild(accountsPane);
+        }
+        let filingPane = document.getElementById(`${prefix}-accountancy-pane-filing`);
+        if (!filingPane) {
+            filingPane = document.createElement('div');
+            filingPane.id = `${prefix}-accountancy-pane-filing`;
+            filingPane.className = 'accountancy-pane';
+            filingPane.hidden = true;
+            const stats = view.querySelector('.accountancy-stats');
+            const err = document.getElementById(scope === 'admin' ? 'adm-accountancy-error' : `${prefix}-accountancy-error`);
+            const table = Array.from(view.querySelectorAll('.data-table-container')).find((el) => !accountsPane.contains(el));
+            [stats, err, table].forEach((el) => { if (el) filingPane.appendChild(el); });
+            view.appendChild(filingPane);
+        }
+        let root = document.getElementById(`${prefix}-accounts-root`);
+        if (!root) {
+            root = document.createElement('div');
+            root.id = `${prefix}-accounts-root`;
+            root.className = 'accounts-file-root';
+            root.setAttribute('data-scope', scope);
+        }
+        if (root.parentElement !== accountsPane) accountsPane.appendChild(root);
+        const leftover = document.getElementById(`view-${prefix}-accounts`);
+        if (leftover && leftover !== view) leftover.remove();
+    }
+
+    function setAccountancyPane(scope, pane, options) {
+        scope = scope === 'admin' ? 'admin' : 'client';
+        pane = pane === 'filing' ? 'filing' : 'accounts';
+        const opts = options || {};
+        ensureAccountancyChrome(scope);
+        hideLegacyAccountsNav();
+        const view = document.getElementById(accountancyViewId(scope));
+        if (!view) return;
+        view.querySelectorAll('.accountancy-inner-tabs [data-accountancy-pane]').forEach((btn) => {
+            btn.classList.toggle('is-active', btn.getAttribute('data-accountancy-pane') === pane);
+        });
+        const accountsPane = document.getElementById(`${scope}-accountancy-pane-accounts`);
+        const filingPane = document.getElementById(`${scope}-accountancy-pane-filing`);
+        if (accountsPane) accountsPane.hidden = pane !== 'accounts';
+        if (filingPane) filingPane.hidden = pane !== 'filing';
+        if (pane === 'accounts' && !opts.skipLoad) {
+            const screen = opts.screen || state.screen || 'home';
+            loadAccountsFileView(scope, screen);
+        }
+    }
+    window.setAccountancyPane = setAccountancyPane;
+
+    function remapLegacyAccountsView(viewName) {
+        if (viewName === 'client-accounts' || viewName === 'client-year-end') return 'client-accountancy';
+        if (viewName === 'admin-accounts' || viewName === 'admin-year-end') return 'admin-accountancy';
+        return viewName;
+    }
 
     function installPortalHooks() {
         if (window.__brixenAccountsFileHooks) return;
         window.__brixenAccountsFileHooks = true;
         const access = ['Accountancy', 'Accounts', 'Compliance'];
         if (typeof VIEW_HASH === 'object' && VIEW_HASH) {
-            VIEW_HASH['client-accounts'] = 'accounts';
-            VIEW_HASH['client-year-end'] = 'year-end';
-            VIEW_HASH['admin-accounts'] = 'admin-accounts';
-            VIEW_HASH['admin-year-end'] = 'admin-year-end';
+            VIEW_HASH['client-accounts'] = 'accountancy';
+            VIEW_HASH['client-year-end'] = 'accountancy';
+            VIEW_HASH['admin-accounts'] = 'admin-accountancy';
+            VIEW_HASH['admin-year-end'] = 'admin-accountancy';
         }
         if (typeof HASH_VIEW === 'object' && HASH_VIEW) {
-            HASH_VIEW['accounts'] = 'client-accounts';
-            HASH_VIEW['year-end'] = 'client-year-end';
-            HASH_VIEW['admin-accounts'] = 'admin-accounts';
-            HASH_VIEW['admin-year-end'] = 'admin-year-end';
-            HASH_VIEW['client-accounts'] = 'client-accounts';
-            HASH_VIEW['client-year-end'] = 'client-year-end';
+            HASH_VIEW['accounts'] = 'client-accountancy';
+            HASH_VIEW['year-end'] = 'client-accountancy';
+            HASH_VIEW['admin-accounts'] = 'admin-accountancy';
+            HASH_VIEW['admin-year-end'] = 'admin-accountancy';
+            HASH_VIEW['client-accounts'] = 'client-accountancy';
+            HASH_VIEW['client-year-end'] = 'client-accountancy';
         }
         if (typeof VIEW_ACCESS === 'object' && VIEW_ACCESS) {
+            VIEW_ACCESS['admin-accountancy'] = access;
             VIEW_ACCESS['admin-accounts'] = access;
             VIEW_ACCESS['admin-year-end'] = access;
         }
+        ensureAccountancyChrome('client');
+        ensureAccountancyChrome('admin');
+        hideLegacyAccountsNav();
         const origSetPanel = window.setActiveViewPanel;
         if (typeof origSetPanel === 'function' && !origSetPanel.__accountsFilePatched) {
             const wrappedSet = function (viewName) {
-                if (viewName === 'client-year-end') viewName = 'client-accounts';
-                if (viewName === 'admin-year-end') viewName = 'admin-accounts';
-                return origSetPanel(viewName);
+                return origSetPanel(remapLegacyAccountsView(viewName));
             };
             wrappedSet.__accountsFilePatched = true;
             window.setActiveViewPanel = wrappedSet;
         }
         const origSwitch = window.switchView;
-        const origLoadsAccounts = typeof origSwitch === 'function' && /loadAccountsFileView/.test(Function.prototype.toString.call(origSwitch));
-        if (typeof origSwitch === 'function' && !origSwitch.__accountsFilePatched && !origLoadsAccounts) {
-            const wrappedSwitch = function (viewName, options) {
-                const result = origSwitch.apply(this, arguments);
-                const opened = (typeof activeView === 'string' && activeView) ? activeView : viewName;
-                if (opened === 'client-accounts') loadAccountsFileView('client', 'home');
-                else if (opened === 'client-year-end') loadAccountsFileView('client', 'year-end');
-                else if (opened === 'admin-accounts') loadAccountsFileView('admin', 'home');
-                else if (opened === 'admin-year-end') loadAccountsFileView('admin', 'year-end');
+        const origHandlesPane = typeof origSwitch === 'function' && /setAccountancyPane/.test(Function.prototype.toString.call(origSwitch));
+        if (typeof origSwitch === 'function' && !origSwitch.__accountsFilePatched) {
+            const wrappedSwitch = function (viewName) {
+                const args = Array.prototype.slice.call(arguments);
+                let screen = 'home';
+                if (viewName === 'client-year-end' || viewName === 'admin-year-end') screen = 'file';
+                const mapped = remapLegacyAccountsView(viewName);
+                args[0] = mapped;
+                const result = origSwitch.apply(this, args);
+                if (!origHandlesPane) {
+                    if (mapped === 'client-accountancy') {
+                        setAccountancyPane('client', 'accounts', { screen: screen });
+                    } else if (mapped === 'admin-accountancy') {
+                        setAccountancyPane('admin', 'accounts', { screen: screen });
+                    }
+                }
+                hideLegacyAccountsNav();
                 return result;
             };
             wrappedSwitch.__accountsFilePatched = true;
             window.switchView = wrappedSwitch;
+        }
+        const origApply = window.applyPortalAccessNav;
+        if (typeof origApply === 'function' && !origApply.__accountsFilePatched) {
+            const wrappedApply = function () {
+                const result = origApply.apply(this, arguments);
+                hideLegacyAccountsNav();
+                return result;
+            };
+            wrappedApply.__accountsFilePatched = true;
+            window.applyPortalAccessNav = wrappedApply;
         }
         if (typeof applyPortalAccessNav === 'function') {
             try { applyPortalAccessNav(); } catch (err) { /* nav filter runs again after login */ }

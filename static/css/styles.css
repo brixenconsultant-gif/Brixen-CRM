@@ -6845,6 +6845,21 @@ input[type="number"], input[type="date"], input[type="search"], textarea, .selec
     flex-wrap: wrap;
 }
 
+.accountancy-inner-tabs {
+    margin: 0 0 16px;
+}
+
+.accountancy-pane[hidden] {
+    display: none !important;
+}
+
+.accounts-file-head h2 {
+    margin: 0;
+    font-size: 1.15rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+}
+
 .accounts-company-picker,
 .accounts-file-root .page-title-row.accounts-file-head .accounts-company-picker {
     display: flex;

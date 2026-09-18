@@ -37,11 +37,20 @@ class TestAccountsFile(unittest.TestCase):
     def test_01_portal_shell_has_accounts_nav(self):
         status, headers, body = make_request('/')
         self.assertEqual(status, '200 OK')
-        self.assertIn('data-view="client-accounts"', body)
-        self.assertIn('data-view="client-year-end"', body)
-        self.assertIn('data-view="admin-accounts"', body)
-        self.assertIn('data-view="admin-year-end"', body)
+        self.assertIn('data-view="client-accountancy"', body)
+        self.assertIn('data-view="admin-accountancy"', body)
+        self.assertIn('id="client-accounts-root"', body)
+        self.assertIn('id="admin-accounts-root"', body)
+        self.assertIn('client-accountancy-pane-accounts', body)
+        self.assertIn('admin-accountancy-pane-accounts', body)
+        self.assertIn('setAccountancyPane', body)
+        self.assertIn('data-accountancy-pane="accounts"', body)
+        self.assertIn('data-accountancy-pane="filing"', body)
         self.assertIn('/static/js/accounts-file.js', body)
+        self.assertNotIn('data-view="client-accounts"', body)
+        self.assertNotIn('data-view="client-year-end"', body)
+        self.assertNotIn('data-view="admin-accounts"', body)
+        self.assertNotIn('data-view="admin-year-end"', body)
         self.assertNotIn('Xero', body)
 
     def test_02_list_and_empty_workspace(self):
@@ -163,7 +172,10 @@ class TestAccountsFile(unittest.TestCase):
         self.assertNotIn('Load sample organisation', text)
         self.assertNotIn('Try a sample statement', text)
         self.assertIn('installPortalHooks', text)
-        self.assertIn("VIEW_HASH['client-accounts']", text)
+        self.assertIn("HASH_VIEW['accounts']", text)
+        self.assertIn('client-accountancy', text)
+        self.assertIn('setAccountancyPane', text)
+        self.assertIn('accountancy-inner-tabs', text)
 
     def test_10_sample_statement_books_and_rec(self):
         st, hd, res = make_request(

@@ -167,7 +167,7 @@ function canOpenView(viewName) {
 function defaultPortalView() {
     if (!isAdminShellUser(currentUser)) return 'client-dashboard';
     if (canViewAdminDashboard()) return 'admin-dashboard';
-    const preferred = ['admin-orders', 'admin-customers', 'admin-documents', 'admin-invoices', 'admin-accountancy', 'admin-accounts', 'admin-tasks', 'client-profile'];
+    const preferred = ['admin-orders', 'admin-customers', 'admin-documents', 'admin-invoices', 'admin-accountancy', 'admin-tasks', 'client-profile'];
     return preferred.find(canOpenView) || 'client-profile';
 }
 
@@ -176,8 +176,8 @@ const VIEW_HASH = {
     'client-profile': 'profile',
     'client-companies': 'companies',
     'client-accountancy': 'accountancy',
-    'client-accounts': 'accounts',
-    'client-year-end': 'year-end',
+    'client-accounts': 'accountancy',
+    'client-year-end': 'accountancy',
     'client-addresses': 'addresses',
     'client-orders': 'orders',
     'client-invoices': 'invoices',
@@ -190,8 +190,8 @@ const VIEW_HASH = {
     'admin-customers': 'admin-customers',
     'admin-companies': 'admin-companies',
     'admin-accountancy': 'admin-accountancy',
-    'admin-accounts': 'admin-accounts',
-    'admin-year-end': 'admin-year-end',
+    'admin-accounts': 'admin-accountancy',
+    'admin-year-end': 'admin-accountancy',
     'admin-orders': 'admin-orders',
     'admin-tasks': 'admin-tasks',
     'admin-services': 'admin-services',
@@ -209,6 +209,12 @@ Object.keys(VIEW_HASH).forEach((view) => {
     HASH_VIEW[VIEW_HASH[view]] = view;
     HASH_VIEW[view] = view;
 });
+HASH_VIEW['accounts'] = 'client-accountancy';
+HASH_VIEW['year-end'] = 'client-accountancy';
+HASH_VIEW['admin-accounts'] = 'admin-accountancy';
+HASH_VIEW['admin-year-end'] = 'admin-accountancy';
+HASH_VIEW['client-accounts'] = 'client-accountancy';
+HASH_VIEW['client-year-end'] = 'client-accountancy';
 
 function viewFromHash(raw) {
     const hash = String(raw || '').replace(/^#/, '').split(/[/?]/)[0].trim();
@@ -328,8 +334,8 @@ function setAuthShellState(pending, authenticated) {
 }
 
 function accountsFilePanelView(viewName) {
-    if (viewName === 'client-year-end') return 'client-accounts';
-    if (viewName === 'admin-year-end') return 'admin-accounts';
+    if (viewName === 'client-accounts' || viewName === 'client-year-end') return 'client-accountancy';
+    if (viewName === 'admin-accounts' || viewName === 'admin-year-end') return 'admin-accountancy';
     return viewName;
 }
 
@@ -1226,6 +1232,12 @@ function switchView(viewName, options) {
         tasksTeamTab = 'tasks';
         openQuickTasks = true;
     }
+    if (viewName === 'client-accounts' || viewName === 'client-year-end') {
+        viewName = 'client-accountancy';
+    }
+    if (viewName === 'admin-accounts' || viewName === 'admin-year-end') {
+        viewName = 'admin-accountancy';
+    }
     if (currentUser && viewName !== 'login' && !canOpenView(viewName)) {
         viewName = defaultPortalView();
     }
@@ -1268,12 +1280,10 @@ function switchView(viewName, options) {
         case 'client-orders': loadClientOrders(); break;
         case 'client-dashboard': loadClientDashboard(); break;
         case 'client-companies': loadClientCompanies(); break;
-        case 'client-accountancy': loadClientAccountancy(); break;
-        case 'client-accounts':
-            if (typeof loadAccountsFileView === 'function') loadAccountsFileView('client', 'home');
-            break;
-        case 'client-year-end':
-            if (typeof loadAccountsFileView === 'function') loadAccountsFileView('client', 'year-end');
+        case 'client-accountancy':
+            loadClientAccountancy();
+            if (typeof setAccountancyPane === 'function') setAccountancyPane('client', 'accounts');
+            else if (typeof loadAccountsFileView === 'function') loadAccountsFileView('client', 'home');
             break;
         case 'client-addresses': loadClientAddresses(); break;
         case 'client-invoices': loadClientInvoices(); break;
@@ -1296,12 +1306,10 @@ function switchView(viewName, options) {
             break;
         case 'admin-customers': loadAdminCustomers(); break;
         case 'admin-companies': loadAdminCompanies(); break;
-        case 'admin-accountancy': loadAdminAccountancy(); break;
-        case 'admin-accounts':
-            if (typeof loadAccountsFileView === 'function') loadAccountsFileView('admin', 'home');
-            break;
-        case 'admin-year-end':
-            if (typeof loadAccountsFileView === 'function') loadAccountsFileView('admin', 'year-end');
+        case 'admin-accountancy':
+            loadAdminAccountancy();
+            if (typeof setAccountancyPane === 'function') setAccountancyPane('admin', 'accounts');
+            else if (typeof loadAccountsFileView === 'function') loadAccountsFileView('admin', 'home');
             break;
         case 'admin-services': loadAdminServices(); break;
         case 'admin-invoices': loadAdminInvoices(); break;

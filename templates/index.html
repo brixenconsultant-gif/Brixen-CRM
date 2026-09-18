@@ -111,8 +111,6 @@
                     <ul class="nav-list">
                         <li class="nav-item" data-view="client-companies" data-portfolio="Business Portfolio"><a href="#companies" onclick="event.preventDefault();switchView('client-companies')"><i data-lucide="building-2"></i> <span>Company Registered</span><span style="display:none">Business Portfolio</span></a></li>
                         <li class="nav-item" data-view="client-accountancy"><a href="#accountancy" onclick="event.preventDefault();switchView('client-accountancy')"><i data-lucide="calculator"></i> <span>Accountancy</span></a></li>
-                        <li class="nav-item" data-view="client-accounts"><a href="#accounts" onclick="event.preventDefault();switchView('client-accounts')"><i data-lucide="book-open"></i> <span>Accounts</span></a></li>
-                        <li class="nav-item" data-view="client-year-end"><a href="#year-end" onclick="event.preventDefault();switchView('client-year-end')"><i data-lucide="file-spreadsheet"></i> <span>Year end</span></a></li>
                         <li class="nav-item" data-view="client-addresses"><a href="#addresses" onclick="event.preventDefault();switchView('client-addresses')"><i data-lucide="map-pin"></i> <span>Addresses</span></a></li>
                     </ul>
                 </div>
@@ -185,8 +183,6 @@
                         <li class="nav-item" data-view="admin-customers"><a href="#admin-customers"><i data-lucide="users"></i> <span>Customers / Signups</span></a></li>
                         <li class="nav-item" data-view="admin-companies"><a href="#admin-companies" onclick="event.preventDefault();switchView('admin-companies')"><i data-lucide="building-2"></i> <span>Company Registered</span></a></li>
                         <li class="nav-item" data-view="admin-accountancy"><a href="#admin-accountancy" onclick="event.preventDefault();switchView('admin-accountancy')"><i data-lucide="calculator"></i> <span>Accountancy</span></a></li>
-                        <li class="nav-item" data-view="admin-accounts"><a href="#admin-accounts" onclick="event.preventDefault();switchView('admin-accounts')"><i data-lucide="book-open"></i> <span>Accounts</span></a></li>
-                        <li class="nav-item" data-view="admin-year-end"><a href="#admin-year-end" onclick="event.preventDefault();switchView('admin-year-end')"><i data-lucide="file-spreadsheet"></i> <span>Year end</span></a></li>
                         <li class="nav-item" data-view="admin-orders"><a href="#admin-orders"><i data-lucide="package-check"></i> <span>Orders Manager</span></a></li>
                         <li class="nav-item" data-view="admin-tasks"><a href="#admin-tasks"><i data-lucide="list-checks"></i> <span>Tasks &amp; Team</span></a></li>
                         <li class="nav-item" data-view="admin-services"><a href="#admin-services"><i data-lucide="layers"></i> <span>Services Catalog</span></a></li>
@@ -329,12 +325,6 @@
                             <li class="top-menu-item" data-view="client-accountancy">
                                 <a href="#accountancy" onclick="event.preventDefault();switchView('client-accountancy')"><i data-lucide="calculator"></i> <span>Accountancy</span></a>
                             </li>
-                            <li class="top-menu-item" data-view="client-accounts">
-                                <a href="#accounts" onclick="event.preventDefault();switchView('client-accounts')"><i data-lucide="book-open"></i> <span>Accounts</span></a>
-                            </li>
-                            <li class="top-menu-item" data-view="client-year-end">
-                                <a href="#year-end" onclick="event.preventDefault();switchView('client-year-end')"><i data-lucide="file-spreadsheet"></i> <span>Year end</span></a>
-                            </li>
                             <li class="top-menu-item" data-view="client-invoices">
                                 <a href="#invoices" onclick="event.preventDefault();switchView('client-invoices')"><i data-lucide="file-text"></i> <span>Invoices</span></a>
                             </li>
@@ -367,12 +357,6 @@
                             </li>
                             <li class="top-menu-item" data-view="admin-accountancy">
                                 <a href="#admin-accountancy" onclick="event.preventDefault();switchView('admin-accountancy')"><i data-lucide="calculator"></i> <span>Accountancy</span></a>
-                            </li>
-                            <li class="top-menu-item" data-view="admin-accounts">
-                                <a href="#admin-accounts" onclick="event.preventDefault();switchView('admin-accounts')"><i data-lucide="book-open"></i> <span>Accounts</span></a>
-                            </li>
-                            <li class="top-menu-item" data-view="admin-year-end">
-                                <a href="#admin-year-end" onclick="event.preventDefault();switchView('admin-year-end')"><i data-lucide="file-spreadsheet"></i> <span>Year end</span></a>
                             </li>
                             <li class="top-menu-item" data-view="admin-documents">
                                 <a href="#admin-documents" onclick="event.preventDefault();switchView('admin-documents')"><i data-lucide="folder-lock"></i> <span>Documents</span></a>
@@ -693,31 +677,36 @@
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>Accountancy</h1>
-                            <p>See identity, PSC, registered office, and yearly accounts status for your companies.</p>
+                            <p>Prepare yearly accounts from the latest bank statement, then check identity, PSC, registered office, and filing status.</p>
                         </div>
                     </div>
-                    <div id="client-accountancy-error" class="dash-banner-error" style="display:none;" role="alert"></div>
-                    <div class="data-table-container">
-                        <table class="data-table">
-                            <thead>
-                                <tr>
-                                    <th>Company</th>
-                                    <th>Address</th>
-                                    <th>IDV</th>
-                                    <th>PSC</th>
-                                    <th>Year end</th>
-                                    <th>Due</th>
-                                    <th>Status</th>
-                                    <th>Action</th>
-                                </tr>
-                            </thead>
-                            <tbody id="client-accountancy-table-body"></tbody>
-                        </table>
+                    <div class="portfolio-filter-bar accountancy-inner-tabs" role="tablist" aria-label="Accountancy sections">
+                        <button type="button" class="is-active" data-accountancy-pane="accounts" data-accountancy-scope="client" onclick="setAccountancyPane('client', 'accounts')">Accounts</button>
+                        <button type="button" data-accountancy-pane="filing" data-accountancy-scope="client" onclick="setAccountancyPane('client', 'filing')">Filing status</button>
                     </div>
-                </div>
-
-                <div id="view-client-accounts" class="view-panel" style="display: none;">
-                    <div id="client-accounts-root" class="accounts-file-root" data-scope="client"></div>
+                    <div id="client-accountancy-pane-accounts" class="accountancy-pane">
+                        <div id="client-accounts-root" class="accounts-file-root" data-scope="client"></div>
+                    </div>
+                    <div id="client-accountancy-pane-filing" class="accountancy-pane" hidden>
+                        <div id="client-accountancy-error" class="dash-banner-error" style="display:none;" role="alert"></div>
+                        <div class="data-table-container">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Company</th>
+                                        <th>Address</th>
+                                        <th>IDV</th>
+                                        <th>PSC</th>
+                                        <th>Year end</th>
+                                        <th>Due</th>
+                                        <th>Status</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="client-accountancy-table-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- 3B. COMPANY REGISTERED VIEW (ADMIN) -->
@@ -761,42 +750,47 @@
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>Accountancy</h1>
-                            <p>Post bank statements into the cash book, complete UK Companies House checks, then file yearly accounts.</p>
+                            <p>Prepare yearly accounts from the latest bank statement, complete UK Companies House checks, then review filing status.</p>
                         </div>
                         <button type="button" class="btn-primary" onclick="openFileAccountsModal()"><i data-lucide="file-plus"></i> File accounts</button>
                     </div>
-                    <div class="stats-grid accountancy-stats" style="margin-bottom:18px;">
-                        <div class="stat-card"><div class="stat-info"><div class="label">Overdue</div><div class="value" id="accountancy-stat-overdue">0</div></div></div>
-                        <div class="stat-card"><div class="stat-info"><div class="label">Due in 60 days</div><div class="value" id="accountancy-stat-due">0</div></div></div>
-                        <div class="stat-card"><div class="stat-info"><div class="label">In progress</div><div class="value" id="accountancy-stat-progress">0</div></div></div>
-                        <div class="stat-card"><div class="stat-info"><div class="label">Issues</div><div class="value" id="accountancy-stat-issues">0</div></div></div>
-                        <div class="stat-card"><div class="stat-info"><div class="label">Filed</div><div class="value" id="accountancy-stat-filed">0</div></div></div>
+                    <div class="portfolio-filter-bar accountancy-inner-tabs" role="tablist" aria-label="Accountancy sections">
+                        <button type="button" class="is-active" data-accountancy-pane="accounts" data-accountancy-scope="admin" onclick="setAccountancyPane('admin', 'accounts')">Accounts</button>
+                        <button type="button" data-accountancy-pane="filing" data-accountancy-scope="admin" onclick="setAccountancyPane('admin', 'filing')">Filing status</button>
                     </div>
-                    <div id="adm-accountancy-error" class="dash-banner-error" style="display:none;" role="alert"></div>
-                    <div class="data-table-container">
-                        <table class="data-table">
-                            <thead>
-                                <tr>
-                                    <th>Company</th>
-                                    <th>Owner</th>
-                                    <th>Address</th>
-                                    <th>IDV</th>
-                                    <th>PSC</th>
-                                    <th>Issues</th>
-                                    <th>Year end</th>
-                                    <th>Due</th>
-                                    <th>Type</th>
-                                    <th>Status</th>
-                                    <th>Action</th>
-                                </tr>
-                            </thead>
-                            <tbody id="adm-accountancy-table-body"></tbody>
-                        </table>
+                    <div id="admin-accountancy-pane-accounts" class="accountancy-pane">
+                        <div id="admin-accounts-root" class="accounts-file-root" data-scope="admin"></div>
                     </div>
-                </div>
-
-                <div id="view-admin-accounts" class="view-panel" style="display: none;">
-                    <div id="admin-accounts-root" class="accounts-file-root" data-scope="admin"></div>
+                    <div id="admin-accountancy-pane-filing" class="accountancy-pane" hidden>
+                        <div class="stats-grid accountancy-stats" style="margin-bottom:18px;">
+                            <div class="stat-card"><div class="stat-info"><div class="label">Overdue</div><div class="value" id="accountancy-stat-overdue">0</div></div></div>
+                            <div class="stat-card"><div class="stat-info"><div class="label">Due in 60 days</div><div class="value" id="accountancy-stat-due">0</div></div></div>
+                            <div class="stat-card"><div class="stat-info"><div class="label">In progress</div><div class="value" id="accountancy-stat-progress">0</div></div></div>
+                            <div class="stat-card"><div class="stat-info"><div class="label">Issues</div><div class="value" id="accountancy-stat-issues">0</div></div></div>
+                            <div class="stat-card"><div class="stat-info"><div class="label">Filed</div><div class="value" id="accountancy-stat-filed">0</div></div></div>
+                        </div>
+                        <div id="adm-accountancy-error" class="dash-banner-error" style="display:none;" role="alert"></div>
+                        <div class="data-table-container">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Company</th>
+                                        <th>Owner</th>
+                                        <th>Address</th>
+                                        <th>IDV</th>
+                                        <th>PSC</th>
+                                        <th>Issues</th>
+                                        <th>Year end</th>
+                                        <th>Due</th>
+                                        <th>Type</th>
+                                        <th>Status</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="adm-accountancy-table-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- 4. ADDRESSES VIEW -->
@@ -3868,6 +3862,6 @@
 
     <div id="global-search-results" class="global-search-results" hidden></div>
     <script src="/static/js/app.js?v=3201.0" defer></script>
-    <script src="/static/js/accounts-file.js?v=3212.0" defer></script>
+    <script src="/static/js/accounts-file.js?v=3213.0" defer></script>
 </body>
 </html>
