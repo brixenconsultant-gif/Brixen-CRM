@@ -1267,4 +1267,62 @@
             render();
         }
     };
+
+    function installPortalHooks() {
+        if (window.__brixenAccountsFileHooks) return;
+        window.__brixenAccountsFileHooks = true;
+        const access = ['Accountancy', 'Accounts', 'Compliance'];
+        if (typeof VIEW_HASH === 'object' && VIEW_HASH) {
+            VIEW_HASH['client-accounts'] = 'accounts';
+            VIEW_HASH['client-year-end'] = 'year-end';
+            VIEW_HASH['admin-accounts'] = 'admin-accounts';
+            VIEW_HASH['admin-year-end'] = 'admin-year-end';
+        }
+        if (typeof HASH_VIEW === 'object' && HASH_VIEW) {
+            HASH_VIEW['accounts'] = 'client-accounts';
+            HASH_VIEW['year-end'] = 'client-year-end';
+            HASH_VIEW['admin-accounts'] = 'admin-accounts';
+            HASH_VIEW['admin-year-end'] = 'admin-year-end';
+            HASH_VIEW['client-accounts'] = 'client-accounts';
+            HASH_VIEW['client-year-end'] = 'client-year-end';
+        }
+        if (typeof VIEW_ACCESS === 'object' && VIEW_ACCESS) {
+            VIEW_ACCESS['admin-accounts'] = access;
+            VIEW_ACCESS['admin-year-end'] = access;
+        }
+        const origSetPanel = window.setActiveViewPanel;
+        if (typeof origSetPanel === 'function' && !origSetPanel.__accountsFilePatched) {
+            const wrappedSet = function (viewName) {
+                if (viewName === 'client-year-end') viewName = 'client-accounts';
+                if (viewName === 'admin-year-end') viewName = 'admin-accounts';
+                return origSetPanel(viewName);
+            };
+            wrappedSet.__accountsFilePatched = true;
+            window.setActiveViewPanel = wrappedSet;
+        }
+        const origSwitch = window.switchView;
+        const origLoadsAccounts = typeof origSwitch === 'function' && /loadAccountsFileView/.test(Function.prototype.toString.call(origSwitch));
+        if (typeof origSwitch === 'function' && !origSwitch.__accountsFilePatched && !origLoadsAccounts) {
+            const wrappedSwitch = function (viewName, options) {
+                const result = origSwitch.apply(this, arguments);
+                const opened = (typeof activeView === 'string' && activeView) ? activeView : viewName;
+                if (opened === 'client-accounts') loadAccountsFileView('client', 'home');
+                else if (opened === 'client-year-end') loadAccountsFileView('client', 'year-end');
+                else if (opened === 'admin-accounts') loadAccountsFileView('admin', 'home');
+                else if (opened === 'admin-year-end') loadAccountsFileView('admin', 'year-end');
+                return result;
+            };
+            wrappedSwitch.__accountsFilePatched = true;
+            window.switchView = wrappedSwitch;
+        }
+        if (typeof applyPortalAccessNav === 'function') {
+            try { applyPortalAccessNav(); } catch (err) { /* nav filter runs again after login */ }
+        }
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', installPortalHooks);
+    } else {
+        installPortalHooks();
+    }
 })();

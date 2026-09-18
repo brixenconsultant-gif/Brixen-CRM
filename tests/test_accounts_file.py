@@ -162,6 +162,8 @@ class TestAccountsFile(unittest.TestCase):
         self.assertNotIn('maybeAutoImport', text)
         self.assertNotIn('Load sample organisation', text)
         self.assertNotIn('Try a sample statement', text)
+        self.assertIn('installPortalHooks', text)
+        self.assertIn("VIEW_HASH['client-accounts']", text)
 
     def test_10_sample_statement_books_and_rec(self):
         st, hd, res = make_request(
