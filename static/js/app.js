@@ -132,7 +132,9 @@ const VIEW_ACCESS = {
     'admin-documents': ['Documents', 'Compliance'],
     'admin-intake': ['Documents', 'Compliance'],
     'admin-invoices': ['Accounts'],
-    'admin-accountancy': ['Accountancy', 'Accounts', 'Compliance']
+    'admin-accountancy': ['Accountancy', 'Accounts', 'Compliance'],
+    'admin-accounts': ['Accountancy', 'Accounts', 'Compliance'],
+    'admin-year-end': ['Accountancy', 'Accounts', 'Compliance']
 };
 
 function hasModuleAccess(areas) {
@@ -174,6 +176,8 @@ const VIEW_HASH = {
     'client-profile': 'profile',
     'client-companies': 'companies',
     'client-accountancy': 'accountancy',
+    'client-accounts': 'accountancy',
+    'client-year-end': 'accountancy',
     'client-addresses': 'addresses',
     'client-orders': 'orders',
     'client-invoices': 'invoices',
@@ -186,6 +190,8 @@ const VIEW_HASH = {
     'admin-customers': 'admin-customers',
     'admin-companies': 'admin-companies',
     'admin-accountancy': 'admin-accountancy',
+    'admin-accounts': 'admin-accountancy',
+    'admin-year-end': 'admin-accountancy',
     'admin-orders': 'admin-orders',
     'admin-tasks': 'admin-tasks',
     'admin-services': 'admin-services',
@@ -203,6 +209,12 @@ Object.keys(VIEW_HASH).forEach((view) => {
     HASH_VIEW[VIEW_HASH[view]] = view;
     HASH_VIEW[view] = view;
 });
+HASH_VIEW['accounts'] = 'client-accountancy';
+HASH_VIEW['year-end'] = 'client-accountancy';
+HASH_VIEW['admin-accounts'] = 'admin-accountancy';
+HASH_VIEW['admin-year-end'] = 'admin-accountancy';
+HASH_VIEW['client-accounts'] = 'client-accountancy';
+HASH_VIEW['client-year-end'] = 'client-accountancy';
 
 function viewFromHash(raw) {
     const hash = String(raw || '').replace(/^#/, '').split(/[/?]/)[0].trim();
@@ -321,12 +333,19 @@ function setAuthShellState(pending, authenticated) {
     if (app) app.removeAttribute('hidden');
 }
 
+function accountsFilePanelView(viewName) {
+    if (viewName === 'client-accounts' || viewName === 'client-year-end') return 'client-accountancy';
+    if (viewName === 'admin-accounts' || viewName === 'admin-year-end') return 'admin-accountancy';
+    return viewName;
+}
+
 function setActiveViewPanel(viewName) {
     document.querySelectorAll('.view-panel').forEach((panel) => {
         panel.classList.remove('is-active');
         panel.style.display = 'none';
     });
-    const targetPanel = document.getElementById(viewName ? `view-${viewName}` : '');
+    const panelView = accountsFilePanelView(viewName);
+    const targetPanel = document.getElementById(panelView ? `view-${panelView}` : '');
     if (targetPanel) {
         targetPanel.classList.add('is-active');
         targetPanel.style.display = viewName === 'login' ? 'block' : 'flex';
@@ -1213,6 +1232,12 @@ function switchView(viewName, options) {
         tasksTeamTab = 'tasks';
         openQuickTasks = true;
     }
+    if (viewName === 'client-accounts' || viewName === 'client-year-end') {
+        viewName = 'client-accountancy';
+    }
+    if (viewName === 'admin-accounts' || viewName === 'admin-year-end') {
+        viewName = 'admin-accountancy';
+    }
     if (currentUser && viewName !== 'login' && !canOpenView(viewName)) {
         viewName = defaultPortalView();
     }
@@ -1255,7 +1280,11 @@ function switchView(viewName, options) {
         case 'client-orders': loadClientOrders(); break;
         case 'client-dashboard': loadClientDashboard(); break;
         case 'client-companies': loadClientCompanies(); break;
-        case 'client-accountancy': loadClientAccountancy(); break;
+        case 'client-accountancy':
+            loadClientAccountancy();
+            if (typeof setAccountancyPane === 'function') setAccountancyPane('client', 'accounts');
+            else if (typeof loadAccountsFileView === 'function') loadAccountsFileView('client', 'home');
+            break;
         case 'client-addresses': loadClientAddresses(); break;
         case 'client-invoices': loadClientInvoices(); break;
         case 'client-payments': loadClientPayments(); break;
@@ -1277,7 +1306,11 @@ function switchView(viewName, options) {
             break;
         case 'admin-customers': loadAdminCustomers(); break;
         case 'admin-companies': loadAdminCompanies(); break;
-        case 'admin-accountancy': loadAdminAccountancy(); break;
+        case 'admin-accountancy':
+            loadAdminAccountancy();
+            if (typeof setAccountancyPane === 'function') setAccountancyPane('admin', 'accounts');
+            else if (typeof loadAccountsFileView === 'function') loadAccountsFileView('admin', 'home');
+            break;
         case 'admin-services': loadAdminServices(); break;
         case 'admin-invoices': loadAdminInvoices(); break;
         case 'admin-documents': loadAdminDocuments(); break;
@@ -7425,19 +7458,30 @@ function updateCustomerSelectionState() {
     }
 }
 
+function canForceDeleteGenuine() {
+    return !!(currentUser && String(currentUser.role || '').toUpperCase() === 'SUPER_ADMIN');
+}
+
 async function deleteCustomerSingle(customerId, customerName) {
     if (!canDeleteRecords()) {
         alert('Deletion is restricted to Administrator accounts only.');
         return;
     }
     if (!customerId) return;
-    if (!confirm(`Are you sure you want to delete customer account "${customerName}"?`)) return;
+    const ownerForce = canForceDeleteGenuine();
+    const msg = ownerForce
+        ? `Delete customer "${customerName}" permanently?\n\nAs Super Admin (owner) this will also remove any locked companies, orders, and invoices linked to this account.`
+        : `Are you sure you want to delete customer account "${customerName}"?`;
+    if (!confirm(msg)) return;
     try {
         const res = await fetch('/api/admin/customers/delete', {
             method: 'POST',
             credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ customer_id: customerId })
+            body: JSON.stringify({
+                customer_id: customerId,
+                force_delete_genuine: ownerForce,
+            })
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.status !== 'success') {
@@ -7461,13 +7505,20 @@ async function deleteSelectedCustomers() {
         alert('Please select at least one customer to delete.');
         return;
     }
-    if (!confirm(`Are you sure you want to delete ${selectedIds.length} selected customer account(s)?`)) return;
+    const ownerForce = canForceDeleteGenuine();
+    const msg = ownerForce
+        ? `Delete ${selectedIds.length} selected customer account(s) permanently?\n\nAs Super Admin (owner) this will also remove locked companies, orders, and invoices linked to those accounts.`
+        : `Are you sure you want to delete ${selectedIds.length} selected customer account(s)?`;
+    if (!confirm(msg)) return;
     try {
         const res = await fetch('/api/admin/customers/bulk-delete', {
             method: 'POST',
             credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ customer_ids: selectedIds })
+            body: JSON.stringify({
+                customer_ids: selectedIds,
+                force_delete_genuine: ownerForce,
+            })
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.status !== 'success') {
@@ -12284,16 +12335,149 @@ function renderWizardStep3Form() {
 
     const fieldsContainer = document.getElementById('wizard-dynamic-fields-container');
     if (fieldsContainer) {
-        const fields = p.form_config || [];
-        if (fields.length === 0) {
-            fieldsContainer.innerHTML = '<div style="font-size:0.85rem; color:var(--color-text-muted);">No specific custom fields required for this product. Click Continue to proceed.</div>';
-        } else {
-            fieldsContainer.innerHTML = fields.map(f => renderSingleWizardFieldHTML(f, p)).join('');
-        }
+        fieldsContainer.innerHTML = renderStandardizedProductStep3HTML(p);
     }
 
     renderWizardRepeatableSections();
     setTimeout(initAllCompaniesHouseLiveSearch, 100);
+}
+
+function renderStandardizedProductStep3HTML(product) {
+    const p = product || universalOrderWizardState.selectedProduct;
+    const cust = universalOrderWizardState.selectedCustomer;
+    const isB2B = (cust && (cust.is_b2b === 1 || cust.client_type === 'B2B'));
+
+    const inputStyle = "width:100%; box-sizing:border-box; padding:14px 18px; font-size:1.05rem; line-height:1.6; color:#0f172a; background:#ffffff; border:1px solid #cbd5e1; border-radius:10px; margin-top:8px; outline:none; transition:border-color 0.15s ease, box-shadow 0.15s ease;";
+
+    const companyVal = universalOrderWizardState.formValues['company_name'] || universalOrderWizardState.formValues['proposed_company_name'] || '';
+    const companyNumVal = universalOrderWizardState.formValues['company_number'] || '';
+    const directorVal = universalOrderWizardState.formValues['director_name'] || universalOrderWizardState.formValues['full_name'] || universalOrderWizardState.formValues['end_client_name'] || (isB2B ? '' : (cust ? cust.full_name : '')) || '';
+    const directorDobVal = universalOrderWizardState.formValues['director_dob'] || universalOrderWizardState.formValues['dob'] || '';
+    const officeAddressVal = universalOrderWizardState.formValues['registered_office_address'] || universalOrderWizardState.formValues['address'] || '';
+
+    const clientEmailVal = universalOrderWizardState.formValues['end_client_email'] || universalOrderWizardState.formValues['email'] || (isB2B ? '' : (cust ? cust.email : '')) || '';
+    const clientPhoneVal = universalOrderWizardState.formValues['end_client_phone'] || universalOrderWizardState.formValues['phone'] || universalOrderWizardState.formValues['uk_contact'] || (isB2B ? '' : (cust ? cust.phone : '')) || '';
+    
+    const tradingProofVal = universalOrderWizardState.formValues['trading_proof'] || '';
+
+    return `
+        <!-- CLIENT DETAILS SECTION CARD -->
+        <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:14px; padding:24px; margin-bottom:24px; box-shadow:0 1px 3px 0 rgba(0,0,0,0.05);">
+            <div style="font-size:1.05rem; font-weight:800; color:#0f172a; margin-bottom:6px; display:flex; align-items:center; gap:8px;">
+                <i data-lucide="building-2" style="width:20px; height:20px; color:var(--color-primary);"></i>
+                Client Details
+            </div>
+            <div style="font-size:0.84rem; color:#64748b; margin-bottom:18px;">
+                ${isB2B ? `Ordering under B2B Account: <strong>${escapeHtml(cust.full_name || 'Partner')}</strong> (${escapeHtml(cust.b2b_id || 'B2B')}). Type company name below to search Companies House automatically.` : 'Enter company details below to search Companies House automatically.'}
+            </div>
+
+            <div style="display:grid; grid-template-columns:1fr; gap:18px;">
+                <!-- 1. COMPANY NAME WITH LIVE COMPANIES HOUSE AUTOCOMPLETE -->
+                <div>
+                    <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
+                        Company Name <span style="color:#ef4444; font-weight:700;">*</span>
+                    </label>
+                    <input type="text" id="wfield-company_name" class="select-filter" style="${inputStyle}" 
+                           placeholder="Type to search Companies House (e.g. BRIXEN CONSULTANTS LTD)..." 
+                           data-ch-search="true" autocomplete="off"
+                           value="${escapeHtml(companyVal)}"
+                           oninput="updateWizardFieldValue('company_name', this.value); updateWizardFieldValue('proposed_company_name', this.value);">
+                    <div style="font-size:0.8rem; color:#64748b; margin-top:6px; font-weight:500;">
+                        Type company name to search Companies House live API and auto-fill details below.
+                    </div>
+                </div>
+
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:18px;">
+                    <!-- 2. COMPANY REGISTRATION NUMBER -->
+                    <div>
+                        <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
+                            Company Registration Number <span style="color:#ef4444; font-weight:700;">*</span>
+                        </label>
+                        <input type="text" id="wfield-company_number" class="select-filter" style="${inputStyle}" 
+                               placeholder="e.g. 12345678" 
+                               value="${escapeHtml(companyNumVal)}"
+                               oninput="updateWizardFieldValue('company_number', this.value)">
+                    </div>
+
+                    <!-- 3. DIRECTOR FULL NAME -->
+                    <div>
+                        <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
+                            Director Full Name <span style="color:#ef4444; font-weight:700;">*</span>
+                        </label>
+                        <input type="text" id="wfield-director_name" class="select-filter" style="${inputStyle}" 
+                               placeholder="e.g. Muhammad Rohan" 
+                               value="${escapeHtml(directorVal)}"
+                               oninput="updateWizardFieldValue('director_name', this.value); updateWizardFieldValue('full_name', this.value); updateWizardFieldValue('end_client_name', this.value);">
+                    </div>
+                </div>
+
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:18px;">
+                    <!-- 4. DIRECTOR DATE OF BIRTH (MANUAL - PRIVATE) -->
+                    <div>
+                        <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
+                            Director Date of Birth (Private / Manual) <span style="color:#ef4444; font-weight:700;">*</span>
+                        </label>
+                        <input type="date" id="wfield-director_dob" class="select-filter" style="${inputStyle}" 
+                               value="${escapeHtml(directorDobVal)}"
+                               oninput="updateWizardFieldValue('director_dob', this.value); updateWizardFieldValue('dob', this.value);">
+                        <div style="font-size:0.8rem; color:#64748b; margin-top:6px; font-weight:500;">
+                            Date of birth is not public on Companies House API, please enter manually.
+                        </div>
+                    </div>
+
+                    <!-- 5. REGISTERED OFFICE ADDRESS -->
+                    <div>
+                        <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
+                            Registered Office Address <span style="color:#ef4444; font-weight:700;">*</span>
+                        </label>
+                        <input type="text" id="wfield-registered_office_address" class="select-filter" style="${inputStyle}" 
+                               placeholder="Address Line 1, City, Postcode, Country" 
+                               value="${escapeHtml(officeAddressVal)}"
+                               oninput="updateWizardFieldValue('registered_office_address', this.value); updateWizardFieldValue('address', this.value);">
+                    </div>
+                </div>
+
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:18px;">
+                    <!-- 6. CLIENT EMAIL ADDRESS -->
+                    <div>
+                        <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
+                            Client Email Address <span style="color:#ef4444; font-weight:700;">*</span>
+                        </label>
+                        <input type="email" id="wfield-end-client-email" class="select-filter" style="${inputStyle}" 
+                               placeholder="e.g. client@company.com" 
+                               value="${escapeHtml(clientEmailVal)}"
+                               oninput="updateWizardFieldValue('end_client_email', this.value); updateWizardFieldValue('email', this.value);">
+                    </div>
+
+                    <!-- 7. CLIENT PHONE NUMBER -->
+                    <div>
+                        <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
+                            Client Phone Number
+                        </label>
+                        <input type="tel" id="wfield-end-client-phone" class="select-filter" style="${inputStyle}" 
+                               placeholder="+44 7911 123456" 
+                               value="${escapeHtml(clientPhoneVal)}"
+                               oninput="updateWizardFieldValue('end_client_phone', this.value); updateWizardFieldValue('phone', this.value); updateWizardFieldValue('uk_contact', this.value);">
+                    </div>
+                </div>
+
+                ${(p.name && (p.name.includes('Bank') || p.name.includes('Tide'))) ? `
+                    <div>
+                        <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
+                            Business Trading Proof (Website or Selling Platform)
+                        </label>
+                        <input type="text" id="wfield-trading_proof" class="select-filter" style="${inputStyle}" 
+                               placeholder="Enter website URL or platform name (Optional)" 
+                               value="${escapeHtml(tradingProofVal)}"
+                               oninput="updateWizardFieldValue('trading_proof', this.value)">
+                        <div style="font-size:0.8rem; color:#64748b; margin-top:6px; font-weight:500;">
+                            If available, otherwise we can create it for you.
+                        </div>
+                    </div>
+                ` : ''}
+            </div>
+        </div>
+    `;
 }
 
 function isCompanySearchMandatoryField(f, product) {
@@ -12334,22 +12518,23 @@ function renderSingleWizardFieldHTML(f, product) {
 
     let inputHTML = '';
     const fieldType = (f.type || 'text').toLowerCase();
+    const inputStyle = "width:100%; box-sizing:border-box; padding:12px 16px; font-size:0.95rem; line-height:1.5; color:var(--color-text-primary); background:#ffffff; border:1px solid #cbd5e1; border-radius:8px; margin-top:6px; outline:none; transition:border-color 0.15s ease, box-shadow 0.15s ease;";
 
     if (fieldType === 'textarea' || fieldType === 'long text') {
-        inputHTML = `<textarea id="wfield-${f.id}" class="select-filter" style="width:100%; margin-top:4px; min-height:70px; font-size:0.88rem; padding:10px 14px;" placeholder="${escapeHtml(f.placeholder || '')}" onchange="updateWizardFieldValue('${f.id}', this.value)">${escapeHtml(val)}</textarea>`;
+        inputHTML = `<textarea id="wfield-${f.id}" class="select-filter" style="${inputStyle} min-height:95px;" placeholder="${escapeHtml(f.placeholder || '')}" onchange="updateWizardFieldValue('${f.id}', this.value)">${escapeHtml(val)}</textarea>`;
     } else if (fieldType === 'dropdown' || fieldType === 'select') {
         const opts = f.options || [];
         inputHTML = `
-            <select id="wfield-${f.id}" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 14px;" onchange="updateWizardFieldValue('${f.id}', this.value)">
+            <select id="wfield-${f.id}" class="select-filter" style="${inputStyle} cursor:pointer;" onchange="updateWizardFieldValue('${f.id}', this.value)">
                 ${opts.map(o => `<option value="${escapeHtml(o)}" ${val === o ? 'selected' : ''}>${escapeHtml(o)}</option>`).join('')}
             </select>`;
     } else if (fieldType === 'radio') {
         const opts = f.options || ['YES', 'NO'];
         inputHTML = `
-            <div style="display:flex; gap:16px; margin-top:6px;">
+            <div style="display:flex; gap:20px; margin-top:8px;">
                 ${opts.map(o => `
-                    <label style="font-size:0.85rem; font-weight:600; cursor:pointer; color:var(--color-text-primary);">
-                        <input type="radio" name="wfield-${f.id}" value="${escapeHtml(o)}" ${val === o ? 'checked' : ''} onchange="updateWizardFieldValue('${f.id}', this.value)" style="accent-color:var(--color-primary);"> ${escapeHtml(o)}
+                    <label style="font-size:0.92rem; font-weight:600; cursor:pointer; color:var(--color-text-primary); display:flex; align-items:center; gap:6px;">
+                        <input type="radio" name="wfield-${f.id}" value="${escapeHtml(o)}" ${val === o ? 'checked' : ''} onchange="updateWizardFieldValue('${f.id}', this.value)" style="width:18px; height:18px; accent-color:var(--color-primary);"> ${escapeHtml(o)}
                     </label>
                 `).join('')}
             </div>`;
@@ -12357,16 +12542,16 @@ function renderSingleWizardFieldHTML(f, product) {
         const inputType = (fieldType === 'email') ? 'email' : (fieldType === 'phone') ? 'tel' : (fieldType === 'number') ? 'number' : (fieldType === 'date') ? 'date' : 'text';
         const isChSearch = isCompanySearchMandatoryField(f, p);
         const chAttr = isChSearch ? ' data-ch-search="true" autocomplete="off"' : '';
-        inputHTML = `<input type="${inputType}" id="wfield-${f.id}" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 14px;" value="${escapeHtml(val)}" placeholder="${escapeHtml(f.placeholder || '')}" ${chAttr} autocomplete="off" oninput="updateWizardFieldValue('${f.id}', this.value)">`;
+        inputHTML = `<input type="${inputType}" id="wfield-${f.id}" class="select-filter" style="${inputStyle}" value="${escapeHtml(val)}" placeholder="${escapeHtml(f.placeholder || '')}" ${chAttr} autocomplete="off" oninput="updateWizardFieldValue('${f.id}', this.value)">`;
     }
 
     return `
-        <div id="wfield-wrap-${f.id}" style="${isHidden ? 'display:none;' : ''}">
-            <label for="wfield-${f.id}" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">
-                ${escapeHtml(f.label)} ${f.required ? '<span style="color:var(--color-danger);">*</span>' : ''}
+        <div id="wfield-wrap-${f.id}" style="${isHidden ? 'display:none;' : ''} margin-bottom:20px;">
+            <label for="wfield-${f.id}" style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
+                ${escapeHtml(f.label)} ${f.required ? '<span style="color:#ef4444; font-weight:700;">*</span>' : ''}
             </label>
             ${inputHTML}
-            ${f.help_text ? `<div style="font-size:0.75rem; color:var(--color-text-muted); margin-top:4px;">${escapeHtml(f.help_text)}</div>` : ''}
+            ${f.help_text ? `<div style="font-size:0.82rem; color:#64748b; margin-top:6px; font-weight:500;">${escapeHtml(f.help_text)}</div>` : ''}
         </div>
     `;
 }
@@ -12484,39 +12669,84 @@ function validateWizardStep3Fields() {
     return null;
 }
 
+function removeWizardUploadedDoc(docReqId, index) {
+    if (!universalOrderWizardState.uploadedDocs[docReqId]) return;
+    if (Array.isArray(universalOrderWizardState.uploadedDocs[docReqId])) {
+        universalOrderWizardState.uploadedDocs[docReqId].splice(index, 1);
+        if (universalOrderWizardState.uploadedDocs[docReqId].length === 0) {
+            delete universalOrderWizardState.uploadedDocs[docReqId];
+        }
+    } else {
+        delete universalOrderWizardState.uploadedDocs[docReqId];
+    }
+    renderWizardStep4Documents();
+}
+
 function renderWizardStep4Documents() {
     const container = document.getElementById('wizard-documents-checklist');
     if (!container) return;
 
-    const p = universalOrderWizardState.selectedProduct;
-    const reqs = p.document_requirements || [];
-
-    if (reqs.length === 0) {
-        container.innerHTML = '<div style="font-size:0.85rem; color:var(--color-text-muted); text-align:center; padding:30px;">No document uploads required for this product. Click Continue to review your order.</div>';
-        return;
-    }
+    // Standardized must-have 3 document requirements for ALL products
+    const reqs = [
+        {
+            id: 'id_document',
+            name: 'ID Document (Passport / Driving Licence / Photo ID)',
+            description: 'Valid passport or government photo ID (Accepted: PDF, JPG, PNG, DOC, DOCX).',
+            required: true,
+            allowed_extensions: ['.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx']
+        },
+        {
+            id: 'bank_statement',
+            name: 'Bank Statement (Last 3 Months)',
+            description: 'Recent local or UK bank statement issued within the last 90 days.',
+            required: true,
+            allowed_extensions: ['.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx']
+        },
+        {
+            id: 'additional_documents',
+            name: 'Additional Documents & Supporting Files',
+            description: 'Upload any extra client documents, certificates, briefs, or files (Multiple files supported).',
+            required: false,
+            allowed_extensions: ['.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx', '.zip']
+        }
+    ];
 
     container.innerHTML = reqs.map(doc => {
-        const uploaded = universalOrderWizardState.uploadedDocs[doc.id];
-        const statusText = uploaded ? uploaded.status : (doc.required ? 'Required' : 'Optional');
-        const statusClass = uploaded ? 'completed' : (doc.required ? 'pending' : 'info');
+        const uploadedVal = universalOrderWizardState.uploadedDocs[doc.id];
+        const uploads = Array.isArray(uploadedVal) ? uploadedVal : (uploadedVal ? [uploadedVal] : []);
+        const count = uploads.length;
+        const statusText = count > 0 ? `${count} File${count > 1 ? 's' : ''} Uploaded` : (doc.required ? 'Required' : 'Optional');
+        const statusClass = count > 0 ? 'completed' : (doc.required ? 'pending' : 'info');
+
+        const uploadedFilesHTML = uploads.map((u, idx) => `
+            <div style="display:flex; align-items:center; justify-content:space-between; background:var(--color-surface); border:1px solid var(--color-border); border-radius:8px; padding:6px 12px; margin-top:6px; font-size:0.8rem;">
+                <span style="color:var(--color-success); font-weight:600; display:flex; align-items:center; gap:6px;">
+                    <i data-lucide="check-circle" style="width:14px; height:14px;"></i> ${escapeHtml(u.file_name)}
+                </span>
+                <button type="button" style="background:none; border:none; color:var(--color-danger); cursor:pointer; font-size:0.78rem; font-weight:700; padding:2px 6px;" onclick="removeWizardUploadedDoc('${doc.id}', ${idx})">
+                    × Remove
+                </button>
+            </div>
+        `).join('');
 
         return `
-            <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:12px; padding:16px 20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
-                <div>
-                    <div style="display:flex; align-items:center; gap:8px;">
-                        <strong style="font-size:0.9rem; color:var(--color-text-primary);">${escapeHtml(doc.name)}</strong>
-                        <span class="status-badge ${statusClass}">${statusText}</span>
+            <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:12px; padding:16px 20px; margin-bottom:12px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+                    <div>
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <strong style="font-size:0.9rem; color:var(--color-text-primary);">${escapeHtml(doc.name)}</strong>
+                            <span class="status-badge ${statusClass}">${statusText}</span>
+                        </div>
+                        <p style="font-size:0.8rem; color:var(--color-text-muted); margin:4px 0 0 0;">${escapeHtml(doc.description || '')}</p>
                     </div>
-                    <p style="font-size:0.8rem; color:var(--color-text-muted); margin:4px 0 0 0;">${escapeHtml(doc.description || '')}</p>
-                    ${uploaded ? `<div style="font-size:0.78rem; color:var(--color-success); font-weight:600; margin-top:4px;">✓ ${escapeHtml(uploaded.file_name)}</div>` : ''}
+                    <div>
+                        <input type="file" id="doc-file-input-${doc.id}" multiple style="display:none;" onchange="handleWizardFileUpload('${doc.id}', this)">
+                        <button type="button" class="btn-secondary" style="font-size:0.82rem; padding:8px 14px;" onclick="document.getElementById('doc-file-input-${doc.id}').click()">
+                            <i data-lucide="upload-cloud" style="width:14px; height:14px; margin-right:4px;"></i> ${count > 0 ? '+ Upload More Files' : 'Upload File(s)'}
+                        </button>
+                    </div>
                 </div>
-                <div>
-                    <input type="file" id="doc-file-input-${doc.id}" style="display:none;" onchange="handleWizardFileUpload('${doc.id}', this)">
-                    <button type="button" class="btn-secondary" style="font-size:0.82rem; padding:8px 14px;" onclick="document.getElementById('doc-file-input-${doc.id}').click()">
-                        <i data-lucide="upload-cloud" style="width:14px; height:14px; margin-right:4px;"></i> ${uploaded ? 'Replace Document' : 'Upload File'}
-                    </button>
-                </div>
+                ${uploadedFilesHTML ? `<div style="margin-top:10px;">${uploadedFilesHTML}</div>` : ''}
             </div>
         `;
     }).join('');
@@ -12525,44 +12755,52 @@ function renderWizardStep4Documents() {
 }
 
 async function handleWizardFileUpload(docReqId, fileInput) {
-    if (!fileInput.files || !fileInput.files[0]) return;
-    const file = fileInput.files[0];
+    if (!fileInput.files || fileInput.files.length === 0) return;
+    const files = Array.from(fileInput.files);
 
-    showWizardError(`Uploading ${file.name}...`, false);
+    showWizardError(`Uploading ${files.length} document file(s)...`, false);
 
     try {
-        const b64 = await readFileAsBase64(file);
         const targetClient = universalOrderWizardState.selectedCustomer;
         const headers = { 'Content-Type': 'application/json' };
         const token = localStorage.getItem('brixen_session_token');
         if (token) headers['Authorization'] = 'Bearer ' + token;
 
-        const res = await fetch('/api/client/documents/upload', {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: headers,
-            body: JSON.stringify({
-                name: file.name,
-                category: 'Order Documents',
-                file_name: file.name,
-                file_content_base64: b64,
-                client_id: targetClient ? targetClient.id : null,
-                company_id: (targetClient && targetClient.company_id) || null
-            })
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok && (data.status === 'success' || data.doc_id || data.id)) {
-            hideWizardError();
-            universalOrderWizardState.uploadedDocs[docReqId] = {
-                document_id: data.doc_id || data.id || data.document_id,
-                file_name: file.name,
-                file_path: data.file_path || '',
-                status: 'Uploaded'
-            };
-            renderWizardStep4Documents();
-        } else {
-            showWizardError(data.message || 'File upload failed. Please try again.');
+        if (!universalOrderWizardState.uploadedDocs[docReqId]) {
+            universalOrderWizardState.uploadedDocs[docReqId] = [];
+        } else if (!Array.isArray(universalOrderWizardState.uploadedDocs[docReqId])) {
+            universalOrderWizardState.uploadedDocs[docReqId] = [universalOrderWizardState.uploadedDocs[docReqId]];
         }
+
+        for (const file of files) {
+            const b64 = await readFileAsBase64(file);
+            const res = await fetch('/api/client/documents/upload', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: headers,
+                body: JSON.stringify({
+                    name: file.name,
+                    category: 'Order Documents',
+                    file_name: file.name,
+                    file_content_base64: b64,
+                    client_id: targetClient ? targetClient.id : null,
+                    company_id: (targetClient && targetClient.company_id) || null
+                })
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok && (data.status === 'success' || data.doc_id || data.id)) {
+                universalOrderWizardState.uploadedDocs[docReqId].push({
+                    document_id: data.doc_id || data.id || data.document_id,
+                    file_name: file.name,
+                    file_path: data.file_path || '',
+                    status: 'Uploaded'
+                });
+            } else {
+                showWizardError(data.message || `File upload failed for ${file.name}.`);
+            }
+        }
+        hideWizardError();
+        renderWizardStep4Documents();
     } catch (err) {
         showWizardError('Document upload error: ' + (err.message || err));
     }
@@ -13142,28 +13380,54 @@ function setupCompaniesHouseLiveSearch(inputEl, options = {}) {
 
     let dropdown = document.createElement('div');
     dropdown.className = 'ch-live-search-dropdown';
-    dropdown.style.cssText = 'position:absolute; left:0; right:0; top:100%; z-index:1200; background:#ffffff; border:1px solid #cbd5e1; border-radius:8px; box-shadow:0 10px 25px -5px rgba(0,0,0,0.15); max-height:260px; overflow-y:auto; margin-top:4px; display:none;';
+    dropdown.style.cssText = 'position:absolute; left:0; right:0; top:100%; z-index:1200; background:#ffffff; border:1px solid #cbd5e1; border-radius:8px; box-shadow:0 10px 25px -5px rgba(0,0,0,0.15); max-height:280px; overflow-y:auto; margin-top:4px; display:none;';
     if (parent) parent.appendChild(dropdown);
 
+    let searchRequestId = 0;
+    const hideDropdown = () => {
+        dropdown.style.display = 'none';
+        dropdown.innerHTML = '';
+    };
+    const flashFilled = (el) => {
+        if (!el) return;
+        el.style.borderColor = '#16a34a';
+        el.style.backgroundColor = '#f0fdf4';
+        setTimeout(() => { el.style.borderColor = ''; el.style.backgroundColor = ''; }, 2500);
+    };
+    const setFieldValue = (el, value, skipInputEvent = false) => {
+        if (!el || value == null || value === '') return;
+        el.value = value;
+        if (!skipInputEvent) el.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+
     inputEl.addEventListener('input', (e) => {
+        // Selecting a result fills the field; do not restart CH search from that fill.
+        if (inputEl.dataset.chSuppressSearch === '1') return;
+
         const query = (e.target.value || '').trim();
         clearTimeout(chSearchDebounceTimer);
+        searchRequestId += 1;
         if (query.length < 2) {
-            dropdown.style.display = 'none';
-            dropdown.innerHTML = '';
+            hideDropdown();
             return;
         }
 
+        const requestId = searchRequestId;
         chSearchDebounceTimer = setTimeout(async () => {
+            if (requestId !== searchRequestId || inputEl.dataset.chSuppressSearch === '1') return;
             dropdown.style.display = 'block';
-            dropdown.innerHTML = '<div style="padding:12px; font-size:0.8rem; color:#64748b; text-align:center;"><i data-lucide="loader-2" class="spin"></i> Searching Companies House...</div>';
+            dropdown.innerHTML = '<div style="padding:14px; font-size:0.88rem; color:#64748b; text-align:center;"><i data-lucide="loader-2" class="spin"></i> Searching Companies House...</div>';
             if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
 
             try {
                 const res = await fetch(`/api/admin/companies/search?q=${encodeURIComponent(query)}`);
                 const data = await res.json().catch(() => ({}));
+                if (requestId !== searchRequestId || inputEl.dataset.chSuppressSearch === '1') return;
                 if (!res.ok || data.status !== 'success' || !data.companies || !data.companies.length) {
-                    dropdown.innerHTML = '<div style="padding:10px 14px; font-size:0.8rem; color:#94a3b8;">No matching UK companies found.</div>';
+                    dropdown.innerHTML = '<div style="padding:14px; font-size:0.88rem; color:#94a3b8; text-align:center;">No companies found on Companies House.</div>';
+                    setTimeout(() => {
+                        if (requestId === searchRequestId) hideDropdown();
+                    }, 2000);
                     return;
                 }
 
@@ -13175,73 +13439,103 @@ function setupCompaniesHouseLiveSearch(inputEl, options = {}) {
                     const regOffice = escapeHtml(c.reg_office || c.address || '');
 
                     return `
-                        <div class="ch-search-item" data-cnum="${cnum}" data-cname="${cname}" data-director="${director}" data-office="${regOffice}" style="padding:10px 14px; border-bottom:1px solid #f1f5f9; cursor:pointer; transition:background 0.15s ease;">
-                            <div style="font-weight:700; font-size:0.85rem; color:#0f172a; display:flex; justify-content:space-between; align-items:center;">
+                        <div class="ch-search-item" data-cnum="${cnum}" data-cname="${cname}" data-director="${director}" data-office="${regOffice}" style="padding:12px 16px; border-bottom:1px solid #f1f5f9; cursor:pointer; transition:background 0.15s ease;">
+                            <div style="font-weight:700; font-size:0.92rem; color:#0f172a; display:flex; justify-content:space-between; align-items:center;">
                                 <span>${cname}</span>
-                                <span style="font-size:0.75rem; font-weight:600; color:#0284c7; background:#e0f2fe; padding:2px 6px; border-radius:4px;">#${cnum}</span>
+                                <span style="font-size:0.78rem; font-weight:600; color:#0284c7; background:#e0f2fe; padding:3px 8px; border-radius:4px;">#${cnum}</span>
                             </div>
-                            <div style="font-size:0.78rem; color:#475569; margin-top:2px;">
+                            <div style="font-size:0.82rem; color:#475569; margin-top:4px;">
                                 ${director ? `<strong>Director:</strong> ${director}` : 'Status: ' + status}
-                                ${regOffice ? ` · <span style="color:#64748b;">${regOffice.substring(0, 45)}...</span>` : ''}
+                                ${regOffice ? ` · <span style="color:#64748b;">${regOffice.substring(0, 50)}...</span>` : ''}
                             </div>
                         </div>
                     `;
                 }).join('');
 
                 dropdown.querySelectorAll('.ch-search-item').forEach((item) => {
-                    item.addEventListener('mouseenter', () => { item.style.background = '#f8fafc'; });
+                    item.addEventListener('mouseenter', () => { item.style.background = '#f0f9ff'; });
                     item.addEventListener('mouseleave', () => { item.style.background = '#ffffff'; });
-                    item.addEventListener('click', () => {
-                        const selectedName = item.getAttribute('data-cname');
-                        const selectedNum = item.getAttribute('data-cnum');
-                        const selectedDirector = item.getAttribute('data-director');
-                        const selectedOffice = item.getAttribute('data-office');
+                    item.addEventListener('click', (evt) => {
+                        evt.preventDefault();
+                        evt.stopPropagation();
+                        const selectedName = item.getAttribute('data-cname') || '';
+                        const selectedNum = item.getAttribute('data-cnum') || '';
+                        const selectedDirector = item.getAttribute('data-director') || '';
+                        const selectedOffice = item.getAttribute('data-office') || '';
+
+                        // Cancel in-flight / pending searches and suppress re-entry while we fill fields.
+                        clearTimeout(chSearchDebounceTimer);
+                        searchRequestId += 1;
+                        inputEl.dataset.chSuppressSearch = '1';
+                        hideDropdown();
 
                         inputEl.value = selectedName;
-                        inputEl.dispatchEvent(new Event('input', { bubbles: true }));
-                        inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+                        if (typeof updateWizardFieldValue === 'function') {
+                            updateWizardFieldValue('company_name', selectedName);
+                            updateWizardFieldValue('proposed_company_name', selectedName);
+                            if (selectedNum) updateWizardFieldValue('company_number', selectedNum);
+                            if (selectedDirector) {
+                                updateWizardFieldValue('director_name', selectedDirector);
+                                updateWizardFieldValue('full_name', selectedDirector);
+                                updateWizardFieldValue('end_client_name', selectedDirector);
+                            }
+                            if (selectedOffice) {
+                                updateWizardFieldValue('registered_office_address', selectedOffice);
+                                updateWizardFieldValue('address', selectedOffice);
+                            }
+                        }
 
-                        // Smart container discovery for form fields
+                        const numEl = document.getElementById('wfield-company_number');
+                        const dirEl = document.getElementById('wfield-director_name');
+                        const officeEl = document.getElementById('wfield-registered_office_address');
+
+                        setFieldValue(numEl, selectedNum);
+                        setFieldValue(dirEl, selectedDirector);
+                        setFieldValue(officeEl, selectedOffice);
+                        flashFilled(numEl);
+                        flashFilled(dirEl);
+                        flashFilled(officeEl);
+
+                        if (typeof universalOrderWizardState !== 'undefined') {
+                            universalOrderWizardState.formValues['company_name'] = selectedName;
+                            universalOrderWizardState.formValues['proposed_company_name'] = selectedName;
+                            if (selectedNum) universalOrderWizardState.formValues['company_number'] = selectedNum;
+                            if (selectedDirector) {
+                                universalOrderWizardState.formValues['director_name'] = selectedDirector;
+                                universalOrderWizardState.formValues['full_name'] = selectedDirector;
+                                universalOrderWizardState.formValues['end_client_name'] = selectedDirector;
+                            }
+                            if (selectedOffice) {
+                                universalOrderWizardState.formValues['registered_office_address'] = selectedOffice;
+                                universalOrderWizardState.formValues['address'] = selectedOffice;
+                            }
+                        }
+
                         const form = inputEl.closest('form, div.modal-card, div.wizard-step-pane, div[id*="order"], body');
-
-                        let numTarget = options.numEl;
-                        let directorTarget = options.directorEl;
-                        let officeTarget = options.officeEl;
-
                         if (form) {
-                            if (!numTarget) numTarget = form.querySelector('input[id*="company-number"], input[id*="company_number"], input[id*="reg"], input[name*="reg"], input[placeholder*="reg"]');
-                            if (!directorTarget) directorTarget = form.querySelector('input[id*="director"], input[name*="director"], input[placeholder*="director"]');
-                            if (!officeTarget) officeTarget = form.querySelector('input[id*="address"], input[name*="address"], input[placeholder*="address"]');
+                            let fallbackNum = form.querySelector('input[id*="company-number"]:not([id="wfield-company_number"])');
+                            let fallbackDir = form.querySelector('input[id*="director"]:not([id="wfield-director_name"])');
+                            let fallbackOff = form.querySelector('input[id*="address"]:not([id="wfield-registered_office_address"])');
+                            setFieldValue(fallbackNum, selectedNum);
+                            setFieldValue(fallbackDir, selectedDirector);
+                            setFieldValue(fallbackOff, selectedOffice);
                         }
 
-                        if (!numTarget) numTarget = document.getElementById('create-company-number') || document.getElementById('wizard-company-number');
-                        if (!directorTarget) directorTarget = document.getElementById('create-company-director') || document.getElementById('wizard-director-name') || document.getElementById('staff-edit-director-name');
-                        if (!officeTarget) officeTarget = document.getElementById('create-company-address') || document.getElementById('wizard-registered-address');
-
-                        if (numTarget) {
-                            numTarget.value = selectedNum;
-                            numTarget.dispatchEvent(new Event('input', { bubbles: true }));
-                            numTarget.dispatchEvent(new Event('change', { bubbles: true }));
+                        if (!numEl) {
+                            let alt = document.getElementById('create-company-number') || document.getElementById('wizard-company-number');
+                            setFieldValue(alt, selectedNum);
                         }
-                        if (directorTarget && selectedDirector) {
-                            directorTarget.value = selectedDirector;
-                            directorTarget.dispatchEvent(new Event('input', { bubbles: true }));
-                            directorTarget.dispatchEvent(new Event('change', { bubbles: true }));
-                            
-                            directorTarget.style.borderColor = '#2563eb';
-                            directorTarget.style.backgroundColor = '#eff6ff';
-                            setTimeout(() => {
-                                directorTarget.style.borderColor = '';
-                                directorTarget.style.backgroundColor = '';
-                            }, 2000);
+                        if (!dirEl) {
+                            let alt = document.getElementById('create-company-director') || document.getElementById('wizard-director-name') || document.getElementById('staff-edit-director-name');
+                            setFieldValue(alt, selectedDirector);
                         }
-                        if (officeTarget && selectedOffice) {
-                            officeTarget.value = selectedOffice;
-                            officeTarget.dispatchEvent(new Event('input', { bubbles: true }));
-                            officeTarget.dispatchEvent(new Event('change', { bubbles: true }));
+                        if (!officeEl) {
+                            let alt = document.getElementById('create-company-address') || document.getElementById('wizard-registered-address');
+                            setFieldValue(alt, selectedOffice);
                         }
 
-                        dropdown.style.display = 'none';
+                        // Allow typing a new search after the selection is applied.
+                        setTimeout(() => { delete inputEl.dataset.chSuppressSearch; }, 0);
 
                         if (typeof options.onSelect === 'function') {
                             options.onSelect({ name: selectedName, number: selectedNum, director: selectedDirector, office: selectedOffice });
@@ -13249,14 +13543,14 @@ function setupCompaniesHouseLiveSearch(inputEl, options = {}) {
                     });
                 });
             } catch (err) {
-                dropdown.style.display = 'none';
+                if (requestId === searchRequestId) hideDropdown();
             }
         }, 300);
     });
 
     document.addEventListener('click', (evt) => {
         if (parent && !parent.contains(evt.target)) {
-            dropdown.style.display = 'none';
+            hideDropdown();
         }
     });
 }

@@ -287,6 +287,12 @@ def ensure_schema():
         conn.execute("ALTER TABLE orders ADD COLUMN owner_name TEXT")
     if 'owner_form_email' not in order_cols:
         conn.execute("ALTER TABLE orders ADD COLUMN owner_form_email TEXT")
+    if 'end_client_name' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN end_client_name TEXT")
+    if 'end_client_email' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN end_client_email TEXT")
+    if 'end_client_phone' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN end_client_phone TEXT")
     invoice_cols = {row[1] for row in conn.execute("PRAGMA table_info(invoices)").fetchall()}
     if 'payment_timing' not in invoice_cols:
         conn.execute("ALTER TABLE invoices ADD COLUMN payment_timing TEXT NOT NULL DEFAULT 'After work'")
@@ -473,6 +479,11 @@ def ensure_schema():
         CREATE INDEX IF NOT EXISTS idx_company_book_entries_company_period
             ON company_book_entries(company_id, period_end);
     """)
+    try:
+        from accounts_file import ensure_ledger_schema
+        ensure_ledger_schema()
+    except Exception as _ledger_err:
+        print(f"[SchemaInit] ledger tables: {_ledger_err}")
     task_cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
     if 'department' not in task_cols:
         conn.execute("ALTER TABLE tasks ADD COLUMN department TEXT")
@@ -755,11 +766,39 @@ def ensure_rbac():
                 completed_at TIMESTAMP
             );
         """)
+        # Genuine business-data locks — never auto-delete real orders / companies / invoices.
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        _should_lock = False
+        if 'companies' in tables:
+            company_cols = {row[1] for row in conn.execute("PRAGMA table_info(companies)").fetchall()}
+            if 'data_locked' not in company_cols:
+                conn.execute("ALTER TABLE companies ADD COLUMN data_locked INTEGER NOT NULL DEFAULT 0")
+        if 'orders' in tables:
+            order_cols_lock = {row[1] for row in conn.execute("PRAGMA table_info(orders)").fetchall()}
+            if 'data_locked' not in order_cols_lock:
+                conn.execute("ALTER TABLE orders ADD COLUMN data_locked INTEGER NOT NULL DEFAULT 0")
+        if 'invoices' in tables:
+            invoice_cols = {row[1] for row in conn.execute("PRAGMA table_info(invoices)").fetchall()}
+            if 'data_locked' not in invoice_cols:
+                conn.execute("ALTER TABLE invoices ADD COLUMN data_locked INTEGER NOT NULL DEFAULT 0")
         conn.commit()
+        _should_lock = 'companies' in tables and 'orders' in tables and 'invoices' in tables
     except Exception as exc:
         print(f"[Schema Migration Note] {exc}")
+        _should_lock = False
     finally:
         conn.close()
+    if locals().get('_should_lock'):
+        try:
+            import data_protection as _data_protection
+            result = _data_protection.lock_genuine_records()
+            if any(result.values()):
+                print(
+                    "[DataProtection] Locked genuine records — "
+                    f"companies={result['companies']} orders={result['orders']} invoices={result['invoices']}"
+                )
+        except Exception as exc:
+            print(f"[DataProtection] Lock backfill skipped: {exc}")
 
 def query_db(query, args=(), one=False):
     conn = get_db()

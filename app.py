@@ -13,6 +13,7 @@ from wsgiref.simple_server import make_server, WSGIServer
 from socketserver import ThreadingMixIn
 from concurrent.futures import ThreadPoolExecutor
 from db import query_db, execute_db, hash_password, verify_password, needs_rehash, unusable_password_hash, get_db, ensure_schema
+import accounts_file as accounts_file_mod
 
 class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     """Handle static + API requests in parallel (local feel on the live portal)."""
@@ -1475,21 +1476,20 @@ def create_manual_crm_order(data, actor=None):
     company = None
     if company_id:
         company = query_db("SELECT * FROM companies WHERE id = ?;", (company_id,), one=True)
-        if not company or int(company.get('user_id') or 0) != int(client_id):
-            return None, 'Company does not belong to this client'
+        if company and int(company.get('user_id') or 0) != int(client_id) and actor and actor.get('role') in INTERNAL_STAFF_ROLES:
+            execute_db("UPDATE companies SET user_id = ? WHERE id = ?;", (client_id, company_id))
     else:
-        company_name = (extras.get('company_name') or extras.get('name') or '').strip()
+        form_vals = extras.get('form_values') if isinstance(extras.get('form_values'), dict) else {}
+        company_name = (extras.get('company_name') or extras.get('name') or form_vals.get('company_name') or form_vals.get('registered_company_name') or form_vals.get('proposed_company_name') or '').strip()
         if company_name:
             company_id, company_err = create_manual_company({
                 **extras,
                 'client_mode': 'existing',
                 'client_id': client_id,
                 'name': company_name,
-                'registered_email': extras.get('company_email') or extras.get('registered_email') or extras.get('owner_form_email'),
+                'registered_email': extras.get('company_email') or extras.get('registered_email') or extras.get('owner_form_email') or (client or {}).get('email'),
             }, actor)
-            if company_err:
-                return None, company_err
-            company = query_db("SELECT * FROM companies WHERE id = ?;", (company_id,), one=True)
+            company = query_db("SELECT * FROM companies WHERE id = ?;", (company_id,), one=True) if company_id else None
 
     try:
         price = float(extras.get('price') if extras.get('price') not in (None, '') else 0)
@@ -1560,14 +1560,44 @@ def create_manual_crm_order(data, actor=None):
     is_b2b_client = (client and (client.get('is_b2b') == 1 or client.get('client_type') == 'B2B'))
     b2b_client_id_val = client.get('b2b_id') if (is_b2b_client and client.get('b2b_id')) else None
 
+    form_vals = extras.get('form_values') if isinstance(extras.get('form_values'), dict) else {}
+    end_client_name = (
+        extras.get('end_client_name') or 
+        form_vals.get('end_client_name') or 
+        form_vals.get('full_name') or 
+        form_vals.get('contact_person') or 
+        form_vals.get('director_name') or 
+        extras.get('owner_name') or 
+        (client and client.get('full_name')) or ''
+    ).strip() or None
+
+    end_client_email = (
+        extras.get('end_client_email') or 
+        form_vals.get('end_client_email') or 
+        form_vals.get('email') or 
+        form_vals.get('forwarding_email') or 
+        extras.get('owner_form_email') or 
+        (client and client.get('email')) or ''
+    ).strip() or None
+
+    end_client_phone = (
+        extras.get('end_client_phone') or 
+        form_vals.get('end_client_phone') or 
+        form_vals.get('phone') or 
+        form_vals.get('uk_contact') or 
+        form_vals.get('contact_phone') or 
+        (client and client.get('phone')) or ''
+    ).strip() or None
+
     order_id = execute_db(
         """
         INSERT INTO orders (
             order_number, user_id, company_id, service_id, service_name,
             price, vat, total, status, progress_percent, notes, payment_mode,
-            owner_name, owner_form_email, assigned_staff_id, checkout_form_json,
+            owner_name, owner_form_email, end_client_name, end_client_email, end_client_phone,
+            assigned_staff_id, checkout_form_json,
             b2b_client_id, access_email, access_email_password
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """,
         (
             order_number,
@@ -1584,6 +1614,9 @@ def create_manual_crm_order(data, actor=None):
             payment_mode,
             owner_name or None,
             owner_email,
+            end_client_name,
+            end_client_email,
+            end_client_phone,
             (actor or {}).get('id'),
             json.dumps(checkout_form_data),
             b2b_client_id_val,
@@ -1643,16 +1676,18 @@ def create_manual_crm_order(data, actor=None):
     uploaded_docs = extras.get('uploaded_docs')
     if uploaded_docs and isinstance(uploaded_docs, dict):
         for req_key, doc_item in uploaded_docs.items():
-            if isinstance(doc_item, dict):
-                doc_id_val = doc_item.get('document_id') or doc_item.get('id')
-                if doc_id_val:
-                    try:
-                        execute_db(
-                            "UPDATE documents SET order_id = ?, company_id = COALESCE(company_id, ?) WHERE id = ?;",
-                            (order_id, company_id, int(doc_id_val))
-                        )
-                    except Exception:
-                        pass
+            items = doc_item if isinstance(doc_item, list) else [doc_item]
+            for item in items:
+                if isinstance(item, dict):
+                    doc_id_val = item.get('document_id') or item.get('id')
+                    if doc_id_val:
+                        try:
+                            execute_db(
+                                "UPDATE documents SET order_id = ?, company_id = COALESCE(company_id, ?) WHERE id = ?;",
+                                (order_id, company_id, int(doc_id_val))
+                            )
+                        except Exception:
+                            pass
 
     ensure_order_timeline(order_id)
     ensure_invoice_for_order(order_id)
@@ -3367,11 +3402,17 @@ def record_dismissed_company_card(company):
     )
 
 
-def delete_company_card(company_id, actor=None):
+def delete_company_card(company_id, actor=None, *, force_delete_genuine=False):
     """Remove a company portfolio card. Linked orders are reassigned or hidden."""
+    import data_protection as _data_protection
     company = query_db("SELECT * FROM companies WHERE id = ?;", (company_id,), one=True)
     if not company:
         return None, 'Company not found'
+    blocked = _data_protection.refuse_manual_delete_company(
+        company, force=force_delete_genuine, actor=actor,
+    )
+    if blocked:
+        return None, blocked
     record_dismissed_company_card(company)
     replacement = match_company_for_client(company.get('user_id'), company.get('name'), exclude_id=company_id)
     replacement_row = query_db(
@@ -3401,7 +3442,7 @@ def delete_company_card(company_id, actor=None):
     return company, None
 
 
-def bulk_delete_company_cards(company_ids, actor=None):
+def bulk_delete_company_cards(company_ids, actor=None, *, force_delete_genuine=False):
     deleted = []
     errors = []
     seen = set()
@@ -3414,7 +3455,7 @@ def bulk_delete_company_cards(company_ids, actor=None):
         if cid in seen:
             continue
         seen.add(cid)
-        company, err = delete_company_card(cid, actor=actor)
+        company, err = delete_company_card(cid, actor=actor, force_delete_genuine=force_delete_genuine)
         if err:
             errors.append({'id': cid, 'message': err})
         else:
@@ -6283,13 +6324,18 @@ def heal_orders_hidden_after_duplicate_company_delete():
 
 
 def absorb_company_into(source_id, target_id):
+    import data_protection as _data_protection
     source_id = optional_record_id(source_id)
     target_id = optional_record_id(target_id)
     if not source_id or not target_id or source_id == target_id:
         return False
-    source = query_db("SELECT id, user_id FROM companies WHERE id = ?;", (source_id,), one=True)
+    source = query_db("SELECT * FROM companies WHERE id = ?;", (source_id,), one=True)
     target = query_db("SELECT id, user_id FROM companies WHERE id = ?;", (target_id,), one=True)
     if not source or not target or source.get('user_id') != target.get('user_id'):
+        return False
+    # Never auto-delete a genuine registered company — only pending placeholders may be absorbed.
+    blocked = _data_protection.refuse_auto_delete_company(source)
+    if blocked:
         return False
     execute_db("UPDATE orders SET company_id = ?, portfolio_hidden = 0 WHERE company_id = ?;", (target_id, source_id))
     execute_db("UPDATE documents SET company_id = ? WHERE company_id = ?;", (target_id, source_id))
@@ -15174,7 +15220,15 @@ try:
 except Exception:
     pass
 
-def remove_customer_accounts(customer_ids, actor=None):
+def can_force_delete_genuine(user):
+    """Owner / Super Admin may permanently remove locked genuine business records."""
+    return bool(user and str(user.get('role') or '').strip().upper() in {'SUPER_ADMIN', 'SUPERADMIN'})
+
+
+def remove_customer_accounts(customer_ids, actor=None, *, force_delete_genuine=False):
+    import data_protection as _data_protection
+    if can_force_delete_genuine(actor):
+        force_delete_genuine = True
     if not customer_ids or not isinstance(customer_ids, (list, tuple, set)):
         return 0
     ids_list = [int(x) for x in customer_ids if str(x).isdigit()]
@@ -15189,7 +15243,23 @@ def remove_customer_accounts(customer_ids, actor=None):
         placeholders = ','.join('?' for _ in chunk)
         
         targets = query_db(f"SELECT id, email, full_name FROM users WHERE role = 'CLIENT' AND id IN ({placeholders});", chunk) or []
-        found_ids = [t['id'] for t in targets]
+        found_ids = []
+        for target in targets:
+            blocked = _data_protection.refuse_client_account_purge(
+                target['id'], force=force_delete_genuine, actor=actor,
+            )
+            if blocked:
+                print(f"[remove_customer_accounts] Blocked client {target['id']}: {blocked}")
+                if actor:
+                    log_activity(
+                        actor,
+                        'CLIENT_DELETE_BLOCKED',
+                        'users',
+                        str(target['id']),
+                        blocked,
+                    )
+                continue
+            found_ids.append(target['id'])
         if not found_ids:
             continue
             
@@ -16568,7 +16638,17 @@ def application(environ, start_response):
             return json_response(start_response, {'status': 'error', 'message': 'Select at least one company'}, "400 Bad Request")
         if len(ids) > 200:
             return json_response(start_response, {'status': 'error', 'message': 'Delete up to 200 companies at a time'}, "400 Bad Request")
-        summary = bulk_delete_company_cards(ids, actor=user)
+        summary = bulk_delete_company_cards(
+            ids,
+            actor=user,
+            force_delete_genuine=bool(data.get('force_delete_genuine')) or can_force_delete_genuine(user),
+        )
+        if summary['deleted_count'] == 0 and summary.get('errors'):
+            return json_response(start_response, {
+                'status': 'error',
+                'message': summary['errors'][0].get('message') or 'Unable to delete selected companies.',
+                **summary,
+            }, "403 Forbidden")
         return json_response(start_response, {
             'status': 'success',
             'message': f"Deleted {summary['deleted_count']} compan{'y' if summary['deleted_count'] == 1 else 'ies'}.",
@@ -16723,9 +16803,17 @@ def application(environ, start_response):
             company_id = int(parts[3])
         except (TypeError, ValueError):
             return json_response(start_response, {'status': 'error', 'message': 'Company not found'}, "404 Not Found")
-        company, error = delete_company_card(company_id, actor=user)
+        force_delete = can_force_delete_genuine(user)
+        try:
+            body = parse_body(environ) or {}
+            force_delete = bool(body.get('force_delete_genuine')) or force_delete
+        except Exception:
+            pass
+        company, error = delete_company_card(company_id, actor=user, force_delete_genuine=force_delete)
         if error:
-            status_code = "404 Not Found" if error == 'Company not found' else "400 Bad Request"
+            status_code = "404 Not Found" if error == 'Company not found' else (
+                "403 Forbidden" if 'locked' in error.lower() else "400 Bad Request"
+            )
             return json_response(start_response, {'status': 'error', 'message': error}, status_code)
         return json_response(start_response, {
             'status': 'success',
@@ -17320,7 +17408,19 @@ def application(environ, start_response):
         if not target or target.get('role') != 'CLIENT':
             return json_response(start_response, {'status': 'error', 'message': 'Customer not found or not a client'}, "404 Not Found")
 
-        count = remove_customer_accounts([customer_id], actor=user)
+        count = remove_customer_accounts(
+            [customer_id],
+            actor=user,
+            force_delete_genuine=bool(data.get('force_delete_genuine')) or can_force_delete_genuine(user),
+        )
+        if count < 1:
+            return json_response(start_response, {
+                'status': 'error',
+                'message': (
+                    'This client could not be deleted. '
+                    'If records are locked, sign in as Super Admin (owner) and try again.'
+                ),
+            }, "403 Forbidden")
         return json_response(start_response, {
             'status': 'success',
             'message': f"Customer '{target.get('full_name') or target.get('email')}' has been removed successfully."
@@ -17342,11 +17442,26 @@ def application(environ, start_response):
         if not customer_ids:
             return json_response(start_response, {'status': 'error', 'message': 'No valid customer IDs provided'}, "400 Bad Request")
 
-        deleted_count = remove_customer_accounts(customer_ids, actor=user)
+        deleted_count = remove_customer_accounts(
+            customer_ids,
+            actor=user,
+            force_delete_genuine=bool(data.get('force_delete_genuine')) or can_force_delete_genuine(user),
+        )
+
+        if deleted_count < 1:
+            return json_response(start_response, {
+                'status': 'error',
+                'message': (
+                    'No customers were removed. '
+                    'If records are locked, sign in as Super Admin (owner) and try again.'
+                ),
+                'deleted_count': 0,
+            }, "403 Forbidden")
 
         return json_response(start_response, {
             'status': 'success',
-            'message': f"Successfully removed {deleted_count} customer(s)."
+            'message': f"Successfully removed {deleted_count} customer(s).",
+            'deleted_count': deleted_count,
         })
 
     if path in ('/api/admin/orders', '/api/client/orders') and method == 'POST':
@@ -17744,6 +17859,18 @@ def application(environ, start_response):
         existing = query_db("SELECT * FROM orders WHERE id = ?;", (oid,), one=True)
         if not existing:
             return json_response(start_response, {'status': 'error', 'message': 'Order not found'}, "404 Not Found")
+        import data_protection as _data_protection
+        force_delete = can_force_delete_genuine(user)
+        try:
+            body = parse_body(environ) or {}
+            force_delete = bool(body.get('force_delete_genuine')) or force_delete
+        except Exception:
+            pass
+        blocked = _data_protection.refuse_manual_delete_order(
+            existing, force=force_delete, actor=user,
+        )
+        if blocked:
+            return json_response(start_response, {'status': 'error', 'message': blocked}, "403 Forbidden")
         company_id = optional_record_id(existing.get('company_id'))
         company = query_db(
             "SELECT id, name, company_number, status, inc_date, director, reg_office FROM companies WHERE id = ?;",
@@ -18090,6 +18217,35 @@ def application(environ, start_response):
             'status': 'success',
             'filing': public_accounts_filing(filing, for_client=True),
         })
+
+    if path.startswith('/api/admin/accounts-file') or path.startswith('/api/client/accounts-file'):
+        if path.startswith('/api/admin/accounts-file'):
+            denied = require_permission(start_response, user, 'accountancy.manage')
+            if denied:
+                return denied
+        qs = urllib.parse.parse_qs(environ.get('QUERY_STRING', ''))
+        content_type = (environ.get('CONTENT_TYPE') or '').lower()
+        if method in ('POST', 'PUT', 'PATCH') and 'multipart/form-data' in content_type:
+            fields, files = parse_multipart_form(environ)
+            body = dict(fields)
+            body['_files'] = files
+        else:
+            body = parse_body(environ) if method in ('POST', 'PUT', 'PATCH') else {}
+        result = accounts_file_mod.route(path, method, user, body=body, query=qs)
+        if result is None:
+            return json_response(start_response, {'status': 'error', 'message': 'Accounts file route not found'}, "404 Not Found")
+        kind = result[0]
+        if kind == 'file':
+            _, status, payload, content_type, filename = result
+            safe_name = re.sub(r'[^A-Za-z0-9._-]+', '-', filename or 'accounts.html')
+            start_response(status, [
+                ('Content-Type', content_type),
+                ('Content-Length', str(len(payload))),
+                ('Content-Disposition', f'attachment; filename="{safe_name}"'),
+            ])
+            return [payload]
+        _, status, payload = result
+        return json_response(start_response, payload, status)
 
     if path == '/api/admin/documents' and method == 'GET':
         denied = require_permission(start_response, user, 'documents.view')
