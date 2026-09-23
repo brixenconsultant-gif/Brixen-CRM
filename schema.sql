@@ -105,6 +105,9 @@ CREATE TABLE IF NOT EXISTS companies (
     whatsapp_number TEXT,
     accounts_next_due DATE,
     accounts_overdue INTEGER NOT NULL DEFAULT 0,
+    accounts_made_up_to DATE,
+    accounts_period_start DATE,
+    accounts_last_made_up_to DATE,
     confirmation_next_due DATE,
     confirmation_overdue INTEGER NOT NULL DEFAULT 0,
     ch_attention_json TEXT,
@@ -146,7 +149,7 @@ CREATE TABLE IF NOT EXISTS company_directors (
     company_id INTEGER NOT NULL,
     name TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'Director',
-    nationality TEXT DEFAULT 'British',
+    nationality TEXT DEFAULT '',
     appointed_date DATE NOT NULL,
     FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
 );
@@ -204,12 +207,13 @@ CREATE TABLE IF NOT EXISTS services (
     duration TEXT DEFAULT '12 Months',
     status TEXT NOT NULL DEFAULT 'Active',
     featured INTEGER DEFAULT 0,
-    vat_rate REAL DEFAULT 0.20,
+    vat_rate REAL DEFAULT 0.00,
     renewal_period TEXT DEFAULT 'Annual',
     woocommerce_product_id TEXT,
     form_config_json TEXT,
     document_requirements_json TEXT,
     estimated_delivery_time TEXT DEFAULT '24-48 Hours',
+    cost_price REAL NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -246,6 +250,7 @@ CREATE TABLE IF NOT EXISTS orders (
     access_email TEXT,
     access_email_password TEXT,
     data_locked INTEGER NOT NULL DEFAULT 0,
+    cost_price REAL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -268,6 +273,7 @@ CREATE TABLE IF NOT EXISTS order_line_items (
     unit_price REAL NOT NULL DEFAULT 0,
     line_total REAL NOT NULL DEFAULT 0,
     sort_order INTEGER NOT NULL DEFAULT 0,
+    fulfillment_status TEXT NOT NULL DEFAULT 'Pending',
     FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
 );
 
@@ -594,4 +600,31 @@ CREATE INDEX IF NOT EXISTS idx_compliance_log_fp
     ON compliance_notification_log(company_id, issue_fingerprint, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_compliance_log_token
     ON compliance_notification_log(track_token);
+
+-- Hot-path lookup indexes (applied again in ensure_schema for existing databases)
+CREATE INDEX IF NOT EXISTS idx_companies_user_id ON companies(user_id);
+CREATE INDEX IF NOT EXISTS idx_companies_user_created ON companies(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_companies_inc_date ON companies(inc_date);
+CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
+CREATE INDEX IF NOT EXISTS idx_orders_user_status ON orders(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_orders_user_created ON orders(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_orders_company_id ON orders(company_id);
+CREATE INDEX IF NOT EXISTS idx_orders_status_created ON orders(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_invoices_user_id ON invoices(user_id);
+CREATE INDEX IF NOT EXISTS idx_invoices_user_status ON invoices(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_invoices_order_id ON invoices(order_id);
+CREATE INDEX IF NOT EXISTS idx_addresses_user_id ON addresses(user_id);
+CREATE INDEX IF NOT EXISTS idx_addresses_user_expiry ON addresses(user_id, expiry_date);
+CREATE INDEX IF NOT EXISTS idx_order_line_items_order_id ON order_line_items(order_id, sort_order, id);
+CREATE INDEX IF NOT EXISTS idx_order_timeline_order_id ON order_timeline(order_id);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_documents_user_visible ON documents(user_id, client_visible, created_at);
+CREATE INDEX IF NOT EXISTS idx_documents_order_id ON documents(order_id);
+CREATE INDEX IF NOT EXISTS idx_company_directors_company ON company_directors(company_id);
+CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assigned_staff_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_client ON tasks(client_id);
+
 

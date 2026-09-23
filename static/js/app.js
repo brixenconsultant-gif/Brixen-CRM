@@ -189,7 +189,7 @@ const VIEW_HASH = {
     'admin-orders': 'admin-orders',
     'admin-tasks': 'admin-tasks',
     'admin-services': 'admin-services',
-    'admin-invoices': 'admin-invoices',
+    'admin-invoices': 'admin-payments',
     'admin-documents': 'admin-documents',
     'admin-logs': 'admin-logs',
     'admin-settings': 'admin-settings',
@@ -198,11 +198,21 @@ const VIEW_HASH = {
 const HASH_VIEW = {
     'admin-team': 'admin-tasks',
     'admin-quick-tasks': 'admin-tasks',
+    'admin-invoices': 'admin-invoices',
+    'admin-payments': 'admin-invoices',
+    'admin-payments-costs': 'admin-invoices',
+    'admin-payments-profit': 'admin-invoices',
 };
 Object.keys(VIEW_HASH).forEach((view) => {
     HASH_VIEW[VIEW_HASH[view]] = view;
     HASH_VIEW[view] = view;
 });
+// Keep Payments tab hashes pointed at the Payments hub view.
+HASH_VIEW['admin-payments'] = 'admin-invoices';
+HASH_VIEW['admin-payments-costs'] = 'admin-invoices';
+HASH_VIEW['admin-payments-profit'] = 'admin-invoices';
+HASH_VIEW['admin-payments-revenue'] = 'admin-invoices';
+HASH_VIEW['admin-invoices'] = 'admin-invoices';
 
 function viewFromHash(raw) {
     const hash = String(raw || '').replace(/^#/, '').split(/[/?]/)[0].trim();
@@ -210,8 +220,32 @@ function viewFromHash(raw) {
     return HASH_VIEW[hash] || null;
 }
 
+function paymentsTabFromHash(raw) {
+    const hash = String(raw || '').replace(/^#/, '').split(/[/?]/)[0].trim();
+    if (hash === 'admin-payments-costs' || hash === 'admin-payments-profit' || hash === 'admin-payments-revenue') {
+        return 'revenue';
+    }
+    return 'invoices';
+}
+
+function syncPaymentsHash(tab) {
+    const map = {
+        invoices: '#admin-payments',
+        revenue: '#admin-payments-revenue',
+        costs: '#admin-payments-revenue',
+        profit: '#admin-payments-revenue',
+    };
+    const next = map[tab] || '#admin-payments';
+    if (location.hash === next) return;
+    history.replaceState(null, '', location.pathname + location.search + next);
+}
+
 function syncViewHash(viewName) {
     if (!viewName || viewName === 'login') return;
+    if (viewName === 'admin-invoices') {
+        syncPaymentsHash(adminPaymentsTab || 'invoices');
+        return;
+    }
     const next = '#' + (VIEW_HASH[viewName] || viewName);
     if (location.hash === next) return;
     history.replaceState(null, '', location.pathname + location.search + next);
@@ -230,10 +264,16 @@ function applyPortalAccessNav() {
     });
     applyAdminRevenueCards();
     applyAdminOrderFinanceVisibility();
+    applyMoneyVisible();
     const crmInvoices = document.getElementById('crm-tab-invoices');
     if (crmInvoices) {
         crmInvoices.style.display = (currentUser && currentUser.role === 'STAFF') ? 'none' : '';
     }
+    const paymentsSub = document.getElementById('nav-admin-payments-sub');
+    if (paymentsSub) paymentsSub.style.display = 'none';
+    document.querySelectorAll('#adm-payments-tabs [data-payments-revenue]').forEach((el) => {
+        el.style.display = canViewRevenue() ? '' : 'none';
+    });
 }
 
 let detachedRevenueCards = [];
@@ -523,8 +563,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
     setupEventListeners();
+    consumeResetTokenFromUrl();
     requestAnimationFrame(() => safeCreateIcons());
     window.addEventListener('hashchange', () => {
+        if (typeof isUniversalOrderWizardOpen === 'function' && isUniversalOrderWizardOpen()) return;
         if (!currentUser) return;
         const view = viewFromHash(location.hash);
         if (view && view !== activeView && canOpenView(view)) switchView(view);
@@ -544,6 +586,7 @@ function setupEventListeners() {
     document.querySelectorAll('.nav-item, .top-menu-item').forEach(item => {
         item.addEventListener('click', (e) => {
             e.preventDefault();
+            if (typeof isUniversalOrderWizardOpen === 'function' && isUniversalOrderWizardOpen()) return;
             const view = item.getAttribute('data-view');
             if (view) switchView(view);
         });
@@ -572,6 +615,21 @@ function setupEventListeners() {
             if (action === 'edit-price') beginAdminOrderPriceEdit(orderId, orderAction.closest('.table-price-wrap'));
             return;
         }
+        const orderRow = e.target.closest('#view-admin-orders tr.order-row');
+        if (orderRow) {
+            const interactive = e.target.closest('a, button, input, select, textarea, label, .order-row-actions');
+            if (!interactive) {
+                document.querySelectorAll('#view-admin-orders tr.order-row.is-actions-open').forEach((row) => {
+                    if (row !== orderRow) row.classList.remove('is-actions-open');
+                });
+                orderRow.classList.toggle('is-actions-open');
+                return;
+            }
+        } else if (e.target.closest('#view-admin-orders')) {
+            document.querySelectorAll('#view-admin-orders tr.order-row.is-actions-open').forEach((row) => {
+                row.classList.remove('is-actions-open');
+            });
+        }
         const customerAction = e.target.closest('[data-customer-action]');
         if (customerAction) {
             e.preventDefault();
@@ -596,9 +654,9 @@ function setupEventListeners() {
             if (action === 'file') openFileAccountsModal(companyId);
             return;
         }
-        const orderRow = e.target.closest('#adm-orders-table-body tr[data-order-id]');
-        if (orderRow && !e.target.closest('select, a, button, input, textarea, .icon-edit-btn, .table-price-wrap')) {
-            const orderId = Number(orderRow.getAttribute('data-order-id'));
+        const orderRowForOpen = e.target.closest('#adm-orders-table-body tr[data-order-id]');
+        if (orderRowForOpen && !e.target.closest('select, a, button, input, textarea, .icon-edit-btn, .table-price-wrap, .order-row-actions')) {
+            const orderId = Number(orderRowForOpen.getAttribute('data-order-id'));
             if (orderId) openStaffOrderWorkspace(orderId);
         }
     });
@@ -763,16 +821,116 @@ function openForgotPasswordModal(event) {
     if (msg) { msg.style.display = 'none'; msg.textContent = ''; }
     const modal = document.getElementById('modal-forgot-password');
     if (modal) {
+        modal.classList.add('active');
         modal.removeAttribute('hidden');
         modal.style.display = 'flex';
+        modal.style.opacity = '1';
+        modal.style.pointerEvents = 'auto';
+    }
+    if (forgotEmail) {
+        setTimeout(() => forgotEmail.focus(), 50);
     }
 }
 
 function closeForgotPasswordModal() {
     const modal = document.getElementById('modal-forgot-password');
     if (modal) {
-        modal.setAttribute('hidden', '');
+        modal.classList.remove('active');
         modal.style.display = 'none';
+        modal.style.opacity = '';
+        modal.style.pointerEvents = '';
+    }
+}
+
+function openResetPasswordModal(token) {
+    const modal = document.getElementById('modal-reset-password');
+    const tokenEl = document.getElementById('reset-password-token');
+    const msg = document.getElementById('reset-password-msg');
+    if (tokenEl) tokenEl.value = token || '';
+    if (msg) { msg.style.display = 'none'; msg.textContent = ''; }
+    if (modal) {
+        modal.classList.add('active');
+        modal.style.display = 'flex';
+        modal.style.opacity = '1';
+        modal.style.pointerEvents = 'auto';
+    }
+}
+
+function closeResetPasswordModal() {
+    const modal = document.getElementById('modal-reset-password');
+    if (modal) {
+        modal.classList.remove('active');
+        modal.style.display = 'none';
+        modal.style.opacity = '';
+        modal.style.pointerEvents = '';
+    }
+}
+
+function consumeResetTokenFromUrl() {
+    try {
+        const params = new URLSearchParams(window.location.search || '');
+        const hash = String(window.location.hash || '').replace(/^#/, '');
+        const hashParams = new URLSearchParams(hash.includes('?') ? hash.split('?')[1] : (hash.startsWith('reset=') ? hash : ''));
+        const token = params.get('reset') || hashParams.get('reset') || params.get('token');
+        if (!token) return;
+        openResetPasswordModal(token);
+        const url = new URL(window.location.href);
+        url.searchParams.delete('reset');
+        url.searchParams.delete('token');
+        window.history.replaceState({}, '', url.pathname + url.search + url.hash);
+    } catch (_) { /* ignore */ }
+}
+
+async function handleResetPasswordSubmit(event) {
+    event.preventDefault();
+    const token = (document.getElementById('reset-password-token')?.value || '').trim();
+    const password = document.getElementById('reset-password-new')?.value || '';
+    const confirm = document.getElementById('reset-password-confirm')?.value || '';
+    const msgEl = document.getElementById('reset-password-msg');
+    const submitBtn = document.getElementById('btn-submit-reset-password');
+    if (password !== confirm) {
+        if (msgEl) {
+            msgEl.style.display = 'block';
+            msgEl.textContent = 'Passwords do not match.';
+            msgEl.style.background = '#fef2f2';
+            msgEl.style.color = '#991b1b';
+        }
+        return;
+    }
+    if (submitBtn) submitBtn.disabled = true;
+    try {
+        const res = await fetch('/api/auth/reset-password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token, password, confirm_password: confirm })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (msgEl) {
+            msgEl.style.display = 'block';
+            msgEl.textContent = data.message || (res.ok ? 'Password updated.' : 'Could not update password.');
+            msgEl.style.background = (res.ok && data.status === 'success') ? '#f0fdf4' : '#fef2f2';
+            msgEl.style.color = (res.ok && data.status === 'success') ? '#166534' : '#991b1b';
+        }
+        if (res.ok && data.status === 'success') {
+            setTimeout(() => {
+                closeResetPasswordModal();
+                const errDiv = document.getElementById('login-error-msg');
+                if (errDiv) {
+                    errDiv.style.display = 'block';
+                    errDiv.style.color = '#166534';
+                    errDiv.textContent = 'Password updated. Sign in with your new password.';
+                }
+            }, 800);
+        }
+    } catch (err) {
+        if (msgEl) {
+            msgEl.style.display = 'block';
+            msgEl.textContent = 'Unable to update password. Please try again.';
+            msgEl.style.background = '#fef2f2';
+            msgEl.style.color = '#991b1b';
+        }
+    } finally {
+        if (submitBtn) submitBtn.disabled = false;
     }
 }
 
@@ -848,8 +1006,12 @@ async function handleFormLogin(e) {
             switchView(defaultPortalView(), { force: true });
         } else {
             if (errDiv) {
-                errDiv.textContent = data.message || 'Invalid email or password.';
                 errDiv.style.display = 'block';
+                if (data && data.login_target === 'website' && data.website_url) {
+                    errDiv.innerHTML = `${escapeHtml(data.message || 'Please sign in on the website.')} <a href="${escapeHtml(data.website_url)}" target="_blank" rel="noopener">Open website login</a>`;
+                } else {
+                    errDiv.textContent = data.message || 'Invalid email or password.';
+                }
             }
         }
     } catch (err) {
@@ -1138,9 +1300,10 @@ function updateUserUI() {
     const adminRole = document.getElementById('admin-user-role');
     const adminAvatar = document.getElementById('admin-user-avatar');
     if (adminName) adminName.textContent = currentUser.full_name;
-    if (adminRole) adminRole.textContent = currentUser.role;
+    if (adminRole) adminRole.textContent = '';
     if (adminAvatar) {
         adminAvatar.textContent = currentUser.full_name.split(' ').map(n => n[0]).join('').substring(0,2);
+        adminAvatar.style.background = '';
     }
     
     if (isAdminShellUser(currentUser)) {
@@ -1200,6 +1363,9 @@ function restorePageScroll(pos) {
 
 function switchView(viewName, options) {
     const opts = options || {};
+    if (typeof isUniversalOrderWizardOpen === 'function' && isUniversalOrderWizardOpen() && !opts.force) {
+        return;
+    }
     closeAccountMenu();
     closeMobileNav();
     let tasksTeamTab = null;
@@ -1212,6 +1378,11 @@ function switchView(viewName, options) {
         viewName = 'admin-tasks';
         tasksTeamTab = 'tasks';
         openQuickTasks = true;
+    }
+    let performanceTab = null;
+    if (viewName === 'admin-incentives') {
+        viewName = 'staff-dashboard';
+        performanceTab = 'incentives';
     }
     if (currentUser && viewName !== 'login' && !canOpenView(viewName)) {
         viewName = defaultPortalView();
@@ -1254,7 +1425,10 @@ function switchView(viewName, options) {
     switch(viewName) {
         case 'client-orders': loadClientOrders(); break;
         case 'client-dashboard': loadClientDashboard(); break;
-        case 'client-companies': loadClientCompanies(); break;
+        case 'client-companies':
+            companyRegFilter.client = 'ch';
+            loadClientCompanies();
+            break;
         case 'client-accountancy': loadClientAccountancy(); break;
         case 'client-addresses': loadClientAddresses(); break;
         case 'client-invoices': loadClientInvoices(); break;
@@ -1276,14 +1450,20 @@ function switchView(viewName, options) {
             }, 0);
             break;
         case 'admin-customers': loadAdminCustomers(); break;
-        case 'admin-companies': loadAdminCompanies(); break;
+        case 'admin-companies':
+            loadAdminCompanies();
+            break;
         case 'admin-accountancy': loadAdminAccountancy(); break;
         case 'admin-services': loadAdminServices(); break;
-        case 'admin-invoices': loadAdminInvoices(); break;
+        case 'admin-invoices':
+            openAdminPaymentsTab(paymentsTabFromHash(location.hash), { skipSwitch: true });
+            break;
         case 'admin-documents': loadAdminDocuments(); break;
         case 'admin-intake': loadSmartIntakeView(); break;
-        case 'admin-incentives': loadTeamIncentivesReport(); break;
-        case 'staff-dashboard': loadStaffDashboard(); break;
+        case 'staff-dashboard':
+            if (performanceTab === 'incentives') switchPerformanceTab('incentives');
+            else switchPerformanceTab(activePerformanceTab || 'performance');
+            break;
         case 'admin-logs': loadAdminLogs(); break;
         case 'admin-settings': loadAdminSettings(); break;
     }
@@ -1761,21 +1941,111 @@ document.addEventListener('keydown', (event) => {
 // ----------------------------------------------------
 let clientDashLoadSeq = 0;
 let clientDashDocsById = {};
+let clientDashClockTimer = null;
+let clientDashClockName = '';
 
 function timeOfDayGreeting(date) {
-    const hour = (date || new Date()).getHours();
-    if (hour < 12) return 'Good morning';
-    if (hour < 17) return 'Good afternoon';
-    return 'Good evening';
+    return clientLocalClock(date).greeting;
+}
+
+function clientLocalClock(date) {
+    const d = date || new Date();
+    const hour = d.getHours();
+    let greeting = 'Good evening';
+    let period = 'evening';
+    // Night owl hours stay "evening" until 5am local.
+    if (hour >= 5 && hour < 12) {
+        greeting = 'Good morning';
+        period = 'morning';
+    } else if (hour >= 12 && hour < 17) {
+        greeting = 'Good afternoon';
+        period = 'afternoon';
+    }
+    const dateLabel = d.toLocaleDateString('en-GB', {
+        weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+    });
+    const timeParts = new Intl.DateTimeFormat('en-GB', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+        timeZoneName: 'short'
+    }).formatToParts(d);
+    const pick = (type) => (timeParts.find((part) => part.type === type) || {}).value || '';
+    const hourLabel = pick('hour');
+    const minuteLabel = pick('minute');
+    const dayPeriod = (pick('dayPeriod') || '').toLowerCase();
+    const tzShort = pick('timeZoneName');
+    const timeLabel = [hourLabel && minuteLabel ? `${hourLabel}:${minuteLabel}` : '', dayPeriod].filter(Boolean).join(' ');
+    return {
+        date: d,
+        hour,
+        greeting,
+        period,
+        dateLabel,
+        timeLabel,
+        tzShort,
+        line: [dateLabel, timeLabel, tzShort].filter(Boolean).join(' · ')
+    };
+}
+
+function titleCaseGreeting(greeting) {
+    return String(greeting || '')
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+        .join(' ');
+}
+
+let starDashGreetingTimer = null;
+
+function applyStarAdminGreeting(displayName) {
+    const greetingTitle = document.getElementById('star-greeting-title');
+    if (!greetingTitle) return;
+    const activeUser = getCurrentUser();
+    const name = String(
+        displayName
+        || (activeUser && (activeUser.full_name || activeUser.name))
+        || 'Admin'
+    ).trim() || 'Admin';
+    const clock = clientLocalClock();
+    greetingTitle.innerHTML = `${titleCaseGreeting(clock.greeting)}, <span id="star-user-name">${escapeHtml(name)}</span>`;
+    if (!starDashGreetingTimer) {
+        starDashGreetingTimer = setInterval(() => applyStarAdminGreeting(), 60000);
+    }
+}
+
+function applyClientDashboardClock(displayName) {
+    if (typeof displayName === 'string') clientDashClockName = displayName;
+    const clock = clientLocalClock();
+    const hello = document.getElementById('portal-home-hello');
+    const dateEl = document.getElementById('portal-home-date');
+    const home = document.getElementById('portal-home');
+    const name = clientDashClockName;
+    if (dateEl) dateEl.textContent = clock.line;
+    if (hello) hello.textContent = name ? `${clock.greeting}, ${name}` : clock.greeting;
+    if (home) {
+        home.classList.remove('is-morning', 'is-afternoon', 'is-evening');
+        home.classList.add(`is-${clock.period}`);
+    }
+    if (!clientDashClockTimer) {
+        clientDashClockTimer = setInterval(() => applyClientDashboardClock(), 30000);
+    }
+    return clock;
 }
 
 function resetClientDashboardView() {
     clientDashLoadSeq += 1;
     clientDashDocsById = {};
+    if (clientDashClockTimer) {
+        clearInterval(clientDashClockTimer);
+        clientDashClockTimer = null;
+    }
     const hello = document.getElementById('portal-home-hello');
     const dateEl = document.getElementById('portal-home-date');
     if (hello) hello.textContent = '';
     if (dateEl) dateEl.textContent = '';
+    const empty = document.getElementById('portal-home-empty');
+    if (empty) empty.hidden = true;
     ['dash-card-businesses', 'dash-card-orders', 'dash-card-documents', 'dash-card-pending'].forEach((id) => {
         const el = document.getElementById(id);
         if (el) el.textContent = '—';
@@ -1844,12 +2114,7 @@ async function loadClientDashboard() {
 
         if (data.status === 'success') {
             const displayName = String(data.user_name || '').trim();
-            const greeting = data.greeting || timeOfDayGreeting();
-            const todayLabel = new Date().toLocaleDateString('en-GB', {
-                weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
-            });
-            if (dateEl) dateEl.textContent = todayLabel;
-            if (hello) hello.textContent = displayName ? `${greeting}, ${displayName}` : greeting;
+            applyClientDashboardClock(displayName);
 
             const setCount = (id, value) => {
                 const el = document.getElementById(id);
@@ -1864,6 +2129,7 @@ async function loadClientDashboard() {
             renderActiveOrdersGrid(data.active_orders || []);
             renderDashboardCompanies(data.companies || []);
             renderClientDashDocuments(data.recent_documents || []);
+            renderClientDashboardEmpty(data);
             showClientDashboardReady();
             safeCreateIcons();
         } else {
@@ -1885,6 +2151,27 @@ async function loadClientDashboard() {
         }
         safeCreateIcons();
     }
+}
+
+function renderClientDashboardEmpty(data) {
+    const empty = document.getElementById('portal-home-empty');
+    const attention = document.getElementById('portal-home-attention');
+    const lede = document.getElementById('portal-home-lede');
+    const sub = document.getElementById('portal-home-sub');
+    const hasStuff = (
+        Number(data.total_companies || 0)
+        + Number(data.active_orders_count || 0)
+        + Number(data.documents_count || 0)
+        + Number(data.pending_actions_count || 0)
+        + (Array.isArray(data.companies) ? data.companies.length : 0)
+        + (Array.isArray(data.active_orders) ? data.active_orders.length : 0)
+        + (Array.isArray(data.recent_documents) ? data.recent_documents.length : 0)
+        + (Array.isArray(data.pending_actions) ? data.pending_actions.length : 0)
+    ) > 0;
+    if (empty) empty.hidden = hasStuff;
+    if (!hasStuff && attention) attention.hidden = true;
+    if (lede) lede.textContent = '';
+    if (sub) sub.textContent = '';
 }
 
 function runDashAttentionAction(btn) {
@@ -1997,14 +2284,24 @@ function normalizeCompanyNameKey(name) {
     return String(name || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/(LTD|LIMITED|PLC|LLP|CIC)$/, '');
 }
 
+function isCompaniesHouseSearchHit(match) {
+    if (!match || !looksLikeUkCompanyNumber(match.company_number)) return false;
+    const source = String(match.source || '').trim().toLowerCase();
+    if (source === 'portal' || source === 'crm' || source === 'local') return false;
+    const number = String(match.company_number || '').trim().toUpperCase();
+    if (number.startsWith('REG-')) return false;
+    return true;
+}
+
 function companiesHouseMatchForName(name, matches) {
     const needle = normalizeCompanyNameKey(name);
     if (!needle || needle.length < 4) return null;
-    const hits = (matches || []).filter((match) => normalizeCompanyNameKey(match && match.name) === needle);
+    const chMatches = (matches || []).filter(isCompaniesHouseSearchHit);
+    const hits = chMatches.filter((match) => normalizeCompanyNameKey(match && match.name) === needle);
     if (hits.length === 1) return hits[0];
     const active = hits.filter((match) => String((match && match.status) || '').toLowerCase() === 'active');
     if (active.length === 1) return active[0];
-    if ((matches || []).length && normalizeCompanyNameKey(matches[0].name) === needle) return matches[0];
+    if (chMatches.length && normalizeCompanyNameKey(chMatches[0].name) === needle) return chMatches[0];
     return null;
 }
 
@@ -2129,7 +2426,7 @@ let adminCompaniesSearchTimer = null;
 let portfolioDetailCache = null;
 let activePortfolioDocumentsTab = 'customer';
 let adminCompanyClientsCache = [];
-const companyRegFilter = { client: 'all', admin: 'all' };
+const companyRegFilter = { client: 'ch', admin: 'all' };
 
 function portfolioSkeletonHtml() {
     return Array.from({ length: 3 }).map(() => `
@@ -2218,7 +2515,6 @@ function renderRegisteredCompanyCard(company, isAdmin) {
                     <h3>${escapeHtml(company.name || 'Company')}</h3>
                     <p style="display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:2px;">
                         <span>#${escapeHtml(company.company_number || '—')}</span>
-                        ${(company.b2b_id && (company.client_type === 'B2B' || company.is_b2b === 1)) ? `<span class="b2b-badge">${escapeHtml(company.b2b_id)}</span>` : ''}
                     </p>
                     ${(() => {
                         const names = portfolioDirectorNames(company);
@@ -2302,19 +2598,21 @@ function companyMatchesAdminSearch(company, query) {
     return hay.includes(q);
 }
 
-function companyFormationSortKey(company) {
+function companyRecencySortKey(company) {
+    const created = String((company && company.created_at) || '').trim().replace(' ', 'T');
+    const createdTs = Date.parse(created);
+    if (Number.isFinite(createdTs)) return createdTs;
     const inc = String((company && company.inc_date) || '').trim().slice(0, 10);
-    if (/^\d{4}-\d{2}-\d{2}$/.test(inc)) return inc;
-    const created = String((company && company.created_at) || '').trim().slice(0, 10);
-    if (/^\d{4}-\d{2}-\d{2}$/.test(created)) return created;
-    return '0000-01-01';
+    const incTs = Date.parse(inc);
+    if (Number.isFinite(incTs)) return incTs;
+    return 0;
 }
 
-function sortCompaniesNewestFormedFirst(companies) {
+function sortCompaniesNewestRegisteredFirst(companies) {
     return (Array.isArray(companies) ? companies.slice() : []).sort((a, b) => {
-        const kb = companyFormationSortKey(b);
-        const ka = companyFormationSortKey(a);
-        if (kb !== ka) return kb.localeCompare(ka);
+        const tb = companyRecencySortKey(b);
+        const ta = companyRecencySortKey(a);
+        if (tb !== ta) return tb - ta;
         return Number((b && b.id) || 0) - Number((a && a.id) || 0);
     });
 }
@@ -2322,7 +2620,7 @@ function sortCompaniesNewestFormedFirst(companies) {
 function renderPortfolioCompanies(companies, targetGridId = 'portfolio-companies-grid', targetCountId = 'portfolio-company-count', pending = []) {
     const grid = document.getElementById(targetGridId);
     const countPill = document.getElementById(targetCountId);
-    let list = sortCompaniesNewestFormedFirst(companies);
+    let list = sortCompaniesNewestRegisteredFirst(companies);
     const waiting = Array.isArray(pending) ? pending : [];
     const isAdmin = targetGridId === 'admin-portfolio-companies-grid';
     const scope = isAdmin ? 'admin' : 'client';
@@ -2349,11 +2647,10 @@ function renderPortfolioCompanies(companies, targetGridId = 'portfolio-companies
     const onCompaniesHouse = list.filter((company) => isRegisteredCompany(company));
     const notRegistered = list.filter((company) => !isRegisteredCompany(company));
     const attentionCompanies = onCompaniesHouse.filter((company) => companyNeedsAttention(company));
-    const attentionIds = new Set(attentionCompanies.map((company) => Number(company.id)));
     const pendingCount = waitingList.length + notRegistered.length;
     const chCount = onCompaniesHouse.length;
     const attentionCount = attentionCompanies.length;
-    if (countPill) countPill.textContent = `${list.length} UK`;
+    if (countPill) countPill.textContent = `${chCount} UK`;
     updateCompanyRegFilterButtons(scope, filter, chCount, pendingCount, attentionCount);
     updatePortfolioAttentionBanner(scope, attentionCompanies);
     if (!grid) return;
@@ -2370,29 +2667,27 @@ function renderPortfolioCompanies(companies, targetGridId = 'portfolio-companies
         updateAdminCompaniesSelectionCount();
         return;
     }
-    const showAttention = filter === 'all' || filter === 'attention';
+    const showAttention = filter === 'attention';
     const showPending = filter === 'all' || filter === 'pending';
     const showCh = filter === 'all' || filter === 'ch';
-    const chWithoutAttention = filter === 'all'
-        ? onCompaniesHouse.filter((company) => !attentionIds.has(Number(company.id)))
-        : onCompaniesHouse;
+    const registeredForGrid = onCompaniesHouse;
     const attentionHtml = showAttention
         ? attentionCompanies.map((company) => renderRegisteredCompanyCard(company, isAdmin)).join('')
         : '';
     const pendingHtml = showPending ? `${renderPendingRegistrationCards(waitingList, isAdmin)}${notRegistered.map((company) => renderRegisteredCompanyCard(company, isAdmin)).join('')}` : '';
-    const chHtml = showCh ? chWithoutAttention.map((company) => renderRegisteredCompanyCard(company, isAdmin)).join('') : '';
+    const chHtml = showCh ? registeredForGrid.map((company) => renderRegisteredCompanyCard(company, isAdmin)).join('') : '';
     const parts = [];
-    if (showAttention && (filter === 'attention' || attentionCount > 0)) {
+    if (showCh) {
+        parts.push(portfolioGridHeading('Registered companies', 'Official UK company records. Newest registrations first.'));
+        parts.push(chHtml || `<div class="portfolio-empty portfolio-empty-inline" role="status"><p>No registered companies in this list yet.</p></div>`);
+    }
+    if (showAttention) {
         parts.push(portfolioGridHeading('Attention', 'Accounts overdue, confirmation statement pending, default Companies House address, or strike-off.'));
         parts.push(attentionHtml || `<div class="portfolio-empty portfolio-empty-inline" role="status"><p>No Companies House attention items right now.</p></div>`);
     }
     if (showPending) {
         parts.push(portfolioGridHeading('Not registered yet', 'Waiting on a Companies House number. Live records are checked when you open this page.'));
         parts.push(pendingHtml || `<div class="portfolio-empty portfolio-empty-inline" role="status"><p>Every named company already has a Companies House number.</p></div>`);
-    }
-    if (showCh) {
-        parts.push(portfolioGridHeading('Companies House', 'Official UK company numbers.'));
-        parts.push(chHtml || `<div class="portfolio-empty portfolio-empty-inline" role="status"><p>No Companies House companies in this list yet.</p></div>`);
     }
     grid.innerHTML = parts.join('');
     if (window.lucide) lucide.createIcons();
@@ -2469,15 +2764,19 @@ async function bulkDeleteAdminCompanies() {
         alert('Select at least one company.');
         return;
     }
-    if (!confirm(`Delete ${ids.length} selected compan${ids.length === 1 ? 'y' : 'ies'}? Linked orders keep their data, but these company cards will be removed.`)) {
+    if (!confirm(`PERMANENTLY delete ${ids.length} selected compan${ids.length === 1 ? 'y' : 'ies'}?\n\nThis removes each company and its linked orders, invoices, and documents from the live database AND backups. There is no restore.`)) {
         return;
     }
+    if (!confirm('Final confirmation: this delete is irreversible. Continue?')) return;
     try {
         const res = await fetch('/api/admin/companies/bulk-delete', {
             method: 'POST',
             credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ company_ids: ids }),
+            body: JSON.stringify({
+                company_ids: ids,
+                force_delete_genuine: canForceDeleteGenuine(),
+            }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.status !== 'success') {
@@ -2597,14 +2896,18 @@ function clearPortfolioRenameChMatch() {
 
 function setPortfolioRenameChMatch(company, options) {
     const opts = options || {};
+    if (!isCompaniesHouseSearchHit(company)) {
+        clearPortfolioRenameChMatch();
+        return;
+    }
     const tick = document.getElementById('portfolio-rename-ch-tick');
     const number = document.getElementById('portfolio-rename-ch-number');
     const statusField = document.getElementById('portfolio-rename-ch-status');
     const statusEl = document.getElementById('portfolio-rename-status');
     if (number) number.value = (company && company.company_number) || '';
     if (statusField) statusField.value = (company && company.status) || '';
-    if (tick) tick.hidden = !company;
-    if (statusEl && company) {
+    if (tick) tick.hidden = false;
+    if (statusEl) {
         statusEl.textContent = opts.message || `On record at Companies House (${company.company_number}). Save to link official details.`;
         statusEl.style.color = '#047857';
     }
@@ -2632,7 +2935,7 @@ function searchCompaniesHouseForRename(inputEl) {
         try {
             const res = await fetch(`/api/admin/companies/search?q=${encodeURIComponent(query)}`, { credentials: 'same-origin' });
             const data = await res.json().catch(() => ({}));
-            const matches = data.companies || [];
+            const matches = (data.companies || []).filter(isCompaniesHouseSearchHit);
             if (!res.ok || data.status !== 'success') {
                 box.innerHTML = `<button type="button" class="ch-search-item is-status" disabled>${escapeHtml(data.message || 'Companies House search is unavailable.')}</button>`;
                 if (statusEl) {
@@ -2725,8 +3028,8 @@ async function searchCompaniesHouse(inputEl) {
             }
             box.innerHTML = matches.map((company, index) => `
                 <button type="button" class="ch-search-item" data-ch-index="${index}">
-                    <strong>${escapeHtml(company.name)}</strong>
-                    <span>${escapeHtml(company.company_number)}${company.status ? ` · ${escapeHtml(company.status)}` : ''}</span>
+                    <strong>${escapeHtml(company.name)}${company.source === 'portal' ? ' · Portal match' : ''}</strong>
+                    <span>${escapeHtml(company.company_number || '')}${company.status ? ` · ${escapeHtml(company.status)}` : ''}${company.source === 'portal' && company.is_registered ? ' · Already registered in CRM' : ''}</span>
                 </button>
             `).join('');
             box.querySelectorAll('.ch-search-item[data-ch-index]').forEach((btn) => {
@@ -3213,6 +3516,9 @@ async function deletePortfolioDocument(docId, docName) {
             switchPortfolioDetailTab('documents');
             switchPortfolioDocumentsTab(activePortfolioDocumentsTab);
         }
+        if (staffOrderId && typeof openStaffOrderWorkspace === 'function') {
+            await openStaffOrderWorkspace(staffOrderId);
+        }
         if (window.lucide) lucide.createIcons();
     } catch (err) {
         alert(err.message || 'Could not delete document.');
@@ -3278,22 +3584,31 @@ function fillCompanyPortfolioModal(payload) {
     const emailValue = String(company.registered_email || '').trim();
     const isEmailVerified = company.business_email_verified === true;
     if (emailWrap) {
-        if (isAdminShellUser(currentUser)) {
+        if (isEmailVerified && emailValue) {
+            // Verified emails are permanent — same lock pattern as WhatsApp.
+            emailWrap.innerHTML = `
+                <div class="portfolio-locked-value">
+                    <strong id="portfolio-detail-email">${escapeHtml(emailValue)}</strong>
+                    <span class="portfolio-lock-chip">Verified · Locked</span>
+                </div>
+            `;
+        } else if (isAdminShellUser(currentUser)) {
             emailWrap.innerHTML = `
                 <div class="portfolio-inline-edit">
                     <input type="email" id="portfolio-company-notify-email" class="apple-input" value="${escapeHtml(emailValue)}" placeholder="company@email.com" autocomplete="off">
                     <button type="button" class="btn-primary btn-tiny" onclick="savePortfolioCompanyNotifyEmail(false)">Save</button>
-                    <button type="button" class="btn-primary btn-tiny" onclick="savePortfolioCompanyNotifyEmail(true)">${isEmailVerified ? 'Re-verify' : 'Verify'}</button>
-                    ${isEmailVerified ? '<button type="button" class="btn-secondary btn-tiny" onclick="unverifyPortfolioCompanyNotifyEmail()">Unverify</button>' : ''}
+                    <button type="button" class="btn-primary btn-tiny" onclick="savePortfolioCompanyNotifyEmail(true)">Verify</button>
                 </div>
-                <span class="portfolio-lock-chip">${isEmailVerified ? 'Verified' : 'Unverified'}</span>
-                <span id="portfolio-company-notify-status" class="portfolio-inline-status" role="status"></span>
+                <div class="portfolio-inline-meta">
+                    <span class="portfolio-lock-chip">Unverified</span>
+                    <span id="portfolio-company-notify-status" class="portfolio-inline-status" role="status"></span>
+                </div>
             `;
         } else {
             emailWrap.innerHTML = `
                 <div class="portfolio-locked-value">
                     <strong id="portfolio-detail-email">${escapeHtml(emailValue || '—')}</strong>
-                    ${emailValue ? `<span class="portfolio-lock-chip">${isEmailVerified ? 'Verified' : 'Unverified'}</span>` : ''}
+                    ${emailValue ? '<span class="portfolio-lock-chip">Unverified</span>' : ''}
                 </div>
             `;
         }
@@ -3350,7 +3665,9 @@ function fillCompanyPortfolioModal(payload) {
                     <input type="tel" id="portfolio-company-whatsapp" class="apple-input" value="" placeholder="+44 7…" autocomplete="off">
                     <button type="button" class="btn-primary btn-tiny" onclick="savePortfolioCompanyWhatsApp()">Save</button>
                 </div>
-                <span id="portfolio-company-whatsapp-status" class="portfolio-inline-status" role="status"></span>
+                <div class="portfolio-inline-meta">
+                    <span id="portfolio-company-whatsapp-status" class="portfolio-inline-status" role="status"></span>
+                </div>
             `;
         } else {
             waWrap.innerHTML = `<strong id="portfolio-detail-whatsapp">—</strong>`;
@@ -3417,14 +3734,14 @@ function fillCompanyPortfolioModal(payload) {
                 <div class="portfolio-detail-grid portfolio-apple-group">
                     <div>
                         <label for="portfolio-compliance-utr">UTR number</label>
-                        <input type="text" id="portfolio-compliance-utr" name="utr_number" class="apple-input" maxlength="15" autocomplete="off" value="${escapeHtml(utrValue)}" placeholder="e.g. 1234567890">
+                        <input type="text" id="portfolio-compliance-utr" name="utr_number" class="apple-input" inputmode="numeric" maxlength="15" autocomplete="off" value="${escapeHtml(utrValue)}" placeholder="e.g. 1234567890">
                     </div>
                     <div>
                         <label for="portfolio-compliance-auth">Authentication code</label>
                         <input type="text" id="portfolio-compliance-auth" name="authentication_code" class="apple-input" maxlength="12" autocomplete="off" value="${escapeHtml(authValue)}" placeholder="Companies House auth code">
                     </div>
                     <div class="full">
-                        <label for="portfolio-compliance-activation">Personal 11 dijits Code</label>
+                        <label for="portfolio-compliance-activation">Personal 11 digits code</label>
                         <input type="text" id="portfolio-compliance-activation" name="activation_code" class="apple-input" maxlength="40" autocomplete="off" value="${escapeHtml(activationValue)}" placeholder="11-digit personal code">
                     </div>
                     <div>
@@ -3544,7 +3861,11 @@ async function openCompanyPortfolioDetail(companyId, options) {
     const cachedSource = isAdminShellUser(currentUser) ? adminCompaniesCache : clientCompaniesCache;
     const cached = (cachedSource || []).find((item) => Number(item.id) === requestedId);
     if (cached) fillCompanyPortfolioModal({ company: cached, registered_office: { address: cached.reg_office, postcode: '' }, orders: [], documents: [], tickets: [] });
-    if (modal) modal.classList.add('active');
+    if (modal) {
+        modal.classList.add('active');
+        const sheet = modal.querySelector('.portfolio-modal-card');
+        if (sheet) sheet.scrollTop = 0;
+    }
     switchPortfolioDetailTab(stayOnTab || 'overview');
     try {
         const detailUrl = isAdminShellUser(currentUser)
@@ -3690,12 +4011,16 @@ async function savePortfolioCompanyNotifyEmail(verify = false) {
     if (!isAdminShellUser(currentUser)) return;
     const companyId = Number(portfolioDetailCache && portfolioDetailCache.company && portfolioDetailCache.company.id);
     if (!companyId) return;
+    const current = (portfolioDetailCache && portfolioDetailCache.company) || {};
+    if (current.business_email_verified === true) {
+        return;
+    }
     const input = document.getElementById('portfolio-company-notify-email');
     const statusEl = document.getElementById('portfolio-company-notify-status');
     const registered_email = ((input && input.value) || '').trim();
     if (!registered_email) {
         if (statusEl) {
-            statusEl.textContent = 'Enter a verified business email.';
+            statusEl.textContent = 'Enter a business email.';
             statusEl.style.color = '#dc2626';
         }
         return;
@@ -3735,28 +4060,8 @@ async function savePortfolioCompanyNotifyEmail(verify = false) {
 }
 
 async function unverifyPortfolioCompanyNotifyEmail() {
-    if (!isAdminShellUser(currentUser)) return;
-    const companyId = Number(portfolioDetailCache && portfolioDetailCache.company && portfolioDetailCache.company.id);
-    if (!companyId) return;
-    const statusEl = document.getElementById('portfolio-company-notify-status');
-    try {
-        const res = await fetch(`/api/admin/companies/${companyId}`, {
-            method: 'PUT',
-            credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ unverify_business_email: true }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || data.status !== 'success' || !data.company) {
-            throw new Error(data.message || 'Could not unverify email.');
-        }
-        await openCompanyPortfolioDetail(companyId);
-    } catch (err) {
-        if (statusEl) {
-            statusEl.textContent = err.message || 'Could not unverify email.';
-            statusEl.style.color = '#dc2626';
-        }
-    }
+    // Verified business emails are permanent and cannot be unlocked.
+    return;
 }
 
 async function savePortfolioCompanyWhatsApp() {
@@ -4129,8 +4434,8 @@ async function searchCreateCompanyHouse(inputEl) {
             }
             box.innerHTML = matches.map((company, index) => `
                 <button type="button" class="ch-search-item" data-ch-index="${index}">
-                    <strong>${escapeHtml(company.name)}</strong>
-                    <span>${escapeHtml(company.company_number)}${company.status ? ` · ${escapeHtml(company.status)}` : ''}</span>
+                    <strong>${escapeHtml(company.name)}${company.source === 'portal' ? ' · Portal match' : ''}</strong>
+                    <span>${escapeHtml(company.company_number || '')}${company.status ? ` · ${escapeHtml(company.status)}` : ''}${company.source === 'portal' && company.is_registered ? ' · Already registered in CRM' : ''}</span>
                 </button>
             `).join('');
             box.querySelectorAll('.ch-search-item[data-ch-index]').forEach((btn) => {
@@ -4568,17 +4873,16 @@ async function submitClientUploadDocument(event) {
     }
     try {
         if (submitBtn) submitBtn.disabled = true;
-        const b64 = await readFileAsBase64(file);
+        const form = new FormData();
+        form.append('file', file, file.name);
+        form.append('name', name);
+        form.append('file_name', file.name);
+        form.append('category', 'Company Documents');
+        form.append('fast', '1');
         const res = await fetch('/api/client/documents/upload', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             credentials: 'same-origin',
-            body: JSON.stringify({
-                name,
-                category: 'Company Documents',
-                file_name: file.name,
-                file_content_base64: b64
-            })
+            body: form,
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.status !== 'success') {
@@ -4981,6 +5285,10 @@ function onStarDashboardFilterChange() {
     loadAdminDashboard();
 }
 
+function onStarDashboardMonthChange() {
+    loadAdminDashboard();
+}
+
 function onStarRevenueRangeChange() {
     loadAdminDashboard();
 }
@@ -4989,33 +5297,116 @@ function onStarSalesRangeChange() {
     loadAdminDashboard();
 }
 
-function renderStarAdminDashboardCharts(data) {
-    const activeUser = getCurrentUser();
-    const userNameEl = document.getElementById('star-user-name');
-    if (userNameEl && activeUser) {
-        userNameEl.textContent = activeUser.full_name || 'Admin';
-    }
-    const greetingTitle = document.getElementById('star-greeting-title');
-    if (greetingTitle) {
-        const hour = new Date().getHours();
-        const timeOfDay = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening';
-        const name = activeUser ? (activeUser.full_name || 'Admin') : 'Admin';
-        greetingTitle.innerHTML = `${timeOfDay}, <span>${escapeHtml(name)}</span>`;
-    }
+const HOME_MONEY_KEY = 'brixen_home_money_visible';
+const MONEY_VALUE_SEL = '[data-money-value], [data-home-money-value], [data-money-amount]';
+const MONEY_EYE_SEL = '[data-money-eye], [data-home-money-eye]';
 
-    const dateLabel = document.getElementById('star-current-date-label');
-    if (dateLabel) {
-        const d = new Date();
-        const month = String(d.getMonth() + 1).padStart(2, '0');
-        const day = String(d.getDate()).padStart(2, '0');
-        dateLabel.textContent = `${month}/${day}/${d.getFullYear()}`;
+function isMoneyVisible() {
+    try {
+        return localStorage.getItem(HOME_MONEY_KEY) === '1';
+    } catch (err) {
+        return false;
     }
+}
+
+function isHomeMoneyVisible() {
+    return isMoneyVisible();
+}
+
+function setMoneyValue(id, actual, color) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.setAttribute('data-actual', actual || '');
+    if (color) el.setAttribute('data-money-color', color);
+    else el.removeAttribute('data-money-color');
+}
+
+function setHomeMoneyValue(id, actual) {
+    setMoneyValue(id, actual);
+}
+
+function applyMoneyVisible() {
+    const show = canViewRevenue() && isMoneyVisible();
+    document.body.classList.toggle('money-hidden', canViewRevenue() && !show);
+    document.querySelectorAll(MONEY_VALUE_SEL).forEach((el) => {
+        const actual = el.getAttribute('data-actual') || '';
+        el.classList.toggle('is-money-hidden', !show);
+        el.textContent = show && actual ? actual : (canViewRevenue() ? '••••••' : '—');
+        if (show) {
+            const color = el.getAttribute('data-money-color');
+            el.style.color = color || '';
+        } else if (canViewRevenue()) {
+            el.style.color = '';
+        }
+    });
+    document.querySelectorAll(MONEY_EYE_SEL).forEach((btn) => {
+        btn.hidden = !canViewRevenue();
+        btn.setAttribute('aria-pressed', show ? 'true' : 'false');
+        btn.title = show ? 'Hide figures' : 'Show figures';
+        btn.innerHTML = `<i data-lucide="${show ? 'eye' : 'eye-off'}"></i>`;
+    });
+    if (typeof safeCreateIcons === 'function') safeCreateIcons();
+}
+
+function applyHomeMoneyVisible() {
+    applyMoneyVisible();
+}
+
+function toggleMoneyVisible() {
+    if (!canViewRevenue()) return;
+    try {
+        localStorage.setItem(HOME_MONEY_KEY, isMoneyVisible() ? '0' : '1');
+    } catch (err) { /* ignore */ }
+    applyMoneyVisible();
+}
+
+function toggleHomeMoneyVisible() {
+    toggleMoneyVisible();
+}
+
+function moneyAmountHtml(text, color) {
+    const actual = String(text || '');
+    const colorAttr = color ? ` data-money-color="${escapeHtml(color)}" style="color:${escapeHtml(color)};"` : '';
+    return `<span data-money-amount data-actual="${escapeHtml(actual)}"${colorAttr}>${escapeHtml(actual)}</span>`;
+}
+
+function fillStarDashboardMonthOptions(options, selected) {
+    const sel = document.getElementById('star-dashboard-month');
+    if (!sel) return;
+    const rows = Array.isArray(options) && options.length
+        ? options
+        : [{ value: '', label: 'This month' }];
+    const current = selected || sel.value || '';
+    sel.innerHTML = rows.map((opt) => {
+        const value = escapeHtml(opt.value || '');
+        const label = escapeHtml(opt.label || opt.value || '');
+        const isSelected = String(opt.value || '') === String(current) ? ' selected' : '';
+        return `<option value="${value}"${isSelected}>${label}</option>`;
+    }).join('');
+    if (current) sel.value = current;
+}
+
+function renderStarAdminDashboardCharts(data) {
+    applyStarAdminGreeting();
+
+    const monthLabel = (data && (data.month_label || (data.stats && data.stats.month_label))) || 'this month';
+    const summaryEl = document.getElementById('star-dash-summary-label');
+    if (summaryEl) summaryEl.textContent = `Your performance summary · ${monthLabel}`;
+    fillStarDashboardMonthOptions((data && data.month_options) || [], (data && data.month) || '');
 
     const stats = (data && data.stats) || {};
     const totalSales = stats.total_orders || 0;
-    const totalRevRaw = typeof stats.total_revenue === 'number' ? stats.total_revenue : parseFloat(String(stats.total_revenue || '0').replace(/[^0-9.]/g, '') || '0');
+    const totalRevRaw = typeof stats.total_revenue_raw === 'number'
+        ? stats.total_revenue_raw
+        : parseFloat(String(stats.total_revenue || '0').replace(/[^0-9.-]/g, '') || '0');
     const totalCust = stats.total_customers || 0;
-    const avgPrice = totalSales > 0 ? (totalRevRaw / totalSales) : 0;
+    const totalProducts = stats.total_products || 0;
+    const totalTurnover = typeof stats.total_turnover === 'number'
+        ? stats.total_turnover
+        : totalRevRaw;
+    const netProfit = typeof stats.net_profit === 'number'
+        ? stats.net_profit
+        : totalTurnover;
 
     const setVal = (id, val) => {
         const el = document.getElementById(id);
@@ -5023,10 +5414,12 @@ function renderStarAdminDashboardCharts(data) {
     };
 
     setVal('star-metric-sales', totalSales.toLocaleString());
-    setVal('star-metric-revenue', `£${totalRevRaw.toFixed(2)}`);
+    setVal('star-metric-products', Number(totalProducts).toLocaleString());
     setVal('star-metric-customers', totalCust.toLocaleString());
-    setVal('star-metric-avgprice', `£${avgPrice.toFixed(2)}`);
-    setVal('star-metric-turnover', `£${(totalRevRaw * 1.15).toFixed(2)}`);
+    setMoneyValue('star-metric-revenue', canViewRevenue() ? `£${totalRevRaw.toFixed(2)}` : '');
+    setMoneyValue('star-metric-turnover', canViewRevenue() ? `£${Number(totalTurnover).toFixed(2)}` : '');
+    setMoneyValue('star-metric-profit', canViewRevenue() ? `£${Number(netProfit).toFixed(2)}` : '');
+    applyMoneyVisible();
 
     if (typeof Chart !== 'function') return;
 
@@ -5063,17 +5456,27 @@ function renderStarAdminDashboardCharts(data) {
         });
     }
 
-    // 2. Sales Analytics (Donut Chart)
+    // 2. Sales Analytics (Donut Chart) — live service mix for selected month
     const donutCanvas = document.getElementById('star-sales-donut-canvas');
+    const donutLegend = document.getElementById('star-donut-legend');
+    const mixColors = ['#2563eb', '#38bdf8', '#0ea5e9', '#0369a1', '#7dd3fc'];
+    const salesMix = (data && data.charts && Array.isArray(data.charts.sales_mix))
+        ? data.charts.sales_mix.filter((r) => Number(r.cnt) > 0)
+        : [];
+    const mixTotal = salesMix.reduce((sum, r) => sum + (Number(r.cnt) || 0), 0);
+    const mixLabels = salesMix.length ? salesMix.map((r) => r.label || 'Other') : ['No sales yet'];
+    const mixValues = salesMix.length ? salesMix.map((r) => Number(r.cnt) || 0) : [1];
     if (donutCanvas) {
         if (starDonutChart) { starDonutChart.destroy(); starDonutChart = null; }
         starDonutChart = new Chart(donutCanvas, {
             type: 'doughnut',
             data: {
-                labels: ['Incorporation', 'Compliance', 'Address Services'],
+                labels: mixLabels,
                 datasets: [{
-                    data: [35, 45, 20],
-                    backgroundColor: ['#2563eb', '#38bdf8', '#0ea5e9'],
+                    data: mixValues,
+                    backgroundColor: salesMix.length
+                        ? mixLabels.map((_, i) => mixColors[i % mixColors.length])
+                        : ['#cbd5e1'],
                     borderWidth: 0
                 }]
             },
@@ -5085,12 +5488,31 @@ function renderStarAdminDashboardCharts(data) {
             }
         });
     }
+    if (donutLegend) {
+        if (!salesMix.length || !mixTotal) {
+            donutLegend.innerHTML = '<div class="star-legend-row" style="color:var(--text-muted);">No orders in this period</div>';
+        } else {
+            donutLegend.innerHTML = salesMix.map((r, i) => {
+                const cnt = Number(r.cnt) || 0;
+                const pct = Math.round((cnt / mixTotal) * 100);
+                const label = escapeHtml(String(r.label || 'Other'));
+                const color = mixColors[i % mixColors.length];
+                return `<div class="star-legend-row"><span class="star-legend-dot" style="background:${color};"></span> ${label} (${pct}%)</div>`;
+            }).join('');
+        }
+    }
 
-    // 3. Sales Trend (Dual Area Chart)
+    // 3. Sales Trend (Dual Area Chart) — last 8 weeks online vs offline £
     const areaCanvas = document.getElementById('star-trend-area-canvas');
     if (areaCanvas) {
         if (starTrendChart) { starTrendChart.destroy(); starTrendChart = null; }
-        const labels = ['Week 1', 'Week 2', 'Week 3', 'Week 4', 'Week 5', 'Week 6', 'Week 7', 'Week 8'];
+        const trend = (data && data.charts && data.charts.sales_trend) || {};
+        const labels = Array.isArray(trend.labels) && trend.labels.length
+            ? trend.labels
+            : ['Week 1', 'Week 2', 'Week 3', 'Week 4', 'Week 5', 'Week 6', 'Week 7', 'Week 8'];
+        const online = Array.isArray(trend.online) ? trend.online.map((v) => Number(v) || 0) : labels.map(() => 0);
+        const offline = Array.isArray(trend.offline) ? trend.offline.map((v) => Number(v) || 0) : labels.map(() => 0);
+        const showMoney = canViewRevenue();
         starTrendChart = new Chart(areaCanvas, {
             type: 'line',
             data: {
@@ -5098,7 +5520,7 @@ function renderStarAdminDashboardCharts(data) {
                 datasets: [
                     {
                         label: 'Online Payment',
-                        data: [180, 220, 310, 280, 390, 420, 510, 480],
+                        data: showMoney ? online : online.map(() => 0),
                         borderColor: '#2563eb',
                         backgroundColor: 'rgba(37, 99, 235, 0.12)',
                         fill: true,
@@ -5107,7 +5529,7 @@ function renderStarAdminDashboardCharts(data) {
                     },
                     {
                         label: 'Offline Sales',
-                        data: [120, 150, 260, 210, 300, 340, 410, 390],
+                        data: showMoney ? offline : offline.map(() => 0),
                         borderColor: '#38bdf8',
                         backgroundColor: 'rgba(56, 189, 248, 0.12)',
                         fill: true,
@@ -5119,20 +5541,87 @@ function renderStarAdminDashboardCharts(data) {
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: (ctx) => {
+                                const v = Number(ctx.parsed.y) || 0;
+                                return showMoney
+                                    ? `${ctx.dataset.label}: £${v.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+                                    : `${ctx.dataset.label}: —`;
+                            }
+                        }
+                    }
+                },
                 scales: {
                     x: { grid: { display: false } },
-                    y: { grid: { color: 'rgba(226, 232, 240, 0.6)' }, beginAtZero: true }
+                    y: {
+                        grid: { color: 'rgba(226, 232, 240, 0.6)' },
+                        beginAtZero: true,
+                        ticks: {
+                            callback: (v) => (showMoney ? `£${v}` : '')
+                        }
+                    }
                 }
             }
         });
+    }
+
+    // 4. Top performers from live incentive grades
+    const performersEl = document.getElementById('star-performers-list');
+    if (performersEl) {
+        const performers = Array.isArray(data && data.top_performers) ? data.top_performers : [];
+        if (!performers.length) {
+            performersEl.innerHTML = '<div class="star-performer-item" style="justify-content:center; color:var(--text-muted); font-size:0.85rem;">No staff performance data for this month yet</div>';
+        } else {
+            const roleNice = (role) => {
+                const r = String(role || '').toUpperCase();
+                if (r === 'SUPER_ADMIN') return 'Super Admin';
+                if (r === 'ADMIN') return 'Admin';
+                if (r === 'MANAGER') return 'Manager';
+                if (r === 'STAFF') return 'Staff';
+                return role || 'Staff';
+            };
+            const badgeClass = (grade) => {
+                const g = String(grade || '').toUpperCase();
+                if (g === 'A+' || g === 'A') return 'active';
+                if (g === 'B') return 'info';
+                if (g === 'C') return 'pending';
+                return 'info';
+            };
+            performersEl.innerHTML = performers.map((p) => {
+                const name = escapeHtml(p.full_name || 'Staff');
+                const email = escapeHtml(p.email || '');
+                const dept = String(p.department || '').trim();
+                const badgeText = escapeHtml(
+                    p.grade
+                        ? `Grade ${p.grade}${dept ? ` · ${dept}` : ''}`
+                        : (dept || roleNice(p.role))
+                );
+                return `
+                    <div class="star-performer-item">
+                        <img src="/static/img/apple-touch-icon.png" class="star-performer-avatar" alt="${name}">
+                        <div class="star-performer-info">
+                            <div class="star-performer-name">${name}</div>
+                            <div class="star-performer-email">${email}</div>
+                        </div>
+                        <span class="status-badge ${badgeClass(p.grade)}">${badgeText}</span>
+                    </div>`;
+            }).join('');
+        }
     }
 }
 
 async function loadAdminDashboard() {
     if (!canViewAdminDashboard()) return;
+    applyStarAdminGreeting();
+    applyHomeMoneyVisible();
     try {
-        const res = await fetch('/api/admin/stats', { credentials: 'same-origin' });
+        const monthSel = document.getElementById('star-dashboard-month');
+        const month = (monthSel && monthSel.value) ? encodeURIComponent(monthSel.value) : '';
+        const url = month ? `/api/admin/stats?month=${month}` : '/api/admin/stats';
+        const res = await fetch(url, { credentials: 'same-origin' });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.status !== 'success') {
             throw new Error(data.message || 'Unable to load dashboard.');
@@ -5150,6 +5639,7 @@ async function loadAdminDashboard() {
         }
 
         renderStarAdminDashboardCharts(data);
+        safeCreateIcons();
     } catch (err) {
         console.error(err);
     }
@@ -5313,9 +5803,16 @@ function adminOrderProgressRange() {
 }
 
 let adminOrderClientTypeFilter = 'All';
+let adminOrderSelectedB2BClientId = '';
+let adminOrderB2BClientsCache = [];
 
-function setAdminOrderClientTypeFilter(type) {
+function setAdminOrderClientTypeFilter(type, opts = {}) {
     adminOrderClientTypeFilter = type;
+    if (type !== 'B2B') {
+        adminOrderSelectedB2BClientId = '';
+    } else if (!opts.preserveClient) {
+        adminOrderSelectedB2BClientId = '';
+    }
     ['All', 'Customer', 'B2B'].forEach(t => {
         const btn = document.getElementById(`tab-orders-${t.toLowerCase()}`);
         if (btn) {
@@ -5330,6 +5827,79 @@ function setAdminOrderClientTypeFilter(type) {
             }
         }
     });
+    syncAdminB2BOrdersPicker();
+    resetAdminOrdersPage();
+    loadAdminOrders();
+}
+
+function syncAdminB2BOrdersPicker() {
+    const picker = document.getElementById('adm-b2b-orders-picker');
+    if (!picker) return;
+    const show = adminOrderClientTypeFilter === 'B2B';
+    picker.hidden = !show;
+    const clearBtn = document.getElementById('adm-b2b-orders-clear');
+    if (clearBtn) clearBtn.hidden = !adminOrderSelectedB2BClientId;
+    const hint = document.getElementById('adm-b2b-orders-picker-hint');
+    if (hint) {
+        hint.textContent = adminOrderSelectedB2BClientId
+            ? 'Showing orders for the selected B2B account.'
+            : 'Open the B2B account first, then their orders appear below.';
+    }
+}
+
+function b2bOrdersClientSearchNeedle() {
+    return String((document.getElementById('adm-b2b-orders-client-search') || {}).value || '').trim().toLowerCase();
+}
+
+function filterAdminB2BOrdersClientList() {
+    renderAdminB2BOrdersClientList(adminOrderB2BClientsCache, { fromCache: true });
+}
+
+function renderAdminB2BOrdersClientList(customers, opts) {
+    const list = document.getElementById('adm-b2b-orders-client-list');
+    if (!list) return;
+    const source = opts && opts.fromCache
+        ? (adminOrderB2BClientsCache || [])
+        : (customers || []).filter((c) => Number(c.is_b2b) === 1 || String(c.client_type || '').toUpperCase() === 'B2B');
+    if (!(opts && opts.fromCache)) adminOrderB2BClientsCache = source;
+    const needle = b2bOrdersClientSearchNeedle();
+    const b2bClients = needle
+        ? source.filter((c) => {
+            const blob = `${c.full_name || ''} ${c.b2b_id || ''} ${c.email || ''}`.toLowerCase();
+            return blob.includes(needle);
+        })
+        : source;
+    if (!source.length) {
+        list.innerHTML = '<div class="b2b-orders-client-empty">No B2B clients with orders yet.</div>';
+        return;
+    }
+    if (!b2bClients.length) {
+        list.innerHTML = '<div class="b2b-orders-client-empty">No B2B client matches that search.</div>';
+        return;
+    }
+    list.innerHTML = b2bClients.map((c) => {
+        const active = String(adminOrderSelectedB2BClientId) === String(c.id);
+        const name = c.full_name || c.email || 'B2B client';
+        const meta = [c.b2b_id || 'B2B', c.email].filter(Boolean).join(' · ');
+        return `
+            <button type="button" class="b2b-orders-client-card${active ? ' is-active' : ''}" onclick="selectAdminB2BOrderClient(${Number(c.id)})">
+                <span class="b2b-orders-client-name">${escapeHtml(name)}</span>
+                <span class="b2b-orders-client-meta">${escapeHtml(meta)}</span>
+            </button>
+        `;
+    }).join('');
+}
+
+function selectAdminB2BOrderClient(clientId) {
+    adminOrderSelectedB2BClientId = String(clientId || '');
+    syncAdminB2BOrdersPicker();
+    resetAdminOrdersPage();
+    loadAdminOrders();
+}
+
+function clearAdminB2BOrderClient() {
+    adminOrderSelectedB2BClientId = '';
+    syncAdminB2BOrdersPicker();
     resetAdminOrdersPage();
     loadAdminOrders();
 }
@@ -5342,6 +5912,7 @@ function buildAdminOrderQuery(page) {
     const statusGroup = document.getElementById('filter-admin-order-status-group')?.value || '';
     const status = document.getElementById('filter-admin-order-status')?.value || '';
     const payment = document.getElementById('filter-admin-order-payment')?.value || '';
+    const companyId = document.getElementById('filter-admin-order-company')?.value || '';
     const customer = document.getElementById('filter-admin-order-customer')?.value || '';
     const preset = document.getElementById('filter-admin-order-preset')?.value || '';
     const month = document.getElementById('filter-admin-order-month')?.value || '';
@@ -5355,7 +5926,11 @@ function buildAdminOrderQuery(page) {
     if (statusGroup) qs.set('status_group', statusGroup);
     if (status) qs.set('status', status);
     if (canViewRevenue() && payment) qs.set('payment_status', payment);
-    if (customer) qs.set('customer_id', customer);
+    if (companyId) qs.set('company_id', companyId);
+    const effectiveCustomer = adminOrderClientTypeFilter === 'B2B' && adminOrderSelectedB2BClientId
+        ? adminOrderSelectedB2BClientId
+        : customer;
+    if (effectiveCustomer) qs.set('customer_id', effectiveCustomer);
     if (adminOrderClientTypeFilter && adminOrderClientTypeFilter !== 'All') {
         qs.set('client_type', adminOrderClientTypeFilter);
     }
@@ -5398,10 +5973,11 @@ function renderAdminOrderStats(stats) {
     set('adm-ord-stat-progress', s.in_progress ?? 0);
     set('adm-ord-stat-completed', s.completed ?? 0);
     if (canViewRevenue() && s.revenue != null) {
-        set('adm-ord-stat-revenue', `£${parseFloat(s.revenue || 0).toFixed(2)}`);
+        setMoneyValue('adm-ord-stat-revenue', `£${parseFloat(s.revenue || 0).toFixed(2)}`);
     } else {
-        set('adm-ord-stat-revenue', '—');
+        setMoneyValue('adm-ord-stat-revenue', '');
     }
+    applyMoneyVisible();
     set('adm-ord-stat-month', s.this_month ?? 0);
 }
 
@@ -5432,12 +6008,14 @@ function goAdminOrdersPage(page) {
 function clearAdminOrderFilters() {
     ['filter-admin-order-search', 'filter-admin-order-product', 'filter-admin-order-category',
      'filter-admin-order-status-group', 'filter-admin-order-status', 'filter-admin-order-payment',
-     'filter-admin-order-customer', 'filter-admin-order-progress', 'filter-admin-order-preset',
+     'filter-admin-order-customer', 'filter-admin-order-company', 'filter-admin-order-progress', 'filter-admin-order-preset',
      'filter-admin-order-month', 'filter-admin-order-year', 'filter-admin-order-from', 'filter-admin-order-to'
     ].forEach((id) => {
         const el = document.getElementById(id);
         if (el) el.value = '';
     });
+    adminOrderSelectedB2BClientId = '';
+    syncAdminB2BOrdersPicker();
     onAdminOrderDatePresetChange();
     resetAdminOrdersPage();
     loadAdminOrders();
@@ -5452,6 +6030,56 @@ function showAdminOrdersError(message) {
 
 function adminOrdersColspan() {
     return canViewRevenue() ? 10 : 8;
+}
+
+function adminOrderProgressPercent(order) {
+    const status = String(order && order.status || '');
+    const active = Number(order && order.line_item_active_count != null
+        ? order.line_item_active_count
+        : (order && order.line_item_count) || 0);
+    const done = Number(order && order.line_items_completed || 0);
+    if (active >= 1) {
+        if (status === 'Cancelled' || status === 'Refunded') return 0;
+        return Math.max(0, Math.min(100, Math.round((100 * done) / Math.max(active, 1))));
+    }
+    if (status === 'Completed') return 100;
+    if (status === 'Cancelled' || status === 'Refunded') return 0;
+    const stored = Number(order && order.progress_percent);
+    if (Number.isFinite(stored)) return Math.max(0, Math.min(100, stored));
+    if (status === 'In Progress') return 50;
+    if (status === 'Processing') return 25;
+    if (status === 'Pending Verification') return 10;
+    return 0;
+}
+
+function adminOrderStatusTone(order, pct) {
+    const status = String(order && order.status || 'Pending');
+    if (status === 'Completed' || pct >= 100) return 'is-complete';
+    if (status === 'Cancelled' || status === 'Refunded') return 'is-cancelled';
+    if (status === 'Pending Verification') return 'is-applied';
+    if (status === 'Pending') return 'is-pending';
+    if (status === 'Processing') return 'is-processing';
+    if (status === 'In Progress' || pct > 0) return 'is-progress';
+    return 'is-pending';
+}
+
+function renderAdminOrderStatusCell(order) {
+    const active = Number(order && order.line_item_active_count != null
+        ? order.line_item_active_count
+        : (order && order.line_item_count) || 0);
+    const done = Number(order && order.line_items_completed || 0);
+    const pct = adminOrderProgressPercent(order);
+    const status = String(order && order.status || 'Pending');
+    const tone = adminOrderStatusTone(order, pct);
+    const title = active >= 2
+        ? `${done} of ${active} products complete · ${status}`
+        : `${status} · ${pct}%`;
+    return `
+        <div class="order-status-cell ${tone}" title="${escapeHtml(title)}">
+            <span class="order-status-glow ${tone}">
+                <span class="order-status-glow-label">${pct}%</span>
+            </span>
+        </div>`;
 }
 
 async function loadAdminOrders() {
@@ -5469,6 +6097,20 @@ async function loadAdminOrders() {
             throw new Error(data.message || 'Unable to load orders.');
         }
         fillAdminOrderFacet('filter-admin-order-product', data.facets?.products || []);
+        fillAdminOrderFacet('filter-admin-order-company', data.facets?.companies || [], 'name', 'id');
+        if (adminOrderClientTypeFilter === 'B2B') {
+            renderAdminB2BOrdersClientList(data.facets?.customers || []);
+            syncAdminB2BOrdersPicker();
+            if (!adminOrderSelectedB2BClientId) {
+                renderAdminOrderStats(data.stats);
+                renderAdminOrderPagination({ page: 1, limit: 25, total: 0, total_pages: 0 });
+                if (tbody) {
+                    tbody.innerHTML = `<tr><td colspan="${adminOrdersColspan()}" style="text-align:center; color:#64748b; padding:28px;">Select a B2B client above to view orders from their account.</td></tr>`;
+                }
+                syncAdminOrdersSelectAllState();
+                return;
+            }
+        }
         renderAdminOrderStats(data.stats);
         renderAdminOrderPagination(data.pagination);
         if (!tbody) return;
@@ -5485,44 +6127,44 @@ async function loadAdminOrders() {
                     <td class="cell-payment">
                         <select class="table-select" data-order-action="payment_mode" data-order-id="${o.id}">${staffOrderPaymentModeOptions(o.payment_mode || '')}</select>
                     </td>` : '';
-            const ownerName = o.owner_name || o.client_name || '—';
-            const ownerEmail = o.owner_form_email || '';
+            const ownerName = orderListOwnerName(o);
+            const ownerEmail = orderListContactEmail(o);
+            const b2bPortalHint = (o.is_b2b === 1 || o.client_type === 'B2B') && o.portal_account_email && !ownerEmail
+                ? `<div class="owner-cell-b2b" title="B2B portal login">B2B account: ${escapeHtml(o.portal_account_email)}</div>`
+                : '';
             return `
                 <tr class="order-row" data-order-id="${o.id}">
                     <td class="cell-select">
                         <input type="checkbox" class="adm-order-select" value="${o.id}" data-order-id="${o.id}" aria-label="Select order ${escapeHtml(o.order_number)}">
                     </td>
-                    <td><button type="button" class="order-number-link" data-order-action="open" data-order-id="${o.id}">${escapeHtml(o.order_number)}</button></td>
+                    <td class="cell-order">
+                        <button type="button" class="order-number-chip" data-order-action="open" data-order-id="${o.id}" title="${escapeHtml(o.order_number || '')}">
+                            ${escapeHtml(formatOrderNumberDisplay(o.order_number))}
+                        </button>
+                    </td>
                     <td class="cell-date">${escapeHtml(formatShortDate(o.created_at))}</td>
                     <td class="cell-client">
-                        <div class="owner-cell-name">${escapeHtml(ownerName)}</div>
-                        ${ownerEmail ? `<div class="owner-cell-email">${escapeHtml(ownerEmail)}</div>` : ''}
+                        <div class="owner-cell">
+                            <div class="owner-cell-name" title="${escapeHtml(ownerName)}">${escapeHtml(ownerName)}</div>
+                            <div class="owner-cell-email" title="${escapeHtml(ownerEmail)}">${escapeHtml(ownerEmail || '—')}</div>
+                            ${b2bPortalHint}
+                        </div>
                     </td>
-                    <td class="cell-company">${escapeHtml(o.company_name || '—')}</td>
+                    <td class="cell-company"><div class="owner-cell-name" title="${escapeHtml(o.company_name || '—')}">${escapeHtml(o.company_name || '—')}</div></td>
                     <td class="cell-product">${renderProductPills(product, o.category_name)}</td>
                     ${financeCells}
-                    <td class="cell-status">
-                        <select class="table-select" data-order-action="status" data-order-id="${o.id}">
-                            <option value="Pending Verification" ${o.status === 'Pending Verification' ? 'selected' : ''}>Pending Verification</option>
-                            <option value="Pending" ${o.status === 'Pending' ? 'selected' : ''}>Pending</option>
-                            <option value="Processing" ${o.status === 'Processing' ? 'selected' : ''}>Processing</option>
-                            <option value="In Progress" ${o.status === 'In Progress' ? 'selected' : ''}>In Progress</option>
-                            <option value="Completed" ${o.status === 'Completed' ? 'selected' : ''}>Completed</option>
-                            <option value="Cancelled" ${o.status === 'Cancelled' ? 'selected' : ''}>Cancelled</option>
-                            <option value="Refunded" ${o.status === 'Refunded' ? 'selected' : ''}>Refunded</option>
-                        </select>
-                    </td>
+                    <td class="cell-status">${renderAdminOrderStatusCell(o)}</td>
                     <td class="cell-actions">
                         <div class="order-row-actions table-action-btns">
-                            <button type="button" class="btn-primary btn-table" data-order-action="open" data-order-id="${o.id}">Manage</button>
-                            ${canManageOrders() ? `<button type="button" class="btn-secondary btn-table" data-order-action="change-details" data-order-id="${o.id}">Change details</button>` : ''}
-                            ${canDeleteOrders() ? `<button type="button" class="portfolio-delete-btn" data-order-action="delete" data-order-id="${o.id}" data-order-number="${escapeHtml(o.order_number)}" title="Delete order" aria-label="Delete order"><i data-lucide="trash-2"></i></button>` : ''}
+                            <button type="button" class="order-icon-btn" data-order-action="open" data-order-id="${o.id}" title="Open order" aria-label="Open order"><i data-lucide="folder-open"></i></button>
+                            ${canDeleteOrders() ? `<button type="button" class="order-icon-btn is-danger" data-order-action="delete" data-order-id="${o.id}" data-order-number="${escapeHtml(o.order_number)}" title="Delete order" aria-label="Delete order"><i data-lucide="trash-2"></i></button>` : ''}
                         </div>
                     </td>
                 </tr>`;
         }).join('');
         syncAdminOrdersSelectAllState();
         safeCreateIcons();
+        applyMoneyVisible();
     } catch (err) {
         showAdminOrdersError(err.message || 'Unable to load orders.');
         if (tbody) {
@@ -5636,9 +6278,18 @@ function adminOrderPriceCell(order) {
         ? `<button type="button" class="icon-edit-btn" data-order-action="edit-price" data-order-id="${order.id}" title="Edit price" aria-label="Edit price"><i data-lucide="pencil"></i></button>`
         : '';
     return `<div class="table-price-wrap" data-price-wrap="${order.id}">
-        <span class="table-price-value">${formatOrderPrice(amount)}</span>
+        <span class="table-price-value" data-money-amount data-actual="${escapeHtml(formatOrderPrice(amount))}">${formatOrderPrice(amount)}</span>
         ${editBtn}
     </div>`;
+}
+
+function adminOrderProfitCell(order) {
+    const profit = Number(order.profit);
+    const value = Number.isFinite(profit) ? profit : (parseFloat(order.total || 0) - parseFloat(order.resolved_cost || order.cost_price || 0));
+    const color = value >= 0 ? '#059669' : '#dc2626';
+    const source = order.cost_source === 'manual' ? 'manual cost' : (order.cost_source === 'catalog' ? 'catalog cost' : 'no cost');
+    const shown = formatOrderPrice(value.toFixed(2));
+    return `<span data-money-amount data-actual="${escapeHtml(shown)}" data-money-color="${color}" style="font-weight:700; color:${color};" title="${escapeHtml(source)}">${escapeHtml(shown)}</span>`;
 }
 
 function beginAdminOrderPriceEdit(orderId, wrapEl) {
@@ -5646,7 +6297,7 @@ function beginAdminOrderPriceEdit(orderId, wrapEl) {
     const wrap = wrapEl || document.querySelector(`[data-price-wrap="${orderId}"]`);
     if (!wrap || wrap.querySelector('input[data-order-action="total"]')) return;
     const current = wrap.querySelector('.table-price-value');
-    const raw = current ? String(current.textContent || '').replace(/£/g, '').replace(/,/g, '').trim() : '0.00';
+    const raw = current ? String(current.getAttribute('data-actual') || current.textContent || '').replace(/£/g, '').replace(/,/g, '').trim() : '0.00';
     wrap.innerHTML = `<span>£</span>
         <input type="number" min="0" max="100000" step="0.01" inputmode="decimal" class="table-select table-price-input" data-order-action="total" data-order-id="${orderId}" value="${escapeHtml(raw)}" aria-label="Order price">`;
     const input = wrap.querySelector('input');
@@ -5674,6 +6325,67 @@ async function saveStaffOrderPriceEdit() {
     const input = document.getElementById('staff-order-price-input');
     if (!input || !staffOrderId) return;
     await updateAdminOrderTotal(staffOrderId, input.value, input);
+}
+
+function beginStaffOrderCostEdit() {
+    if (!canViewRevenue() || !staffOrderId) return;
+    const editor = document.getElementById('staff-order-cost-editor');
+    const input = document.getElementById('staff-order-cost-input');
+    const editBtn = document.getElementById('staff-order-cost-edit');
+    const costEl = document.getElementById('staff-order-cost');
+    if (!editor || !input) return;
+    input.value = (costEl && costEl.dataset.cost) || input.value || '0.00';
+    editor.hidden = false;
+    if (editBtn) editBtn.hidden = true;
+    input.focus();
+    input.select();
+}
+
+async function saveStaffOrderCostEdit() {
+    const input = document.getElementById('staff-order-cost-input');
+    if (!input || !staffOrderId) return;
+    await updateAdminOrderCost(staffOrderId, input.value);
+}
+
+async function resetStaffOrderCostToCatalog() {
+    if (!staffOrderId || !canViewRevenue()) return;
+    await updateAdminOrderCost(staffOrderId, null);
+}
+
+async function updateAdminOrderCost(orderId, rawValue) {
+    if (!canViewRevenue()) {
+        alert('Only an administrator can change order cost.');
+        return;
+    }
+    let payload;
+    if (rawValue === null || rawValue === undefined || String(rawValue).trim() === '') {
+        payload = { cost_price: null };
+    } else {
+        const parsed = parseFloat(String(rawValue || '').replace(/£/g, '').replace(/,/g, '').trim());
+        if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100000) {
+            alert('Enter a valid cost between £0 and £100,000.');
+            return;
+        }
+        payload = { cost_price: Math.round(parsed * 100) / 100 };
+    }
+    try {
+        const res = await fetch(`/api/admin/orders/${orderId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Unable to update order cost.');
+        }
+        if (staffOrderId === orderId) await openStaffOrderWorkspace(orderId);
+        if (typeof loadAdminOrders === 'function') loadAdminOrders();
+        if (typeof loadAdminDashboard === 'function' && activeView === 'admin-dashboard') loadAdminDashboard();
+        setStaffOrderNotice('success', payload.cost_price === null ? 'Order cost reset to catalog default.' : 'Order cost saved.');
+    } catch (err) {
+        setStaffOrderNotice('error', err.message || 'Unable to update order cost.');
+    }
 }
 
 async function updateAdminOrderTotal(orderId, rawValue, inputEl) {
@@ -5845,11 +6557,14 @@ async function deleteCompanyFromPortfolio(companyId) {
     const id = Number(companyId);
     if (!id) return;
     const name = companyNameFromCaches(id);
-    if (!confirm(`Delete ${name}? Linked orders keep their data, but this company card will be removed.`)) return;
+    if (!confirm(`PERMANENTLY delete ${name}?\n\nThis removes the company and all linked orders, invoices, and documents from the live database AND backups. There is no restore.`)) return;
+    if (!confirm('Final confirmation: this delete is irreversible. Continue?')) return;
     try {
         const res = await fetch(`/api/admin/companies/${id}`, {
             method: 'DELETE',
             credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ force_delete_genuine: canForceDeleteGenuine() }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.status !== 'success') {
@@ -6022,6 +6737,201 @@ function staffOrderPaymentModeOptions(selected) {
     return modes.map((mode) => `<option value="${mode.value}"${mode.value === (selected || '') ? ' selected' : ''}>${mode.label}</option>`).join('');
 }
 
+function staffLineItemStatusOptions(selected) {
+    return ['Pending', 'In Progress', 'Completed', 'Cancelled'].map((st) =>
+        `<option value="${st}"${st === selected ? ' selected' : ''}>${st}</option>`
+    ).join('');
+}
+
+function staffOrderStatusBadgeClass(status) {
+    const key = String(status || '').toLowerCase();
+    if (key === 'completed') return 'staff-line-status--done';
+    if (key === 'in progress' || key === 'processing') return 'staff-line-status--progress';
+    if (key === 'cancelled' || key === 'refunded') return 'staff-line-status--cancelled';
+    return 'staff-line-status--pending';
+}
+
+function renderStaffOrderProducts(lines, order, showFinance) {
+    const box = document.getElementById('staff-order-products');
+    if (!box) return;
+    const rows = Array.isArray(lines) ? lines : [];
+    const canEdit = canManageOrders();
+    const productSummary = (order && (order.products_summary || order.service_name)) || '—';
+    if (!rows.length) {
+        const extra = canEdit
+            ? '<p class="staff-order-section-copy" style="margin-top:10px;"><button type="button" class="btn-primary btn-table" onclick="toggleStaffAddProductPicker()">Add product</button></p>'
+            : '';
+        box.innerHTML = `<p class="staff-order-section-copy">${escapeHtml(productSummary)}${showFinance ? ` · £${parseFloat((order && (order.price || order.total)) || 0).toFixed(2)}` : ''}</p>${extra}`;
+        return;
+    }
+    const head = showFinance
+        ? '<th>Category</th><th>Product</th><th>Status</th><th>Total</th>'
+        : '<th>Category</th><th>Product</th><th>Status</th>';
+    box.innerHTML = `<table class="data-table staff-order-products-table"><thead><tr>${head}</tr></thead><tbody>${rows.map((item) => {
+        const status = item.fulfillment_status || 'Pending';
+        const statusControl = canEdit && item.id
+            ? `<select class="table-select staff-line-status-select ${staffOrderStatusBadgeClass(status)}" data-line-id="${item.id}" onchange="updateStaffOrderLineItemStatus(${Number(order && order.id) || staffOrderId}, ${Number(item.id)}, this.value)">${staffLineItemStatusOptions(status)}</select>`
+            : `<span class="staff-line-status-pill ${staffOrderStatusBadgeClass(status)}">${escapeHtml(status)}</span>`;
+        return `<tr>
+            <td>${escapeHtml(item.category_name || '—')}</td>
+            <td><strong>${escapeHtml(item.product_name || '—')}</strong></td>
+            <td class="cell-line-status">${statusControl}</td>
+            ${showFinance ? `<td>£${parseFloat(item.line_total != null ? item.line_total : item.unit_price || 0).toFixed(2)}</td>` : ''}
+        </tr>`;
+    }).join('')}</tbody></table>
+    ${canEdit ? '<p class="staff-order-section-copy" style="margin-top:10px;"><button type="button" class="btn-secondary btn-table" onclick="toggleStaffAddProductPicker()">Add another product</button></p>' : ''}`;
+}
+
+let staffAddProductCatalog = [];
+let staffAddProductLoading = false;
+
+function toggleStaffAddProductPicker() {
+    if (!canManageOrders()) return;
+    const panel = document.getElementById('staff-order-add-product');
+    if (!panel) return;
+    const opening = panel.hidden;
+    panel.hidden = !opening;
+    if (opening) {
+        loadStaffAddProductCatalog();
+        const search = document.getElementById('staff-order-add-product-search');
+        if (search) {
+            search.value = '';
+            search.focus();
+        }
+        panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+}
+
+async function loadStaffAddProductCatalog() {
+    const list = document.getElementById('staff-order-add-product-list');
+    if (staffAddProductCatalog.length) {
+        renderStaffAddProductList();
+        return;
+    }
+    if (list) list.innerHTML = '<p class="staff-order-section-copy">Loading catalog…</p>';
+    if (staffAddProductLoading) return;
+    staffAddProductLoading = true;
+    try {
+        let products = [];
+        const res = await fetch('/api/catalog/products', { credentials: 'same-origin' });
+        const data = await res.json().catch(() => ({}));
+        if (data.status === 'success' && Array.isArray(data.products)) {
+            products = data.products;
+        } else {
+            const res2 = await fetch('/api/admin/services', { credentials: 'same-origin' });
+            const data2 = await res2.json().catch(() => ({}));
+            products = data2.services || [];
+        }
+        staffAddProductCatalog = (products || []).filter((p) => p && (p.name || p.product_name));
+        renderStaffAddProductList();
+    } catch (err) {
+        if (list) list.innerHTML = `<p class="staff-order-section-copy">${escapeHtml(err.message || 'Unable to load catalog.')}</p>`;
+    } finally {
+        staffAddProductLoading = false;
+    }
+}
+
+function renderStaffAddProductList() {
+    const list = document.getElementById('staff-order-add-product-list');
+    if (!list) return;
+    const q = String((document.getElementById('staff-order-add-product-search') || {}).value || '').trim().toLowerCase();
+    const showFinance = typeof canViewRevenue === 'function' ? canViewRevenue() : false;
+    const rows = staffAddProductCatalog.filter((p) => {
+        const blob = `${p.name || p.product_name || ''} ${p.category || p.category_name || ''}`.toLowerCase();
+        return !q || blob.includes(q);
+    }).slice(0, 40);
+    if (!rows.length) {
+        list.innerHTML = '<p class="staff-order-section-copy">No matching products.</p>';
+        return;
+    }
+    list.innerHTML = rows.map((p) => {
+        const id = Number(p.id || 0);
+        const name = p.name || p.product_name || 'Service';
+        const category = p.category || p.category_name || 'Service';
+        const price = parseFloat(p.price || 0) || 0;
+        const priceBit = showFinance ? ` · £${price.toFixed(2)}` : '';
+        return `<div class="staff-add-product-row">
+            <div>
+                <strong>${escapeHtml(name)}</strong>
+                <span>${escapeHtml(category)}${priceBit}</span>
+            </div>
+            <button type="button" class="btn-primary btn-table" onclick="addProductToStaffOrder(${id})">Add</button>
+        </div>`;
+    }).join('');
+}
+
+async function addProductToStaffOrder(serviceId) {
+    if (!canManageOrders() || !staffOrderId) return;
+    const product = staffAddProductCatalog.find((p) => Number(p.id) === Number(serviceId));
+    if (!product) return;
+    try {
+        const res = await fetch(`/api/admin/orders/${staffOrderId}/line-items`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+                service_id: Number(product.id),
+                product_name: product.name || product.product_name,
+                category_name: product.category || product.category_name || '',
+                price: product.price,
+            }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Unable to add this product.');
+        }
+        const panel = document.getElementById('staff-order-add-product');
+        if (panel) panel.hidden = true;
+        if (typeof loadAdminOrders === 'function') loadAdminOrders();
+        await openStaffOrderWorkspace(staffOrderId);
+        if (typeof showPortalToast === 'function') {
+            showPortalToast(`${product.name || 'Product'} added to this order.`, 'success', 'Product added');
+        }
+    } catch (err) {
+        alert(err.message || 'Unable to add this product.');
+    }
+}
+
+function setStaffOrderStatusDisplay(status) {
+    const display = document.getElementById('staff-order-status-display');
+    const statusSel = document.getElementById('staff-order-status-select');
+    const text = status || '—';
+    if (display) {
+        display.textContent = text;
+        display.className = `staff-order-status-auto ${staffOrderStatusBadgeClass(text)}`;
+    }
+    if (statusSel) {
+        statusSel.innerHTML = staffOrderStatusOptions(text);
+        statusSel.value = text;
+        statusSel.disabled = true;
+    }
+}
+
+async function updateStaffOrderLineItemStatus(orderId, lineItemId, newStatus) {
+    if (!canManageOrders()) return;
+    try {
+        const res = await fetch(`/api/admin/orders/${orderId}/line-items/${lineItemId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ fulfillment_status: newStatus }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Unable to update product status.');
+        }
+        if (typeof loadAdminOrders === 'function') loadAdminOrders();
+        if (staffOrderId === orderId) {
+            await openStaffOrderWorkspace(orderId);
+        }
+        const autoStatus = (data.result && data.result.order_status) || (data.order && data.order.status);
+        if (autoStatus) setStaffOrderStatusDisplay(autoStatus);
+    } catch (err) {
+        alert(err.message || 'Unable to update product status.');
+        if (staffOrderId === orderId) await openStaffOrderWorkspace(orderId);
+    }
+}
+
 function staffOrderStatusOptions(selected) {
     return ['Pending Verification', 'Pending', 'Processing', 'In Progress', 'Completed', 'Cancelled', 'Refunded'].map((st) =>
         `<option value="${st}"${st === selected ? ' selected' : ''}>${st}</option>`
@@ -6080,6 +6990,25 @@ function collapseCheckoutAddressFields(fields) {
     return result.filter(Boolean);
 }
 
+function orderListContactEmail(order) {
+    const o = order || {};
+    const candidates = [
+        o.order_contact_email,
+        o.owner_form_email,
+        o.end_client_email,
+        o.access_email,
+    ].map((v) => String(v || '').trim()).filter((v) => v.includes('@'));
+    if (candidates.length) return candidates[0];
+    const isB2b = o.is_b2b === 1 || o.client_type === 'B2B' || Boolean(o.b2b_client_id);
+    if (isB2b) return '';
+    return String(o.client_email || o.portal_account_email || '').trim();
+}
+
+function orderListOwnerName(order) {
+    const o = order || {};
+    return String(o.owner_name || o.end_client_name || o.client_name || '—').trim() || '—';
+}
+
 function checkoutFieldKey(label) {
     const raw = String(label || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
     const aliases = {
@@ -6090,7 +7019,23 @@ function checkoutFieldKey(label) {
         cnic: 'passport cnic',
         'id number': 'passport cnic',
         'registered address form': 'registered address',
-        'registered company address': 'registered address'
+        'registered company address': 'registered address',
+        'registered office address': 'registered address',
+        'registered office': 'registered address',
+        'home address': 'personal address',
+        'director home address': 'personal address',
+        'director address': 'personal address',
+        'personal address': 'personal address',
+        'uk phone number': 'uk contact number',
+        'uk contact': 'uk contact number',
+        'phone number': 'uk contact number',
+        phone: 'uk contact number',
+        email: 'email',
+        'email form': 'email',
+        'registered email': 'email',
+        'end client email': 'email',
+        'business activity': 'business activities',
+        'sic code': 'business activities'
     };
     return aliases[raw] || raw;
 }
@@ -6104,6 +7049,150 @@ function collapseCheckoutFormFields(fields) {
         seen.add(key);
         return true;
     });
+}
+
+function isStaffOrderCredentialField(label) {
+    const key = checkoutFieldKey(label);
+    if (!key) return false;
+    if (/password|access code|mailbox password|service password/.test(key)) return true;
+    if (key === 'access email password' || key === 'email password') return true;
+    return false;
+}
+
+function checkoutFormPickValue(fields, labelCandidates) {
+    const rows = collapseCheckoutFormFields(fields || []);
+    const want = (labelCandidates || []).map((l) => checkoutFieldKey(l));
+    for (const row of rows) {
+        const key = checkoutFieldKey(row.label);
+        if (want.includes(key) && String(row.value || '').trim()) {
+            return String(row.value).trim();
+        }
+    }
+    return '';
+}
+
+const STAFF_ORDER_DETAIL_SORT = [
+    'desired company name', 'proposed company name', 'company name', 'registered company name', 'business name',
+    'registered office address', 'registered address', 'registered office',
+    'director name', 'director', 'date of birth', 'nationality', 'business activities',
+    'uk phone number', 'uk contact number', 'phone number', 'phone',
+    'personal address', 'home address', 'director address', 'director home address', 'email', 'email form',
+];
+
+function sortStaffOrderDetailFields(fields) {
+    const rows = (fields || []).slice();
+    const rank = (label) => {
+        const key = checkoutFieldKey(label);
+        const idx = STAFF_ORDER_DETAIL_SORT.indexOf(key);
+        return idx >= 0 ? idx : 500 + key.charCodeAt(0);
+    };
+    rows.sort((a, b) => rank(a.label) - rank(b.label) || String(a.label).localeCompare(String(b.label)));
+    return rows;
+}
+
+function staffOrderDetailFields(fields, includeSecrets) {
+    let rows = collapseCheckoutFormFields(fields || []);
+    if (!includeSecrets) {
+        rows = rows.filter((f) => !isStaffOrderCredentialField(f.label));
+    }
+    return sortStaffOrderDetailFields(rows);
+}
+
+function orderSkipsDirectorDob(order) {
+    const o = order || {};
+    const bits = [
+        o.service_name,
+        o.products_summary,
+        o.category_name,
+        ...(o.line_items || []).map((item) => item.product_name),
+        ...(o.line_items || []).map((item) => item.category_name),
+    ].filter(Boolean).join(' ').toLowerCase();
+    if (!/confirmation statement|annual compliance/.test(bits)) return false;
+    if (orderLooksLikeFormationPackage(o)) return false;
+    if (/bank|tide|identity verification|\bkyc\b/.test(bits)) return false;
+    return true;
+}
+
+function orderLooksLikeFormationPackage(order) {
+    const o = order || {};
+    const bits = [
+        o.service_name,
+        o.products_summary,
+        o.category_name,
+        ...(o.line_items || []).map((item) => item.product_name),
+        ...(o.line_items || []).map((item) => item.category_name),
+    ].filter(Boolean).join(' ').toLowerCase();
+    if (!bits.trim()) return false;
+    if (/identity verification|kyc|companies house id/.test(bits) && !/\bpackage\b/.test(bits)) return false;
+    return (
+        /\bpackage\b/.test(bits)
+        || /formation|incorporat|register (a )?company|digital package|professional package|all inclusive/.test(bits)
+    );
+}
+
+function ensureStaffFormationDetailSlots(rows, order) {
+    if (!orderLooksLikeFormationPackage(order)) return rows || [];
+    const out = (rows || []).slice();
+    const hasKey = (key) => out.some((r) => checkoutFieldKey(r.label) === key);
+    const ensure = (label) => {
+        const key = checkoutFieldKey(label);
+        if (!hasKey(key)) out.push({ label, value: '' });
+    };
+    [
+        'Desired company name',
+        'Registered office address',
+        'Director name',
+        'Date of birth',
+        'Nationality',
+        'Business activities',
+        'UK phone number',
+        'Personal address',
+        'Email',
+    ].forEach(ensure);
+    return sortStaffOrderDetailFields(out);
+}
+
+function resolveStaffOrderDetailFields(order) {
+    const o = order || {};
+    let rows = staffOrderDetailFields(o.checkout_form || [], false);
+    const hasKey = (key) => rows.some((r) => checkoutFieldKey(r.label) === key);
+    const push = (label, val) => {
+        const key = checkoutFieldKey(label);
+        if (hasKey(key)) return;
+        const v = String(val == null ? '' : val).trim();
+        if (v && v !== '—') rows.push({ label, value: v });
+    };
+    push('Desired company name', o.company_name);
+    push('Registered office address', o.company_address);
+    push('Director name', o.end_client_name || o.owner_name || o.company_director);
+    push('Email', o.end_client_email || o.access_email || o.owner_form_email);
+    push('UK phone number', o.end_client_phone || o.checkout_phone || o.client_phone);
+    if (!orderSkipsDirectorDob(o)) {
+        const dobFromForm = checkoutFormPickValue(rows, ['Date of birth', 'Director date of birth']);
+        if (!dobFromForm) {
+            let fvDob = '';
+            try {
+                const rawFv = o.order_form_values_json;
+                const fv = typeof rawFv === 'string' ? JSON.parse(rawFv || '{}') : (rawFv || {});
+                fvDob = fv.director_dob || fv.dob || fv.date_of_birth || '';
+            } catch (_e) { /* ignore */ }
+            const dobFallback = fvDob || o.checkout_dob || '';
+            if (dobFallback && !(o.b2b_client_id && o.end_client_name && o.client_date_of_birth && dobFallback === o.client_date_of_birth)) {
+                push('Date of birth', dobFallback);
+            }
+        }
+    } else {
+        rows = rows.filter((r) => !/date of birth/.test(String(r.label || '').toLowerCase()));
+    }
+    if (!hasKey('personal address')) {
+        const personal = checkoutFormPickValue(rows, ['Personal address', 'Home address', 'Director home address']);
+        push('Personal address', personal);
+    }
+    if (!hasKey('business activities')) {
+        push('Business activities', checkoutFormPickValue(rows, ['Business activities', 'SIC code', 'Business activity']));
+    }
+    rows = ensureStaffFormationDetailSlots(rows, o);
+    return sortStaffOrderDetailFields(rows);
 }
 
 function isWideCheckoutField(label) {
@@ -6135,7 +7224,9 @@ function collectStaffCheckoutFormDraft() {
 function renderStaffCheckoutForm(fields) {
     const checkoutEl = document.getElementById('staff-order-checkout-form');
     if (!checkoutEl) return;
-    const checkoutFields = collapseCheckoutFormFields(fields || []);
+    const checkoutFields = staffCheckoutFormEditing
+        ? collapseCheckoutFormFields(fields || [])
+        : staffOrderDetailFields(fields || [], false);
     staffCheckoutFormDraft = checkoutFields.map((field) => ({
         label: field.label || '',
         value: field.value || '',
@@ -6166,7 +7257,10 @@ function renderStaffCheckoutForm(fields) {
 }
 
 function staffCheckoutFieldsForEdit(order) {
-    const existing = collapseCheckoutFormFields((order && order.checkout_form) || staffCheckoutFormDraft || []);
+    const fromOrder = resolveStaffOrderDetailFields(order || {});
+    const existing = collapseCheckoutFormFields(
+        fromOrder.length ? fromOrder : ((order && order.checkout_form) || staffCheckoutFormDraft || []),
+    );
     if (existing.length) return existing;
     return [
         { label: 'Desired company name', value: (order && order.company_name) || '' },
@@ -6233,6 +7327,14 @@ async function openStaffOrderWorkspace(orderId, options) {
     if (Number(staffOrderId) !== Number(orderId)) staffCheckoutFormEditing = false;
     if (editCheckout) staffCheckoutFormEditing = true;
     setStaffOrderNotice('', '');
+    const modal = document.getElementById('modal-staff-order');
+    if (modal) {
+        modal.classList.add('active');
+        const numEl = document.getElementById('staff-order-number');
+        if (numEl && Number(staffOrderId) !== Number(orderId)) numEl.textContent = 'Loading…';
+        const metaEl = document.getElementById('staff-order-meta');
+        if (metaEl && Number(staffOrderId) !== Number(orderId)) metaEl.textContent = 'Opening order…';
+    }
     try {
         const orderRes = await fetch(`/api/client/orders/${orderId}`, { credentials: 'same-origin' });
         const data = await orderRes.json();
@@ -6245,25 +7347,26 @@ async function openStaffOrderWorkspace(orderId, options) {
         staffOrderCompanyId = order.company_id;
         staffOrderProgress = Number(order.progress_percent) || 0;
         staffOrderRecord = order;
-        document.getElementById('staff-order-number').textContent = order.order_number;
+        document.getElementById('staff-order-number').textContent = formatOrderNumberDisplay(order.order_number);
         const createdLabel = formatDateTime(order.created_at) || formatDate(order.created_at);
         const showFinance = canViewRevenue();
-        document.getElementById('staff-order-meta').textContent = showFinance
-            ? `${createdLabel} · £${parseFloat(order.total || 0).toFixed(2)}`
-            : createdLabel;
+        const companyLabel = (order.company_name || '').trim();
+        const metaParts = [createdLabel];
+        if (companyLabel) metaParts.push(companyLabel);
+        if (showFinance) metaParts.push(`£${parseFloat(order.total || 0).toFixed(2)}`);
+        document.getElementById('staff-order-meta').textContent = metaParts.join(' · ');
         setPortfolioText('staff-order-date', formatShortDate(order.created_at) || formatDate(order.created_at));
         setPortfolioText('staff-order-company', order.company_name || '—');
-        const owner = order.company_owner || {};
-        setPortfolioText('staff-order-owner-name', owner.full_name || '—');
-        setPortfolioText('staff-order-owner-email', owner.form_email || '—');
-        setPortfolioText('staff-order-owner-phone', owner.phone || '—');
-        setPortfolioText('staff-order-portal-email', order.portal_login_email || order.client_email || '—');
 
         const dispEmail = document.getElementById('disp-access-email');
         const dispPass = document.getElementById('disp-access-password');
         const btnCopyPass = document.getElementById('btn-copy-pass');
-        const accEmail = order.access_email || '';
-        const accPass = order.access_email_password || '';
+        const formEmail = checkoutFormPickValue(order.checkout_form, ['Email', 'Company email', 'Form email']);
+        const formPass = checkoutFormPickValue(order.checkout_form, [
+            'Email password', 'Mailbox password', 'Access email password', 'Service password',
+        ]);
+        const accEmail = (order.access_email || formEmail || '').trim();
+        const accPass = (order.access_email_password || formPass || '').trim();
         if (dispEmail) dispEmail.textContent = accEmail || 'None recorded';
         if (dispPass) {
             dispPass.setAttribute('data-actual-password', accPass);
@@ -6278,7 +7381,7 @@ async function openStaffOrderWorkspace(orderId, options) {
         const productEl = document.getElementById('staff-order-product');
         if (productEl) productEl.innerHTML = renderProductPills(productSummary, order.category_name);
         const priceBits = showFinance ? [`£${parseFloat(order.total || 0).toFixed(2)}`] : [];
-        if (showFinance && order.price != null && order.vat != null) {
+        if (showFinance && parseFloat(order.vat || 0) > 0.004) {
             priceBits.push(`(£${parseFloat(order.price || 0).toFixed(2)} + £${parseFloat(order.vat || 0).toFixed(2)} VAT)`);
         }
         setPortfolioText('staff-order-price', priceBits.join(' ') || '—');
@@ -6308,6 +7411,58 @@ async function openStaffOrderWorkspace(orderId, options) {
             };
         }
         if (priceSave) priceSave.onclick = () => saveStaffOrderPriceEdit();
+        const resolvedCost = Number(order.resolved_cost);
+        const catalogCost = Number(order.catalog_cost || 0);
+        const costValue = Number.isFinite(resolvedCost) ? resolvedCost : catalogCost;
+        const profitValue = Number.isFinite(Number(order.profit))
+            ? Number(order.profit)
+            : (parseFloat(order.total || 0) - costValue);
+        setPortfolioText('staff-order-cost', showFinance ? `£${costValue.toFixed(2)}` : '—');
+        const costEl = document.getElementById('staff-order-cost');
+        if (costEl) costEl.dataset.cost = costValue.toFixed(2);
+        const costHint = document.getElementById('staff-order-cost-hint');
+        if (costHint) {
+            if (!showFinance) {
+                costHint.textContent = '';
+            } else if (order.cost_source === 'manual') {
+                costHint.textContent = `Manual for this order · catalog default £${catalogCost.toFixed(2)}`;
+            } else if (order.cost_source === 'catalog') {
+                costHint.textContent = 'Using Services Catalog original price (change per order if needed)';
+            } else {
+                costHint.textContent = 'No catalog cost yet — set original price on the service, or enter cost here';
+            }
+        }
+        const profitEl = document.getElementById('staff-order-profit');
+        if (profitEl) {
+            const profitColor = profitValue >= 0 ? '#059669' : '#dc2626';
+            setMoneyValue('staff-order-profit', showFinance ? `£${profitValue.toFixed(2)}` : '', showFinance ? profitColor : '');
+        }
+        const costEditBtn = document.getElementById('staff-order-cost-edit');
+        const costEditor = document.getElementById('staff-order-cost-editor');
+        const costInput = document.getElementById('staff-order-cost-input');
+        const costSave = document.getElementById('staff-order-cost-save');
+        const costReset = document.getElementById('staff-order-cost-reset');
+        if (costEditor) costEditor.hidden = true;
+        if (costEditBtn) {
+            costEditBtn.hidden = !showFinance;
+            costEditBtn.onclick = () => beginStaffOrderCostEdit();
+        }
+        if (costInput) {
+            costInput.value = costValue.toFixed(2);
+            costInput.onkeydown = (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    saveStaffOrderCostEdit();
+                }
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    if (costEditor) costEditor.hidden = true;
+                    if (costEditBtn && showFinance) costEditBtn.hidden = false;
+                }
+            };
+        }
+        if (costSave) costSave.onclick = () => saveStaffOrderCostEdit();
+        if (costReset) costReset.onclick = () => resetStaffOrderCostToCatalog();
         const paymentSel = document.getElementById('staff-order-payment-mode');
         if (paymentSel) {
             paymentSel.innerHTML = staffOrderPaymentModeOptions(order.payment_mode || '');
@@ -6315,46 +7470,33 @@ async function openStaffOrderWorkspace(orderId, options) {
         }
         const notesEl = document.getElementById('staff-order-notes');
         if (notesEl) notesEl.value = order.notes || '';
-        const statusSel = document.getElementById('staff-order-status-select');
-        if (statusSel) {
-            statusSel.innerHTML = staffOrderStatusOptions(order.status);
-            statusSel.disabled = !canManageOrders();
-        }
+        setStaffOrderStatusDisplay(order.status);
+        ['staff-order-add-product-btn', 'staff-order-add-product-btn-2'].forEach((id) => {
+            const addBtn = document.getElementById(id);
+            if (!addBtn) return;
+            addBtn.hidden = !canManageOrders();
+            addBtn.style.display = canManageOrders() ? 'inline-flex' : 'none';
+        });
+        const addPanel = document.getElementById('staff-order-add-product');
+        if (addPanel) addPanel.hidden = true;
+        const addSearch = document.getElementById('staff-order-add-product-search');
+        if (addSearch) addSearch.value = '';
         const manage = document.getElementById('staff-order-manage');
-        if (manage) manage.style.display = (canManageOrders() || canDeleteOrders()) ? 'flex' : 'none';
+        if (manage) manage.style.display = canDeleteOrders() ? 'flex' : 'none';
         const deleteBtn = document.getElementById('staff-order-delete-btn');
         if (deleteBtn) deleteBtn.style.display = canDeleteOrders() ? 'inline-flex' : 'none';
-        const progressBtn = document.getElementById('staff-order-progress-btn');
-        if (progressBtn) progressBtn.style.display = canAdvanceOrderProgress(order) ? 'inline-flex' : 'none';
-        fillStaffOrderPaymentPlan(data.invoice, order);
+        const addDocBtn = document.getElementById('staff-order-add-document-btn');
+        if (addDocBtn) {
+            addDocBtn.hidden = !canUploadClientDocuments();
+            addDocBtn.style.display = canUploadClientDocuments() ? 'inline-flex' : 'none';
+        }
+        const orderWithLines = Object.assign({}, order, { line_items: data.line_items || order.line_items || [] });
         const checkoutFields = staffCheckoutFormEditing
-            ? staffCheckoutFieldsForEdit(order)
-            : collapseCheckoutFormFields(order.checkout_form || []);
+            ? staffCheckoutFieldsForEdit(orderWithLines)
+            : resolveStaffOrderDetailFields(orderWithLines);
         renderStaffCheckoutForm(checkoutFields);
-        const lines = data.line_items || [];
-        const productHead = showFinance
-            ? '<th>Category</th><th>Product</th><th>SKU</th><th>Qty</th><th>Unit</th><th>Total</th>'
-            : '<th>Category</th><th>Product</th><th>SKU</th><th>Qty</th>';
-        document.getElementById('staff-order-products').innerHTML = lines.length ? `<table class="data-table"><thead><tr>${productHead}</tr></thead><tbody>${lines.map((item) => `
-            <tr>
-                <td>${escapeHtml(item.category_name || '—')}</td>
-                <td>${escapeHtml(item.product_name)}</td>
-                <td>${escapeHtml(item.sku || '—')}</td>
-                <td>${item.quantity}</td>
-                ${showFinance ? `<td>£${parseFloat(item.unit_price || 0).toFixed(2)}</td><td>£${parseFloat(item.line_total || 0).toFixed(2)}</td>` : ''}
-            </tr>`).join('')}</tbody></table>` : `<p class="staff-order-section-copy">${escapeHtml(productSummary)}${showFinance ? ` · £${parseFloat(order.price || order.total || 0).toFixed(2)}` : ''}</p>`;
-        const docs = (data.documents || []).filter((d) => d.is_customer_upload || d.uploaded_by === 'Customer Upload' || d.category === 'Checkout Upload');
-        document.getElementById('staff-order-documents').innerHTML = docs.length ? docs.map((d) => `
-            <div class="staff-order-doc-row">
-                <div>
-                    <strong>${escapeHtml(d.name)}</strong>
-                    <div class="staff-order-field-sub">Customer checkout upload · ${escapeHtml(d.status || 'Pending Review')} · ${escapeHtml(d.file_type || '')}</div>
-                </div>
-                <div class="doc-file-actions">
-                    ${documentActionButtons(d)}
-                </div>
-            </div>`).join('') : '';
-        const modal = document.getElementById('modal-staff-order');
+        renderStaffOrderProducts(data.line_items || [], order, showFinance);
+        renderStaffOrderDocuments(data.documents || []);
         if (modal) {
             modal.classList.toggle('hide-order-finance', !showFinance);
             modal.classList.add('active');
@@ -6364,7 +7506,11 @@ async function openStaffOrderWorkspace(orderId, options) {
             if (checkoutEl) checkoutEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
         }
         safeCreateIcons();
+        applyMoneyVisible();
     } catch (err) {
+        if (modal && Number(staffOrderId) !== Number(orderId)) {
+            modal.classList.remove('active');
+        }
         alert(err.message || 'Unable to open order.');
     }
 }
@@ -6373,6 +7519,26 @@ function closeStaffOrderModal() {
     staffCheckoutFormEditing = false;
     const modal = document.getElementById('modal-staff-order');
     if (modal) modal.classList.remove('active');
+}
+
+function renderStaffOrderDocuments(docs) {
+    const box = document.getElementById('staff-order-documents');
+    if (!box) return;
+    const rows = (docs || []).filter((d) => d && d.id);
+    if (!rows.length) {
+        box.innerHTML = '<p class="staff-order-section-copy">No documents on this order yet. Use Add document to upload one.</p>';
+        return;
+    }
+    box.innerHTML = rows.map((d) => `
+        <div class="staff-order-doc-row" data-document-id="${Number(d.id)}">
+            <div>
+                <strong>${escapeHtml(d.name || 'Document')}</strong>
+                <div class="staff-order-field-sub">${escapeHtml(d.status || 'Pending Review')} · ${escapeHtml(documentPreviewMeta(d.name, d.file_type))}</div>
+            </div>
+            <div class="doc-file-actions">
+                ${documentActionButtons(d)}
+            </div>
+        </div>`).join('');
 }
 
 async function uploadStaffOrderDocument() {
@@ -6477,6 +7643,39 @@ function matchProductBanks(name) {
     return PRODUCT_BANKS.filter((bank) => bank.re.test(n));
 }
 
+/** Short label for order-table pills; full name stays on title/tooltip. */
+function productPillLabel(name) {
+    const raw = String(name || '').trim();
+    if (!raw) return raw;
+    const n = raw.toLowerCase();
+
+    if (/\btide\b/.test(n)) return 'Tide';
+    if (/\btap\s*tap\b|\btaptap\b/.test(n)) return 'Taptap';
+    if (/\bwise\b/.test(n)) return 'Wise';
+    if (/\bmonzo\b/.test(n)) return 'Monzo';
+    if (/\brevolut\b/.test(n)) return 'Revolut';
+    if (/\bstarling\b/.test(n)) return 'Starling';
+    if (/\bzempler\b/.test(n)) return 'Zempler';
+    if (/\bifast\b/.test(n)) return 'iFast';
+    if (/\bcounting\s*up\b|\bcountingup\b/.test(n)) return 'CountingUp';
+    if (/\btranswap\b/.test(n)) return 'Transwap';
+
+    let trimmed = raw
+        .replace(/\s+business\s+bank(\s+account)?\s*$/i, '')
+        .replace(/\s+bank\s+details?\s*$/i, '')
+        .replace(/\s+bank\s+account\s*$/i, '')
+        .replace(/\s+account\s+assistance\s*$/i, '')
+        .trim();
+    if (trimmed && trimmed.length < raw.length) return trimmed;
+
+    if (/identity|kyc/.test(n) && /verif/.test(n)) return 'KYC';
+    if (/confirmation statement/.test(n)) return 'Confirmation';
+    if (/digital package/.test(n)) return 'Digital';
+    if (/personal physical bank/.test(n)) return 'Physical bank';
+
+    return raw;
+}
+
 function productVisual(name) {
     const n = String(name || '').toLowerCase();
     const banks = matchProductBanks(name);
@@ -6500,16 +7699,29 @@ function productVisual(name) {
     return { tone: 'default' };
 }
 
+function formatOrderNumberDisplay(raw) {
+    const s = String(raw == null ? '' : raw).trim();
+    if (!s || s === '—') return '—';
+    // Prefer trailing sequence (ORD-2026-015317 → 15317, #GB15316 → 15316)
+    const tail = s.match(/(\d+)\s*$/);
+    const digits = tail ? tail[1] : s.replace(/\D/g, '');
+    if (!digits) return s;
+    return `#GB${String(parseInt(digits, 10))}`;
+}
+
 function renderProductPills(summary, categoryName) {
     const parts = String(summary || '')
         .split(',')
         .map((part) => part.trim())
         .filter(Boolean);
-    if (!parts.length) return '—';
-    return `<div class="product-pills">${parts.map((name) => {
+    if (!parts.length) return '<span class="product-empty">—</span>';
+    const fullTitle = parts.join(' · ');
+    const chips = parts.map((name) => {
         const visual = productVisual(`${categoryName || ''} ${name}`);
-        return `<span class="product-pill product-pill-${visual.tone}" title="${escapeHtml(name)}"><span class="product-pill-text">${escapeHtml(name)}</span></span>`;
-    }).join('')}</div>`;
+        const label = productPillLabel(name);
+        return `<span class="product-pill product-pill-${visual.tone}" title="${escapeHtml(name)}"><span class="product-pill-dot" aria-hidden="true"></span><span class="product-pill-text">${escapeHtml(label)}</span></span>`;
+    }).join('');
+    return `<div class="product-pills" title="${escapeHtml(fullTitle)}">${chips}</div>`;
 }
 
 function escapeHtml(value) {
@@ -7332,6 +8544,7 @@ async function submitNewTeamUser(event) {
 }
 
 let adminCustomersCache = [];
+let adminCustomerTypeFilter = 'All';
 
 function customerSignupSource(customer) {
     return customer && customer.wordpress_user_id ? 'website' : 'crm';
@@ -7344,6 +8557,23 @@ function customerSignupAgeDays(customer) {
     return (Date.now() - created.getTime()) / 86400000;
 }
 
+function isB2BCustomerRow(c) {
+    return Number(c?.is_b2b) === 1 || String(c?.client_type || '').toUpperCase() === 'B2B';
+}
+
+function setAdminCustomerTypeFilter(type) {
+    adminCustomerTypeFilter = type || 'All';
+    ['All', 'Normal', 'B2B'].forEach((t) => {
+        const btn = document.getElementById(`tab-customers-${t.toLowerCase()}`);
+        if (!btn) return;
+        const active = t === adminCustomerTypeFilter;
+        btn.classList.toggle('active', active);
+        btn.style.background = active ? 'var(--color-primary)' : 'var(--color-surface)';
+        btn.style.color = active ? '#FFFFFF' : 'var(--color-text-primary)';
+    });
+    renderAdminCustomers();
+}
+
 function renderAdminCustomers() {
     const tbody = document.getElementById('adm-customers-table-body');
     const countEl = document.getElementById('adm-customers-count');
@@ -7352,8 +8582,11 @@ function renderAdminCustomers() {
     const source = document.getElementById('filter-admin-customer-source')?.value || '';
     const ageDays = parseInt(document.getElementById('filter-admin-customer-age')?.value || '', 10);
     const rows = adminCustomersCache.filter((c) => {
+        const isB2B = isB2BCustomerRow(c);
+        if (adminCustomerTypeFilter === 'B2B' && !isB2B) return false;
+        if (adminCustomerTypeFilter === 'Normal' && isB2B) return false;
         if (search) {
-            const hay = `${c.full_name || ''} ${c.email || ''}`.toLowerCase();
+            const hay = `${c.full_name || ''} ${c.email || ''} ${c.b2b_id || ''}`.toLowerCase();
             if (!hay.includes(search)) return false;
         }
         if (source && customerSignupSource(c) !== source) return false;
@@ -7367,7 +8600,7 @@ function renderAdminCustomers() {
         countEl.textContent = `${rows.length} of ${adminCustomersCache.length} accounts`;
     }
     if (!rows.length) {
-        tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; color:#64748b; padding:28px;">No customer signups match the current filters.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="10" style="text-align:center; color:#64748b; padding:28px;">No customer signups match the current filters.</td></tr>`;
         updateCustomerSelectionState();
         return;
     }
@@ -7376,22 +8609,26 @@ function renderAdminCustomers() {
         const age = customerSignupAgeDays(c);
         const isNew = age != null && age <= 7;
         const sourceLabel = sourceKey === 'website' ? 'Website signup' : 'Created in CRM';
-        const portalReady = c.portal_login_ready !== false;
-        const portalLabel = portalReady ? 'Can sign in' : 'Needs password';
+        const isB2B = isB2BCustomerRow(c);
+        const portalReady = isB2B && c.portal_login_ready !== false;
+        const portalLabel = isB2B ? (portalReady ? 'Portal login' : 'Needs portal password') : 'Website only';
+        const typeLabel = isB2B ? (c.b2b_id || 'B2B') : 'Normal';
         return `
             <tr>
                 <td style="text-align:center;"><input type="checkbox" class="chk-customer-item" value="${c.id}" onchange="updateCustomerSelectionState()"></td>
                 <td style="font-weight:700;">${escapeHtml(c.full_name || '')}${isNew ? ' <span class="signup-new-badge">New</span>' : ''}</td>
                 <td>${escapeHtml(c.email || '')}</td>
+                <td>${isB2B ? `<span class="b2b-badge">${escapeHtml(typeLabel)}</span>` : escapeHtml(typeLabel)}</td>
                 <td>${escapeHtml(formatDateTime(c.created_at) || formatDate(c.created_at) || '—')}</td>
                 <td>${escapeHtml(sourceLabel)}</td>
                 <td>${c.companies_count ?? 0}</td>
                 <td>${c.orders_count ?? 0}</td>
-                <td><span class="status-badge ${portalReady ? 'completed' : 'pending'}">${portalLabel}</span></td>
+                <td><span class="status-badge ${portalReady || !isB2B ? 'completed' : 'pending'}">${portalLabel}</span></td>
                 <td class="cell-actions">
                     <div class="table-action-btns">
-                        <button type="button" class="btn-primary btn-table" data-customer-action="profile" data-customer-id="${c.id}">View profile</button>
-                        ${portalReady ? '' : `<button type="button" class="btn-secondary btn-table" data-customer-action="password" data-customer-id="${c.id}" data-customer-email="${escapeHtml(c.email || '')}">Set password</button>`}
+                        <button type="button" class="btn-primary btn-table" data-customer-action="profile" data-customer-id="${c.id}">${isB2B ? 'Open B2B' : 'View profile'}</button>
+                        ${isB2B ? `<button type="button" class="btn-secondary btn-table" onclick="openB2BClientOrders(${c.id})">Orders</button>` : ''}
+                        ${isB2B && !portalReady ? `<button type="button" class="btn-secondary btn-table" data-customer-action="password" data-customer-id="${c.id}" data-customer-email="${escapeHtml(c.email || '')}">Set password</button>` : ''}
                         ${canDeleteRecords() ? `<button type="button" class="btn-secondary btn-table" style="color:#dc2626; border-color:#fca5a5; background:#fef2f2;" onclick="deleteCustomerSingle(${c.id}, '${escapeJsString(c.full_name || c.email)}')"><i data-lucide="trash-2"></i> Delete</button>` : ''}
                     </div>
                 </td>
@@ -7400,6 +8637,12 @@ function renderAdminCustomers() {
     }).join('');
     updateCustomerSelectionState();
     if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
+}
+
+function openB2BClientOrders(clientId) {
+    switchView('admin-orders');
+    adminOrderSelectedB2BClientId = String(clientId || '');
+    setAdminOrderClientTypeFilter('B2B', { preserveClient: true });
 }
 
 function toggleSelectAllCustomers(masterChk) {
@@ -7437,9 +8680,10 @@ async function deleteCustomerSingle(customerId, customerName) {
     if (!customerId) return;
     const ownerForce = canForceDeleteGenuine();
     const msg = ownerForce
-        ? `Delete customer "${customerName}" permanently?\n\nAs Super Admin (owner) this will also remove any locked companies, orders, and invoices linked to this account.`
-        : `Are you sure you want to delete customer account "${customerName}"?`;
+        ? `PERMANENTLY delete customer "${customerName}"?\n\nThis removes the account and all linked companies, orders, invoices, and documents from the live database AND backups. There is no restore.`
+        : `Are you sure you want to permanently delete customer account "${customerName}"?\n\nThis cannot be restored.`;
     if (!confirm(msg)) return;
+    if (ownerForce && !confirm('Final confirmation: this delete is irreversible. Continue?')) return;
     try {
         const res = await fetch('/api/admin/customers/delete', {
             method: 'POST',
@@ -7474,9 +8718,10 @@ async function deleteSelectedCustomers() {
     }
     const ownerForce = canForceDeleteGenuine();
     const msg = ownerForce
-        ? `Delete ${selectedIds.length} selected customer account(s) permanently?\n\nAs Super Admin (owner) this will also remove locked companies, orders, and invoices linked to those accounts.`
-        : `Are you sure you want to delete ${selectedIds.length} selected customer account(s)?`;
+        ? `PERMANENTLY delete ${selectedIds.length} selected customer account(s)?\n\nThis removes linked companies, orders, invoices, and documents from the live database AND backups. There is no restore.`
+        : `Are you sure you want to permanently delete ${selectedIds.length} selected customer account(s)?\n\nThis cannot be restored.`;
     if (!confirm(msg)) return;
+    if (ownerForce && !confirm('Final confirmation: this delete is irreversible. Continue?')) return;
     try {
         const res = await fetch('/api/admin/customers/bulk-delete', {
             method: 'POST',
@@ -7529,11 +8774,11 @@ async function setClientPortalPassword(customerId, email) {
     }
 }
 
-async function loadAdminCustomers() {
+async function loadAdminCustomers(opts = {}) {
     const tbody = document.getElementById('adm-customers-table-body');
     try {
         if (tbody) {
-            tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:#64748b; padding:28px;">Loading signups…</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="10" style="text-align:center; color:#64748b; padding:28px;">Loading signups…</td></tr>`;
         }
         const res = await fetch('/api/admin/customers', { credentials: 'same-origin' });
         const data = await res.json();
@@ -7545,7 +8790,7 @@ async function loadAdminCustomers() {
     } catch (err) {
         adminCustomersCache = [];
         if (tbody) {
-            tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:#dc2626; padding:28px;">${escapeHtml(err.message || 'Unable to load customers.')}</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="10" style="text-align:center; color:#dc2626; padding:28px;">${escapeHtml(err.message || 'Unable to load customers.')}</td></tr>`;
         }
     }
 }
@@ -7584,7 +8829,7 @@ async function openCrmClientModal(clientId) {
             const companies = data.companies || [];
             compBox.innerHTML = companies.length ? companies.map((comp) => `
                 <div style="padding:10px; border:1px solid var(--border-color); border-radius:8px; margin-bottom:8px;">
-                    <strong>${escapeHtml(comp.name || '')}</strong> ${comp.b2b_id ? `<span class="b2b-badge">${escapeHtml(comp.b2b_id)}</span>` : ''} (#${escapeHtml(comp.company_number || '')}) • ${escapeHtml(comp.package || '')}
+                    <strong>${escapeHtml(comp.name || '')}</strong> (#${escapeHtml(comp.company_number || '')}) • ${escapeHtml(comp.package || '')}
                     <div style="font-size:0.78rem; color:var(--text-muted);">Office: ${escapeHtml(comp.reg_office || '—')} | Status: ${escapeHtml(comp.status || '')}</div>
                 </div>
             `).join('') : '<p style="color:var(--text-muted);">No registered companies for this client.</p>';
@@ -8351,7 +9596,7 @@ async function loadAdminServices() {
         errBox.textContent = '';
     }
     if (tbody) {
-        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#64748b; padding:28px;">Loading services…</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:#64748b; padding:28px;">Loading services…</td></tr>`;
     }
     try {
         const res = await fetch('/api/admin/services', { credentials: 'same-origin' });
@@ -8363,9 +9608,9 @@ async function loadAdminServices() {
         adminServicesCache = services;
         if (!tbody) return;
         if (!services.length) {
-            tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding:36px 20px;">
+            tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; padding:36px 20px;">
                 <div style="font-weight:800; color:#0f172a; margin-bottom:8px;">No services in the CRM catalog yet</div>
-                <div style="color:#64748b; font-size:0.85rem; max-width:440px; margin:0 auto 16px;">Website products still show on orders. Add a service here to list it in the CRM catalog.</div>
+                <div style="color:#64748b; font-size:0.85rem; max-width:440px; margin:0 auto 16px;">Add sell price and original/cost price so dashboard net profit is accurate.</div>
                 ${canManageServiceCatalog() ? '<button type="button" class="btn-primary" onclick="openCreateServiceModal()">Add Service</button>' : ''}
             </td></tr>`;
             return;
@@ -8373,6 +9618,9 @@ async function loadAdminServices() {
         const canEdit = canManageServiceCatalog();
         tbody.innerHTML = services.map((s) => {
             const sid = Number(s.id);
+            const sell = parseFloat(s.price || 0);
+            const cost = parseFloat(s.cost_price || 0);
+            const profit = sell - cost;
             const actions = canEdit
                 ? `<div class="order-row-actions table-action-btns">
                         <button type="button" class="btn-secondary btn-table" onclick="openEditServiceModal(${sid})">Edit</button>
@@ -8383,13 +9631,16 @@ async function loadAdminServices() {
             <tr data-service-id="${sid}">
                 <td><strong>${escapeHtml(s.name || 'Service')}</strong><div style="font-size:0.75rem; color:#64748b;">${escapeHtml(s.description || '')}</div></td>
                 <td>${escapeHtml(s.category || '—')}</td>
-                <td>£${parseFloat(s.price || 0).toFixed(2)}</td>
+                <td>£${sell.toFixed(2)}</td>
+                <td>£${cost.toFixed(2)}</td>
+                <td style="font-weight:700;">${moneyAmountHtml(`£${profit.toFixed(2)}`, profit >= 0 ? '#059669' : '#dc2626')}</td>
                 <td>${escapeHtml(s.duration || '—')}</td>
                 <td><span class="status-badge ${s.status === 'Active' ? 'completed' : 'pending'}">${escapeHtml(s.status || '')}</span></td>
                 <td>${actions}</td>
             </tr>`;
         }).join('');
         if (window.lucide) lucide.createIcons();
+        applyMoneyVisible();
     } catch (err) {
         console.error(err);
         if (errBox) {
@@ -8397,7 +9648,7 @@ async function loadAdminServices() {
             errBox.textContent = err.message || 'Unable to load services.';
         }
         if (tbody) {
-            tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#dc2626; padding:28px;">Unable to load services.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:#dc2626; padding:28px;">Unable to load services.</td></tr>`;
         }
     }
 }
@@ -8410,11 +9661,7 @@ function setServiceModalMode(isEdit) {
     const submitBtn = document.getElementById('create-service-submit');
     const statusWrap = document.getElementById('create-service-status-wrap');
     if (title) title.textContent = isEdit ? 'Edit Service' : 'Add Service';
-    if (subtitle) {
-        subtitle.textContent = isEdit
-            ? 'Update CRM catalog price and details. Website WooCommerce prices stay unchanged until you sync products.'
-            : 'This adds a service to the CRM catalog. It does not create a website product.';
-    }
+    if (subtitle) subtitle.textContent = '';
     if (submitBtn) submitBtn.textContent = isEdit ? 'Save changes' : 'Save Service';
     if (statusWrap) statusWrap.style.display = isEdit ? 'block' : 'none';
 }
@@ -8434,6 +9681,8 @@ function openCreateServiceModal() {
     if (cat && !cat.value) cat.value = 'Corporate';
     const dur = document.getElementById('create-service-duration');
     if (dur && !dur.value) dur.value = '12 Months';
+    const cost = document.getElementById('create-service-cost-price');
+    if (cost) cost.value = '0';
     const status = document.getElementById('create-service-status');
     if (status) status.value = 'Active';
     setServiceModalMode(false);
@@ -8462,6 +9711,8 @@ function openEditServiceModal(serviceId) {
     if (descEl) descEl.value = service.description || '';
     const priceEl = document.getElementById('create-service-price');
     if (priceEl) priceEl.value = parseFloat(service.price || 0).toFixed(2);
+    const costEl = document.getElementById('create-service-cost-price');
+    if (costEl) costEl.value = parseFloat(service.cost_price || 0).toFixed(2);
     const durEl = document.getElementById('create-service-duration');
     if (durEl) durEl.value = service.duration || '12 Months';
     const statusEl = document.getElementById('create-service-status');
@@ -8492,6 +9743,7 @@ async function submitCreateServiceForm(event) {
         category: document.getElementById('create-service-category')?.value.trim() || 'Corporate',
         description: document.getElementById('create-service-description')?.value.trim() || '',
         price: document.getElementById('create-service-price')?.value,
+        cost_price: document.getElementById('create-service-cost-price')?.value || 0,
         duration: document.getElementById('create-service-duration')?.value.trim() || '12 Months',
     };
     if (isEdit) {
@@ -8586,10 +9838,34 @@ function invoiceDisplayStatus(inv) {
     return inv.status || 'Pending';
 }
 
+function renderStaffOrderPayments(invoice, order) {
+    const box = document.getElementById('staff-order-payments');
+    if (!box) return;
+    staffOrderInvoice = invoice && invoice.id ? invoice : null;
+    const summaryEl = document.getElementById('staff-order-pay-summary');
+    if (!canViewRevenue() || !invoice || !invoice.id) {
+        box.innerHTML = '<p class="staff-order-section-copy">No invoice linked yet — open <strong>Invoices</strong> to manage payment.</p>';
+        if (summaryEl) summaryEl.textContent = '—';
+        return;
+    }
+    const paid = parseFloat(invoice.amount_paid || 0);
+    const total = parseFloat(invoice.total != null ? invoice.total : (order && order.total) || 0);
+    const due = invoice.amount_due != null ? parseFloat(invoice.amount_due) : Math.max(0, total - paid);
+    const status = invoiceDisplayStatus(invoice);
+    const line = `${invoice.invoice_number || 'Invoice'} · ${status} · received £${paid.toFixed(2)} · due £${due.toFixed(2)}`;
+    if (summaryEl) summaryEl.textContent = line;
+    box.innerHTML = `
+        <div class="staff-order-payments-row">
+            <div class="staff-order-payments-line">${escapeHtml(line)}</div>
+            <button type="button" class="btn-secondary btn-table" onclick="openStaffOrderInvoice()">View invoice</button>
+        </div>`;
+}
+
 function fillStaffOrderPaymentPlan(invoice, order) {
+    renderStaffOrderPayments(invoice, order);
     const card = document.getElementById('staff-order-pay-plan');
     if (!card) return;
-    const show = canManageOrders() && canViewRevenue() && invoice && invoice.id;
+    const show = false;
     card.hidden = !show;
     if (!show) return;
     staffOrderInvoice = invoice;
@@ -8746,10 +10022,28 @@ function openEditInvoiceModal(invoiceId) {
         err.style.display = 'none';
         err.textContent = '';
     }
+    syncEditInvoiceSendButton();
     applyAdminOrderFinanceVisibility();
     const modal = document.getElementById('modal-edit-invoice');
     if (modal) modal.classList.add('active');
     if (window.lucide) lucide.createIcons();
+}
+
+function invoiceIsPaidInFull(invoice) {
+    if (!invoice) return false;
+    const money = typeof invoiceMoneyBits === 'function' ? invoiceMoneyBits(invoice) : {
+        status: invoice.status || invoice.display_status || '',
+        due: Number(invoice.amount_due != null ? invoice.amount_due : 1),
+    };
+    return String(money.status || '') === 'Paid' || Number(money.due || 0) <= 0.004;
+}
+
+function syncEditInvoiceSendButton() {
+    const sendBtn = document.getElementById('edit-invoice-send');
+    if (!sendBtn) return;
+    const status = ((document.getElementById('edit-invoice-status') || {}).value || '').trim();
+    const paid = status === 'Paid';
+    sendBtn.textContent = paid ? 'Send thank you' : 'Send invoice';
 }
 
 async function submitEditInvoiceForm(event) {
@@ -8788,22 +10082,14 @@ async function submitEditInvoiceForm(event) {
         }
         closeEditInvoiceModal();
         await loadAdminInvoices();
-        const box = document.getElementById('adm-invoices-error');
-        if (box) {
-            if (data.email_sent) {
-                box.style.display = 'block';
-                box.style.background = '#ecfdf5';
-                box.style.color = '#047857';
-                box.textContent = 'Invoice saved. Email sent to the company owner.';
-            } else if (payload.status === 'Paid') {
-                box.style.display = 'block';
-                box.style.background = '#fff7ed';
-                box.style.color = '#9a3412';
-                box.textContent = data.email_status
-                    ? `Invoice saved. Email: ${data.email_status}`
-                    : 'Invoice saved. No payment email was sent.';
-            }
-        }
+        const saved = data.invoice || {};
+        showPortalToast(
+            invoiceIsPaidInFull(saved)
+                ? 'Invoice saved. Use Send thank you to email the complete-payment notice.'
+                : 'Invoice saved. Use Send to email the company owner.',
+            'success',
+            'Invoice updated'
+        );
     } catch (ex) {
         if (err) {
             err.style.display = 'block';
@@ -8814,10 +10100,45 @@ async function submitEditInvoiceForm(event) {
     }
 }
 
+function showPortalToast(message, kind, title) {
+    const type = kind === 'error' ? 'error' : 'success';
+    let host = document.getElementById('portal-toast-host');
+    if (!host) {
+        host = document.createElement('div');
+        host.id = 'portal-toast-host';
+        host.className = 'portal-toast-host';
+        host.setAttribute('aria-live', 'polite');
+        document.body.appendChild(host);
+    }
+    const toast = document.createElement('div');
+    toast.className = `portal-toast portal-toast--${type}`;
+    toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
+    const iconName = type === 'error' ? 'circle-alert' : 'circle-check';
+    const heading = title || (type === 'error' ? 'Something went wrong' : 'Done');
+    toast.innerHTML = `
+        <span class="portal-toast-accent" aria-hidden="true"></span>
+        <span class="portal-toast-icon" aria-hidden="true"><i data-lucide="${iconName}"></i></span>
+        <div class="portal-toast-copy">
+            <p class="portal-toast-title">${escapeHtml(heading)}</p>
+            <p class="portal-toast-text">${escapeHtml(message || '')}</p>
+        </div>
+        <button type="button" class="portal-toast-close" aria-label="Dismiss">×</button>
+    `;
+    const removeToast = () => {
+        if (!toast.parentNode) return;
+        toast.classList.add('is-leaving');
+        setTimeout(() => toast.remove(), 220);
+    };
+    toast.querySelector('.portal-toast-close').addEventListener('click', removeToast);
+    host.appendChild(toast);
+    if (window.lucide) lucide.createIcons();
+    const timer = setTimeout(removeToast, type === 'error' ? 7000 : 4500);
+    toast.addEventListener('mouseenter', () => clearTimeout(timer), { once: true });
+}
+
 async function emailAdminInvoice(invoiceId) {
     const id = Number(invoiceId || pendingEditInvoiceId || 0);
     if (!id) return;
-    const box = document.getElementById('adm-invoices-error');
     const sendBtn = document.getElementById('edit-invoice-send');
     if (sendBtn) sendBtn.disabled = true;
     try {
@@ -8836,33 +10157,426 @@ async function emailAdminInvoice(invoiceId) {
         }
         if (pendingEditInvoiceId) closeEditInvoiceModal();
         await loadAdminInvoices();
-        if (box) {
-            box.style.display = 'block';
-            box.style.background = '#ecfdf5';
-            box.style.color = '#047857';
-            const inv = data.invoice || {};
-            const to = inv.owner_form_email || inv.client_email || 'the company owner';
-            box.textContent = `Invoice emailed to ${to}.`;
+        const inv = data.invoice || {};
+        const to = inv.owner_form_email || inv.client_email || 'the company owner';
+        if (invoiceIsPaidInFull(inv)) {
+            showPortalToast(`Thank you for complete payment sent to ${to}.`, 'success', 'Payment thank you emailed');
+        } else {
+            showPortalToast(`Sent to ${to}.`, 'success', 'Invoice emailed');
         }
     } catch (err) {
-        if (box) {
-            box.style.display = 'block';
-            box.style.background = '#fef2f2';
-            box.style.color = '#dc2626';
-            box.textContent = err.message || 'Unable to send this invoice.';
-        } else {
-            alert(err.message || 'Unable to send this invoice.');
-        }
+        showPortalToast(err.message || 'Unable to send this invoice.', 'error', 'Invoice not sent');
     } finally {
         if (sendBtn) sendBtn.disabled = false;
     }
+}
+
+let adminPaymentsTab = 'invoices';
+let adminPaymentsCostsTimer = null;
+let adminPaymentsCostsCache = [];
+
+function openAdminPaymentsTab(tabName, options) {
+    let tab = ['invoices', 'revenue', 'costs', 'profit'].includes(tabName) ? tabName : 'invoices';
+    if (tab === 'costs' || tab === 'profit') tab = 'revenue';
+    if (tab === 'revenue' && !canViewRevenue()) {
+        adminPaymentsTab = 'invoices';
+    } else {
+        adminPaymentsTab = tab;
+    }
+    if (!(options && options.skipSwitch) && activeView !== 'admin-invoices') {
+        switchView('admin-invoices');
+        return;
+    }
+    document.querySelectorAll('#adm-payments-tabs .portfolio-tab').forEach((btn) => {
+        btn.classList.toggle('active', btn.getAttribute('data-payments-tab') === adminPaymentsTab);
+    });
+    document.querySelectorAll('.adm-payments-panel').forEach((panel) => {
+        const match = panel.getAttribute('data-payments-panel') === adminPaymentsTab;
+        panel.style.display = match ? '' : 'none';
+    });
+    const subtitle = document.getElementById('adm-payments-subtitle');
+    if (subtitle) subtitle.textContent = '';
+    syncPaymentsHash(adminPaymentsTab);
+    if (adminPaymentsTab === 'invoices') loadAdminInvoices();
+    if (adminPaymentsTab === 'revenue') loadAdminPaymentsRevenue();
+    safeCreateIcons();
+}
+
+function fillPaymentsMonthSelect(selectId, selected) {
+    const sel = document.getElementById(selectId);
+    if (!sel) return;
+    const now = new Date();
+    const options = [];
+    for (let i = 0; i < 12; i++) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        const label = d.toLocaleString('en-GB', { month: 'long', year: 'numeric' });
+        options.push({ value, label });
+    }
+    const current = selected || sel.value || '';
+    const allowAll = selectId === 'filter-payments-cost-month';
+    sel.innerHTML = (allowAll ? `<option value="">All months</option>` : '') + options.map((opt) => {
+        const isSelected = String(opt.value) === String(current) ? ' selected' : '';
+        return `<option value="${escapeHtml(opt.value)}"${isSelected}>${escapeHtml(opt.label)}</option>`;
+    }).join('');
+    if (current) sel.value = current;
+}
+
+function scheduleLoadAdminPaymentsCosts() {
+    clearTimeout(adminPaymentsCostsTimer);
+    adminPaymentsCostsTimer = setTimeout(() => loadAdminPaymentsRevenue(), 220);
+}
+
+async function loadAdminPaymentsRevenue() {
+    if (!canViewRevenue()) return;
+    fillPaymentsMonthSelect('filter-payments-cost-month');
+    await Promise.all([
+        loadAdminPaymentsCosts(),
+        loadAdminPaymentsProfit(),
+    ]);
+}
+
+async function loadAdminPaymentsCosts() {
+    if (!canViewRevenue()) return;
+    const tbody = document.getElementById('adm-payments-costs-body');
+    const errBox = document.getElementById('adm-payments-costs-error');
+    if (errBox) {
+        errBox.style.display = 'none';
+        errBox.textContent = '';
+    }
+    fillPaymentsMonthSelect('filter-payments-cost-month');
+    if (tbody) {
+        tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:#64748b; padding:28px;">Loading costs…</td></tr>`;
+    }
+    try {
+        const month = document.getElementById('filter-payments-cost-month')?.value || '';
+        const search = String(document.getElementById('filter-payments-cost-search')?.value || '').trim().toLowerCase();
+        const qs = new URLSearchParams({ page: '1', limit: '100' });
+        if (month) {
+            qs.set('date_preset', 'custom');
+            qs.set('date_from', `${month}-01`);
+            const [y, m] = month.split('-').map(Number);
+            const last = new Date(y, m, 0).getDate();
+            qs.set('date_to', `${month}-${String(last).padStart(2, '0')}`);
+        }
+        const res = await fetch(`/api/admin/orders?${qs.toString()}`, { credentials: 'same-origin' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Unable to load order costs.');
+        }
+        let rows = Array.isArray(data.orders) ? data.orders : [];
+        rows = rows.filter((o) => !['Cancelled', 'Refunded'].includes(String(o.status || '')));
+        if (search) {
+            rows = rows.filter((o) => {
+                const blob = [
+                    o.order_number, o.owner_name, o.client_name, o.owner_form_email,
+                    o.client_email, o.products_summary, o.service_name, o.company_name,
+                ].join(' ').toLowerCase();
+                return blob.includes(search);
+            });
+        }
+        adminPaymentsCostsCache = rows;
+        if (!tbody) return;
+        if (!rows.length) {
+            tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:#64748b; padding:28px;">No orders found for this filter.</td></tr>`;
+            return;
+        }
+        tbody.innerHTML = rows.map((o) => {
+            const sell = parseFloat(o.total || 0);
+            const cost = Number.isFinite(Number(o.resolved_cost)) ? Number(o.resolved_cost) : parseFloat(o.cost_price || 0);
+            const profit = Number.isFinite(Number(o.profit)) ? Number(o.profit) : (sell - cost);
+            const source = o.cost_source === 'manual' ? 'Manual' : (o.cost_source === 'catalog' ? 'Catalog' : 'Not set');
+            const owner = o.owner_name || o.client_name || '—';
+            return `<tr data-order-id="${o.id}">
+                <td><button type="button" class="order-number-link" onclick="openStaffOrderWorkspace(${o.id})" title="${escapeHtml(o.order_number || '')}">${escapeHtml(formatOrderNumberDisplay(o.order_number || '—'))}</button></td>
+                <td><div class="owner-cell-name">${escapeHtml(orderListOwnerName(o))}</div><div class="owner-cell-email">${escapeHtml(orderListContactEmail(o) || '—')}</div></td>
+                <td>${escapeHtml(o.products_summary || o.service_name || '—')}</td>
+                <td>${moneyAmountHtml(`£${sell.toFixed(2)}`)}</td>
+                <td>
+                    <div class="table-price-wrap">
+                        <input type="number" min="0" max="100000" step="0.01" class="table-select table-price-input" style="width:96px;" value="${cost.toFixed(2)}" aria-label="Order cost" onchange="savePaymentsOrderCost(${o.id}, this.value)">
+                    </div>
+                </td>
+                <td style="font-weight:700;">${moneyAmountHtml(`£${profit.toFixed(2)}`, profit >= 0 ? '#059669' : '#dc2626')}</td>
+                <td style="font-size:0.75rem; color:#64748b;">${escapeHtml(source)}</td>
+                <td><button type="button" class="btn-secondary btn-table" onclick="openStaffOrderWorkspace(${o.id})">Open</button></td>
+            </tr>`;
+        }).join('');
+        applyMoneyVisible();
+    } catch (err) {
+        if (errBox) {
+            errBox.style.display = 'block';
+            errBox.textContent = err.message || 'Unable to load costs.';
+        }
+        if (tbody) {
+            tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:#dc2626; padding:28px;">Unable to load costs.</td></tr>`;
+        }
+    }
+}
+
+async function savePaymentsOrderCost(orderId, rawValue) {
+    await updateAdminOrderCost(orderId, rawValue);
+    if (adminPaymentsTab === 'revenue' || adminPaymentsTab === 'costs' || adminPaymentsTab === 'profit') {
+        loadAdminPaymentsRevenue();
+    }
+}
+
+async function loadAdminPaymentsProfit() {
+    if (!canViewRevenue()) return;
+    const tbody = document.getElementById('adm-payments-profit-body');
+    const errBox = document.getElementById('adm-payments-profit-error');
+    if (errBox) {
+        errBox.style.display = 'none';
+        errBox.textContent = '';
+    }
+    const month = document.getElementById('filter-payments-cost-month')?.value || '';
+    if (tbody) {
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#64748b; padding:28px;">Loading profit…</td></tr>`;
+    }
+    try {
+        const qs = new URLSearchParams({ page: '1', limit: '100' });
+        if (month) {
+            qs.set('date_preset', 'custom');
+            qs.set('date_from', `${month}-01`);
+            const [y, m] = month.split('-').map(Number);
+            const last = new Date(y, m, 0).getDate();
+            qs.set('date_to', `${month}-${String(last).padStart(2, '0')}`);
+        }
+        const res = await fetch(`/api/admin/orders?${qs.toString()}`, { credentials: 'same-origin' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Unable to load profit.');
+        }
+        const rows = (Array.isArray(data.orders) ? data.orders : []).filter((o) => !['Cancelled', 'Refunded'].includes(String(o.status || '')));
+        const byCustomer = new Map();
+        let sellTotal = 0;
+        let costTotal = 0;
+        rows.forEach((o) => {
+            const key = String(o.user_id || o.client_email || o.owner_form_email || o.id);
+            const name = o.owner_name || o.client_name || 'Customer';
+            const email = o.owner_form_email || o.client_email || '';
+            const sell = parseFloat(o.total || 0);
+            const cost = Number.isFinite(Number(o.resolved_cost)) ? Number(o.resolved_cost) : parseFloat(o.cost_price || 0);
+            const profit = Number.isFinite(Number(o.profit)) ? Number(o.profit) : (sell - cost);
+            sellTotal += sell;
+            costTotal += cost;
+            if (!byCustomer.has(key)) {
+                byCustomer.set(key, { name, email, orders: 0, sell: 0, cost: 0, profit: 0 });
+            }
+            const row = byCustomer.get(key);
+            row.orders += 1;
+            row.sell += sell;
+            row.cost += cost;
+            row.profit += profit;
+        });
+        const setVal = (id, val) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = val;
+        };
+        const net = sellTotal - costTotal;
+        setVal('adm-profit-orders', String(rows.length));
+        setMoneyValue('adm-profit-sell', `£${sellTotal.toFixed(2)}`);
+        setVal('adm-profit-cost', `£${costTotal.toFixed(2)}`);
+        setMoneyValue('adm-profit-net', `£${net.toFixed(2)}`, net >= 0 ? '#059669' : '#dc2626');
+        const grouped = Array.from(byCustomer.values()).sort((a, b) => b.profit - a.profit);
+        if (!tbody) {
+            applyMoneyVisible();
+            return;
+        }
+        if (!grouped.length) {
+            tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#64748b; padding:28px;">No orders in this month.</td></tr>`;
+            applyMoneyVisible();
+            return;
+        }
+        tbody.innerHTML = grouped.map((row) => {
+            const margin = row.sell > 0 ? ((row.profit / row.sell) * 100) : 0;
+            return `<tr>
+                <td><div class="owner-cell-name">${escapeHtml(row.name)}</div><div class="owner-cell-email">${escapeHtml(row.email)}</div></td>
+                <td>${row.orders}</td>
+                <td>${moneyAmountHtml(`£${row.sell.toFixed(2)}`)}</td>
+                <td>£${row.cost.toFixed(2)}</td>
+                <td style="font-weight:700;">${moneyAmountHtml(`£${row.profit.toFixed(2)}`, row.profit >= 0 ? '#059669' : '#dc2626')}</td>
+                <td>${margin.toFixed(1)}%</td>
+            </tr>`;
+        }).join('');
+        applyMoneyVisible();
+    } catch (err) {
+        if (errBox) {
+            errBox.style.display = 'block';
+            errBox.textContent = err.message || 'Unable to load profit.';
+        }
+        if (tbody) {
+            tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#dc2626; padding:28px;">Unable to load profit.</td></tr>`;
+        }
+    }
+}
+
+let adminInvoiceRenderTimer = null;
+
+function invoiceMoneyBits(inv) {
+    const total = Math.round((parseFloat(inv.total || 0) || 0) * 100) / 100;
+    let paid = Math.round((parseFloat(inv.amount_paid || 0) || 0) * 100) / 100;
+    const status = invoiceDisplayStatus(inv);
+    if (status === 'Paid') paid = total;
+    if (status === 'Cancelled') {
+        return { total, paid: 0, due: 0, status };
+    }
+    let due;
+    if (inv.amount_due != null && inv.amount_due !== '') {
+        due = Math.max(0, Math.round((parseFloat(inv.amount_due) || 0) * 100) / 100);
+    } else {
+        due = Math.max(0, Math.round((total - paid) * 100) / 100);
+    }
+    return { total, paid, due, status };
+}
+
+function setAdminInvoicePayFilter(value) {
+    const sel = document.getElementById('filter-admin-invoice-pay');
+    if (sel) sel.value = value || 'all';
+    renderAdminInvoicesTable();
+}
+
+function scheduleRenderAdminInvoices() {
+    clearTimeout(adminInvoiceRenderTimer);
+    adminInvoiceRenderTimer = setTimeout(() => renderAdminInvoicesTable(), 180);
+}
+
+function renderAdminInvoicesCollections(invoices) {
+    const showFinance = canViewRevenue();
+    const strip = document.getElementById('adm-invoices-collections-strip');
+    const oweWrap = document.getElementById('adm-invoices-owe-by-client');
+    const oweHint = document.getElementById('adm-invoices-owe-hint');
+    const payFilter = document.getElementById('filter-admin-invoice-pay');
+    if (strip) strip.style.display = showFinance ? '' : 'none';
+    if (oweWrap) oweWrap.style.display = showFinance ? '' : 'none';
+    if (oweHint) oweHint.style.display = showFinance ? '' : 'none';
+    if (payFilter) payFilter.style.display = showFinance ? '' : 'none';
+    if (!showFinance) return;
+
+    let billed = 0;
+    let paid = 0;
+    let owed = 0;
+    let pendingCount = 0;
+    let partialCount = 0;
+    let overdueCount = 0;
+    const byClient = new Map();
+
+    (invoices || []).forEach((inv) => {
+        if (String(inv.status || '') === 'Cancelled') return;
+        const money = invoiceMoneyBits(inv);
+        billed += money.total;
+        paid += money.paid;
+        owed += money.due;
+        if (money.status === 'Pending') pendingCount += 1;
+        if (money.status === 'Partial Paid') partialCount += 1;
+        if (money.status === 'Overdue') overdueCount += 1;
+        if (money.due > 0.004) {
+            const key = String(inv.user_id || inv.owner_form_email || inv.client_email || inv.id);
+            const name = inv.owner_name || inv.client_name || 'Client';
+            const email = inv.owner_form_email || inv.client_email || '';
+            if (!byClient.has(key)) byClient.set(key, { name, email, count: 0, due: 0 });
+            const row = byClient.get(key);
+            row.count += 1;
+            row.due += money.due;
+        }
+    });
+
+    const setVal = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = val;
+    };
+    setMoneyValue('adm-inv-stat-billed', `£${billed.toFixed(2)}`);
+    setVal('adm-inv-stat-paid', `£${paid.toFixed(2)}`);
+    setVal('adm-inv-stat-owed', `£${owed.toFixed(2)}`);
+    setVal('adm-inv-stat-pending', String(pendingCount));
+    setVal('adm-inv-stat-partial', String(partialCount));
+    setVal('adm-inv-stat-overdue', String(overdueCount));
+    applyMoneyVisible();
+
+    const oweBody = document.getElementById('adm-invoices-owe-body');
+    if (!oweBody) return;
+    const rows = Array.from(byClient.values()).sort((a, b) => b.due - a.due);
+    if (!rows.length) {
+        oweBody.innerHTML = `<tr><td colspan="3" style="text-align:center; color:#64748b; padding:20px;">No outstanding balances — clients are fully paid.</td></tr>`;
+        return;
+    }
+    oweBody.innerHTML = rows.map((row) => `
+        <tr>
+            <td><div class="owner-cell-name">${escapeHtml(row.name)}</div><div class="owner-cell-email">${escapeHtml(row.email)}</div></td>
+            <td>${row.count}</td>
+            <td style="font-weight:700; color:#dc2626;">£${row.due.toFixed(2)}</td>
+        </tr>
+    `).join('');
+}
+
+function renderAdminInvoicesTable() {
+    const tbody = document.getElementById('adm-invoices-table-body');
+    if (!tbody) return;
+    const showFinance = canViewRevenue();
+    const colCount = showFinance ? 10 : 7;
+    const search = String(document.getElementById('filter-admin-invoice-search')?.value || '').trim().toLowerCase();
+    const payFilter = String(document.getElementById('filter-admin-invoice-pay')?.value || 'all');
+    let invoices = Array.isArray(adminInvoicesCache) ? adminInvoicesCache.slice() : [];
+
+    if (search) {
+        invoices = invoices.filter((inv) => {
+            const blob = [
+                inv.invoice_number, inv.owner_name, inv.client_name, inv.owner_form_email,
+                inv.client_email, inv.order_number, inv.service_name,
+            ].join(' ').toLowerCase();
+            return blob.includes(search);
+        });
+    }
+    if (payFilter !== 'all') {
+        invoices = invoices.filter((inv) => {
+            const money = invoiceMoneyBits(inv);
+            if (payFilter === 'outstanding') return money.due > 0.004 && money.status !== 'Cancelled';
+            if (payFilter === 'paid') return money.status === 'Paid';
+            if (payFilter === 'pending') return money.status === 'Pending';
+            if (payFilter === 'partial') return money.status === 'Partial Paid';
+            if (payFilter === 'overdue') return money.status === 'Overdue';
+            return true;
+        });
+    }
+
+    renderAdminInvoicesCollections(adminInvoicesCache);
+
+    if (!invoices.length) {
+        tbody.innerHTML = `<tr><td colspan="${colCount}" style="text-align:center; color:#64748b; padding:28px;">No invoices match this filter.</td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = invoices.map((inv) => {
+        const money = invoiceMoneyBits(inv);
+        return `
+            <tr>
+                <td style="font-weight:700;">${escapeHtml(inv.invoice_number || '—')}</td>
+                <td>${escapeHtml(inv.owner_name || inv.client_name || '—')}<div style="font-size:0.72rem; color:#64748b;">${escapeHtml(inv.owner_form_email || inv.client_email || '')}</div></td>
+                <td>${escapeHtml(inv.order_number || '—')}</td>
+                ${showFinance ? `<td class="cell-inv-total">£${money.total.toFixed(2)}</td>` : ''}
+                ${showFinance ? `<td class="cell-inv-paid">£${money.paid.toFixed(2)}</td>` : ''}
+                ${showFinance ? `<td class="cell-inv-due" style="font-weight:700; color:${money.due > 0.004 ? '#dc2626' : '#059669'};">£${money.due.toFixed(2)}</td>` : ''}
+                <td>${escapeHtml(invoiceWhenLabel(inv))}</td>
+                <td><span class="status-badge ${invoiceStatusBadgeClass(money.status)}">${escapeHtml(money.status)}</span></td>
+                <td>${escapeHtml(formatDate(inv.created_at))}</td>
+                <td class="cell-actions">
+                    <div class="table-action-btns">
+                        <button type="button" class="btn-secondary btn-table" onclick="openInvoiceDocument(${Number(inv.id)})">Invoice</button>
+                        <button type="button" class="btn-secondary btn-table" onclick="emailAdminInvoice(${Number(inv.id)})">${money.status === 'Paid' ? 'Thank you' : 'Send'}</button>
+                        <button type="button" class="btn-secondary btn-table" onclick="openEditInvoiceModal(${Number(inv.id)})">Edit</button>
+                    </div>
+                </td>
+            </tr>
+        `;
+    }).join('');
+    if (window.lucide) lucide.createIcons();
 }
 
 async function loadAdminInvoices() {
     const tbody = document.getElementById('adm-invoices-table-body');
     const errBox = document.getElementById('adm-invoices-error');
     const showFinance = canViewRevenue();
-    const colCount = showFinance ? 8 : 7;
+    const colCount = showFinance ? 10 : 7;
     if (errBox) {
         errBox.style.display = 'none';
         errBox.textContent = '';
@@ -8878,32 +10592,8 @@ async function loadAdminInvoices() {
         if (!res.ok || data.status !== 'success') {
             throw new Error(data.message || 'Unable to load invoices.');
         }
-        const invoices = Array.isArray(data.invoices) ? data.invoices : [];
-        adminInvoicesCache = invoices;
-        if (!tbody) return;
-        if (!invoices.length) {
-            tbody.innerHTML = `<tr><td colspan="${colCount}" style="text-align:center; color:#64748b; padding:28px;">No invoices yet.</td></tr>`;
-            return;
-        }
-        tbody.innerHTML = invoices.map((inv) => `
-            <tr>
-                <td style="font-weight:700;">${escapeHtml(inv.invoice_number || '—')}</td>
-                <td>${escapeHtml(inv.owner_name || inv.client_name || '—')}<div style="font-size:0.72rem; color:#64748b;">${escapeHtml(inv.owner_form_email || inv.client_email || '')}</div></td>
-                <td>${escapeHtml(inv.order_number || '—')}</td>
-                ${showFinance ? `<td class="cell-inv-total">£${parseFloat(inv.total || 0).toFixed(2)}</td>` : ''}
-                <td>${escapeHtml(invoiceWhenLabel(inv))}</td>
-                <td><span class="status-badge ${invoiceStatusBadgeClass(invoiceDisplayStatus(inv))}">${escapeHtml(invoiceDisplayStatus(inv))}</span></td>
-                <td>${escapeHtml(formatDate(inv.created_at))}</td>
-                <td class="cell-actions">
-                    <div class="table-action-btns">
-                        <button type="button" class="btn-secondary btn-table" onclick="openInvoiceDocument(${Number(inv.id)})">Invoice</button>
-                        <button type="button" class="btn-secondary btn-table" onclick="emailAdminInvoice(${Number(inv.id)})">Send</button>
-                        <button type="button" class="btn-secondary btn-table" onclick="openEditInvoiceModal(${Number(inv.id)})">Edit</button>
-                    </div>
-                </td>
-            </tr>
-        `).join('');
-        if (window.lucide) lucide.createIcons();
+        adminInvoicesCache = Array.isArray(data.invoices) ? data.invoices : [];
+        renderAdminInvoicesTable();
     } catch (err) {
         console.error(err);
         if (errBox) {
@@ -9170,7 +10860,7 @@ function fillAccountancyBooksWorkspace(data) {
     if (subtitle) {
         const yearEnd = formatUkNumericDate(accountancyBooksState.periodEnd) || 'this period';
         const directorBit = [company.director, company.director_email || company.client_email].filter(Boolean).join(' · ');
-        subtitle.textContent = `${company.company_number || ''}${directorBit ? ` · ${directorBit}` : ''} · year end ${yearEnd} · bank statements to Companies House filing.`;
+        subtitle.textContent = `${company.company_number || ''}${directorBit ? ` · ${directorBit}` : ''} · year end ${yearEnd}`;
     }
     const identityEl = document.getElementById('acct-books-identity');
     if (identityEl) identityEl.value = (readiness.identity && readiness.identity.status) || 'Not started';
@@ -9181,7 +10871,7 @@ function fillAccountancyBooksWorkspace(data) {
         { label: 'Identity verification', ok: Boolean(readiness.identity && readiness.identity.ok), detail: (readiness.identity && readiness.identity.status) || 'Not started' },
         { label: 'PSC register', ok: Boolean(readiness.psc && readiness.psc.ok), detail: (readiness.psc && readiness.psc.status) || 'Not started' },
         { label: 'Authentication code', ok: Boolean(readiness.authentication_code && readiness.authentication_code.ok), detail: (readiness.authentication_code && readiness.authentication_code.ok) ? 'On file' : 'Missing' },
-        { label: 'Personal 11 dijits Code', ok: Boolean(readiness.personal_code && readiness.personal_code.ok), detail: (readiness.personal_code && readiness.personal_code.ok) ? 'On file' : 'Missing' },
+        { label: 'Personal 11 digits code', ok: Boolean(readiness.personal_code && readiness.personal_code.ok), detail: (readiness.personal_code && readiness.personal_code.ok) ? 'On file' : 'Missing' },
         { label: 'UTR', ok: Boolean(readiness.utr && readiness.utr.ok), detail: (readiness.utr && readiness.utr.ok) ? 'On file' : 'Missing' },
     ];
     const checksEl = document.getElementById('acct-books-checks');
@@ -9421,6 +11111,8 @@ function fileAccountsFromBooks() {
 }
 
 async function loadAdminAccountancy() {
+    const filingPane = document.getElementById('admin-accountancy-pane-filing');
+    if (filingPane && filingPane.hidden) return;
     const tbody = document.getElementById('adm-accountancy-table-body');
     const errBox = document.getElementById('adm-accountancy-error');
     if (errBox) {
@@ -9482,17 +11174,21 @@ async function loadAdminAccountancy() {
             `;
         }).join('');
     } catch (err) {
+        const message = err.message || 'Unable to load accountancy.';
         if (errBox) {
             errBox.style.display = 'block';
-            errBox.textContent = err.message || 'Unable to load accountancy.';
+            errBox.textContent = message;
         }
+        if (typeof showPortalToast === 'function') showPortalToast(message, 'error', 'Accountancy');
         if (tbody) {
-            tbody.innerHTML = `<tr><td colspan="11" style="text-align:center; color:#dc2626; padding:28px;">Unable to load accountancy.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="11" style="text-align:center; color:#64748b; padding:28px;">Unable to load filing status.</td></tr>`;
         }
     }
 }
 
 async function loadClientAccountancy() {
+    const filingPane = document.getElementById('client-accountancy-pane-filing');
+    if (filingPane && filingPane.hidden) return;
     const tbody = document.getElementById('client-accountancy-table-body');
     const errBox = document.getElementById('client-accountancy-error');
     if (errBox) {
@@ -9535,12 +11231,14 @@ async function loadClientAccountancy() {
             `;
         }).join('');
     } catch (err) {
+        const message = err.message || 'Unable to load accountancy.';
         if (errBox) {
             errBox.style.display = 'block';
-            errBox.textContent = err.message || 'Unable to load accountancy.';
+            errBox.textContent = message;
         }
+        if (typeof showPortalToast === 'function') showPortalToast(message, 'error', 'Accountancy');
         if (tbody) {
-            tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:#dc2626; padding:28px;">Unable to load accountancy.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:#64748b; padding:28px;">Unable to load filing status.</td></tr>`;
         }
     }
 }
@@ -9569,6 +11267,12 @@ async function loadAdminSettings() {
                 chStatus.textContent = s.companies_house_configured
                     ? 'Companies House is connected. Paste a new key only if you need to replace it.'
                     : 'Create a free key at developer.company-information.service.gov.uk, then paste it here.';
+            }
+            const gaStatus = document.getElementById('set-getaddress-status');
+            if (gaStatus) {
+                gaStatus.textContent = s.getaddress_configured
+                    ? 'getAddress.io is connected for full UK street lists. Paste a new key only to replace it.'
+                    : 'Optional. Without it, postcode lookup still works via free UK sources (postcodes.io). Free key: getaddress.io';
             }
             const smtpHost = document.getElementById('set-smtp-host');
             const smtpPort = document.getElementById('set-smtp-port');
@@ -9655,9 +11359,11 @@ async function saveAdminSettings(e) {
     const currency = document.getElementById('set-currency').value;
     const order_prefix = document.getElementById('set-order-prefix').value;
     const companies_house_api_key = (document.getElementById('set-companies-house-api-key') || {}).value || '';
+    const getaddress_api_key = (document.getElementById('set-getaddress-api-key') || {}).value || '';
     const uk_formfill_pro_url = ((document.getElementById('set-uk-formfill-url') || {}).value || '').trim();
     const payload = { company_name, support_email, team_notification_emails, currency, order_prefix };
     if (companies_house_api_key.trim()) payload.companies_house_api_key = companies_house_api_key.trim();
+    if (getaddress_api_key.trim()) payload.getaddress_api_key = getaddress_api_key.trim();
     if (uk_formfill_pro_url) {
         payload.uk_formfill_pro_url = uk_formfill_pro_url.replace(/\/$/, '');
         ukFormfillUrlCache = payload.uk_formfill_pro_url;
@@ -9693,6 +11399,8 @@ async function saveAdminSettings(e) {
         const data = await res.json().catch(() => ({}));
         const keyField = document.getElementById('set-companies-house-api-key');
         if (keyField) keyField.value = '';
+        const gaField = document.getElementById('set-getaddress-api-key');
+        if (gaField) gaField.value = '';
         const passField = document.getElementById('set-smtp-pass');
         if (passField) passField.value = '';
         alert(data.message || 'Admin settings saved! Branding updated.');
@@ -11296,6 +13004,46 @@ async function linkIntakeCompaniesHouseCandidate(btn) {
 // ----------------------------------------------------
 // STAFF DASHBOARD, TEAM INCENTIVES & TASK AUDIT LOGS
 // ----------------------------------------------------
+let activePerformanceTab = 'performance';
+
+function canViewTeamIncentives() {
+    return !!(currentUser && (canManageUsers() || ['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(String(currentUser.role || '').toUpperCase())));
+}
+
+function syncPerformanceChrome() {
+    const incentivesTab = document.getElementById('tab-performance-incentives');
+    const monthInput = document.getElementById('admin-incentives-month');
+    const canIncentives = canViewTeamIncentives();
+    if (incentivesTab) incentivesTab.style.display = canIncentives ? '' : 'none';
+    if (monthInput) {
+        monthInput.style.display = (canIncentives && activePerformanceTab === 'incentives') ? '' : 'none';
+    }
+    if (!canIncentives && activePerformanceTab === 'incentives') {
+        activePerformanceTab = 'performance';
+    }
+}
+
+function switchPerformanceTab(tabName) {
+    const canIncentives = canViewTeamIncentives();
+    const tab = (tabName === 'incentives' && canIncentives) ? 'incentives' : 'performance';
+    activePerformanceTab = tab;
+    syncPerformanceChrome();
+    document.querySelectorAll('.performance-tabs .seg-control-btn').forEach((btn) => {
+        btn.classList.toggle('active', btn.getAttribute('data-tab') === tab);
+    });
+    document.querySelectorAll('#view-staff-dashboard .performance-panel').forEach((panel) => {
+        panel.hidden = panel.getAttribute('data-panel') !== tab;
+    });
+    if (tab === 'incentives') loadTeamIncentivesReport();
+    else loadStaffDashboard();
+    if (window.lucide) lucide.createIcons();
+}
+
+function refreshPerformanceSection() {
+    if (activePerformanceTab === 'incentives') loadTeamIncentivesReport();
+    else loadStaffDashboard();
+}
+
 async function loadStaffDashboard() {
     try {
         const res = await fetch('/api/staff/my-dashboard');
@@ -11335,26 +13083,30 @@ async function loadStaffDashboard() {
         if (tbody) {
             const tasks = data.my_tasks || data.active_tasks || [];
             if (tasks.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding:24px; color:#15803d; font-weight:600;">🎉 All caught up! Zero pending tasks.</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding:24px; color:#15803d; font-weight:600;">All caught up — no pending tasks.</td></tr>`;
             } else {
                 tbody.innerHTML = tasks.map(t => {
                     const isOverdue = t.due_date && new Date(t.due_date) < new Date() && t.status !== 'Completed';
-                    const priorityColor = t.priority === 'High' ? '#dc2626' : (t.priority === 'Medium' ? '#d97706' : '#64748b');
+                    const priorityClass = t.priority === 'High' ? 'tone-high' : (t.priority === 'Medium' ? 'tone-med' : 'tone-low');
                     return `
                         <tr>
-                            <td style="font-weight:600; color:#0f172a;">
-                                <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-                                    <span>${escapeHtml(t.title)}</span>
-                                    <button type="button" class="btn-secondary btn-table" style="padding:2px 6px; font-size:0.7rem;" onclick="openTaskAuditModal(${t.id}, '${escapeHtml(t.title)}')"><i data-lucide="history"></i> Audit Log</button>
+                            <td>
+                                <div class="perf-task-cell">
+                                    <div class="perf-task-title" title="${escapeHtml(t.title)}">${escapeHtml(t.title)}</div>
+                                    <div class="perf-task-actions">
+                                        <button type="button" class="btn-secondary btn-table" style="padding:2px 6px; font-size:0.7rem;" onclick="openTaskAuditModal(${t.id}, '${escapeJsString(t.title)}')"><i data-lucide="history"></i> Audit</button>
+                                    </div>
                                 </div>
                             </td>
-                            <td><span style="color:${priorityColor}; font-weight:700;">${t.priority}</span></td>
+                            <td><span class="perf-priority ${priorityClass}">${escapeHtml(t.priority || '—')}</span></td>
                             <td><span class="badge-status-neutral">${escapeHtml(t.department || 'General')}</span></td>
-                            <td>${t.due_date ? (isOverdue ? `<span style="color:#dc2626; font-weight:700;">${t.due_date} (Overdue)</span>` : t.due_date) : '-'}</td>
-                            <td><span class="badge-status-${t.status === 'Completed' ? 'success' : (t.status === 'In Progress' ? 'progress' : 'pending')}">${t.status}</span></td>
+                            <td>${t.due_date ? (isOverdue ? `<span class="perf-due is-overdue">${escapeHtml(t.due_date)}</span>` : escapeHtml(t.due_date)) : '—'}</td>
+                            <td><span class="badge-status-${t.status === 'Completed' ? 'success' : (t.status === 'In Progress' ? 'progress' : 'pending')}">${escapeHtml(t.status || '—')}</span></td>
                             <td>
-                                ${t.status !== 'In Progress' ? `<button type="button" class="btn-secondary btn-table" onclick="updateStaffTaskStatus(${t.id}, 'In Progress')">Start</button>` : ''}
-                                ${t.status !== 'Completed' ? `<button type="button" class="btn-primary btn-table" onclick="updateStaffTaskStatus(${t.id}, 'Completed')">Complete</button>` : ''}
+                                <div class="table-action-btns">
+                                    ${t.status !== 'In Progress' ? `<button type="button" class="btn-secondary btn-table" onclick="updateStaffTaskStatus(${t.id}, 'In Progress')">Start</button>` : ''}
+                                    ${t.status !== 'Completed' ? `<button type="button" class="btn-primary btn-table" onclick="updateStaffTaskStatus(${t.id}, 'Completed')">Complete</button>` : ''}
+                                </div>
                             </td>
                         </tr>
                     `;
@@ -11387,7 +13139,7 @@ async function updateStaffTaskStatus(taskId, newStatus) {
 
 async function loadTeamIncentivesReport() {
     try {
-        const monthInput = document.getElementById('incentive-month-select');
+        const monthInput = document.getElementById('admin-incentives-month') || document.getElementById('incentive-month-select');
         let selectedMonth = '';
         if (monthInput && monthInput.value) {
             selectedMonth = monthInput.value;
@@ -11411,28 +13163,28 @@ async function loadTeamIncentivesReport() {
             } else {
                 tbody.innerHTML = leaderboard.map((item, idx) => {
                     const s = item.staff || {};
-                    const gradeBg = item.grade === 'A+' ? '#dcfce7; color:#15803d; border:1px solid #bbf7d0;' :
-                                    (item.grade === 'A' ? '#e0f2fe; color:#0369a1; border:1px solid #bae6fd;' :
-                                    (item.grade === 'B' ? '#fef3c7; color:#b45309; border:1px solid #fde68a;' :
-                                    (item.grade === 'C' ? '#ffedd5; color:#c2410c; border:1px solid #fed7aa;' : '#fee2e2; color:#b91c1c; border:1px solid #fca5a5;')));
-                    
+                    const gradeTone = item.grade === 'A+' || item.grade === 'A' ? 'is-good'
+                        : (item.grade === 'B' ? 'is-mid' : 'is-low');
                     return `
                         <tr>
-                            <td style="font-weight:700; color:#0f172a;">#${idx + 1}</td>
-                            <td style="font-weight:600; color:#0f172a;">${escapeHtml(s.full_name || 'Staff')} <div style="font-size:0.75rem; color:#64748b;">${escapeHtml(s.email || '')}</div></td>
-                            <td><span class="badge-status-neutral">${escapeHtml(s.department || 'General')}</span></td>
-                            <td style="font-weight:600;">${item.assigned_count}</td>
-                            <td style="font-weight:700; color:#15803d;">${item.completed_count}</td>
-                            <td style="font-weight:600; color:#0284c7;">${item.sla_rate}%</td>
-                            <td style="color:${item.overdue_count > 0 ? '#dc2626' : '#64748b'}; font-weight:${item.overdue_count > 0 ? '700' : '400'};">${item.overdue_count}</td>
+                            <td style="font-weight:800; color:#0f172a;">#${idx + 1}</td>
                             <td>
-                                <span style="display:inline-block; padding:4px 10px; border-radius:12px; font-weight:800; font-size:0.8rem; ${gradeBg}">
-                                    Grade ${item.grade}
-                                </span>
+                                <div class="perf-person-cell">
+                                    <div class="perf-person-name" title="${escapeHtml(s.full_name || 'Staff')}">${escapeHtml(s.full_name || 'Staff')}</div>
+                                    <div class="perf-person-email" title="${escapeHtml(s.email || '')}">${escapeHtml(s.email || '—')}</div>
+                                </div>
                             </td>
+                            <td><span class="badge-status-neutral">${escapeHtml(s.department || 'General')}</span></td>
+                            <td style="font-weight:700;">${Number(item.assigned_count || 0)}</td>
+                            <td style="font-weight:800; color:#15803d;">${Number(item.completed_count || 0)}</td>
+                            <td style="font-weight:700; color:#0284c7;">${escapeHtml(String(item.sla_rate ?? 0))}%</td>
+                            <td style="font-weight:${Number(item.overdue_count || 0) > 0 ? '800' : '600'}; color:${Number(item.overdue_count || 0) > 0 ? '#b91c1c' : '#64748b'};">${Number(item.overdue_count || 0)}</td>
+                            <td><span class="perf-grade-pill ${gradeTone}">Grade ${escapeHtml(item.grade || '—')}</span></td>
                             <td>
-                                <div style="font-weight:600; font-size:0.8rem; color:#0f172a;">${escapeHtml(item.grade_label)}</div>
-                                <div style="font-size:0.75rem; color:#64748b;">${escapeHtml(item.bonus_badge)}</div>
+                                <div class="perf-person-cell">
+                                    <div class="perf-person-name" style="max-width:180px;">${escapeHtml(item.grade_label || '—')}</div>
+                                    <div class="perf-person-email" style="max-width:180px;">${escapeHtml(item.bonus_badge || '—')}</div>
+                                </div>
                             </td>
                         </tr>
                     `;
@@ -11767,7 +13519,7 @@ async function submitManualOrderForm(event) {
         registered_postcode: document.getElementById('manual-order-reg-postcode')?.value || '',
         owner_name: document.getElementById('manual-order-owner-name')?.value || '',
         director_phone: document.getElementById('manual-order-director-phone')?.value || '',
-        director_nationality: document.getElementById('manual-order-director-nationality')?.value || 'British',
+        director_nationality: document.getElementById('manual-order-director-nationality')?.value || '',
         director_residence: document.getElementById('manual-order-director-residence')?.value || 'United Kingdom',
         payment_mode: document.getElementById('manual-order-payment-mode')?.value || 'Manual CRM',
         status: document.getElementById('manual-order-initial-status')?.value || 'Processing',
@@ -11847,6 +13599,7 @@ let universalOrderWizardState = {
     currentStep: 1,
     selectedCustomer: null,
     selectedProduct: null,
+    selectedProducts: [],
     customersList: [],
     catalogProducts: [],
     activeCustomerTypeFilter: 'All',
@@ -11869,6 +13622,7 @@ async function openUniversalOrderWizard(prefillData = null) {
     modal.style.display = 'flex';
     modal.classList.add('active');
     hideWizardError();
+    lockUniversalOrderWizardSession();
 
     let activeUser = getCurrentUser();
     if (!activeUser) {
@@ -11889,6 +13643,7 @@ async function openUniversalOrderWizard(prefillData = null) {
         currentStep: 1,
         selectedCustomer: isClient ? activeUser : null,
         selectedProduct: null,
+        selectedProducts: [],
         customersList: [],
         catalogProducts: [],
         activeCustomerTypeFilter: 'All',
@@ -11951,6 +13706,7 @@ async function openUniversalOrderWizard(prefillData = null) {
             (p.name && prefillData.service_name && p.name.toLowerCase() === prefillData.service_name.toLowerCase())
         );
         if (match) {
+            universalOrderWizardState.selectedProducts = [match];
             universalOrderWizardState.selectedProduct = match;
             jumpToWizardStep(3);
         }
@@ -11959,7 +13715,108 @@ async function openUniversalOrderWizard(prefillData = null) {
     safeCreateIcons();
 }
 
-function closeUniversalOrderWizard() {
+let wizardLockedHash = '';
+let wizardSessionLocked = false;
+
+function isUniversalOrderWizardOpen() {
+    const modal = document.getElementById('modal-universal-order-wizard');
+    return !!(modal && modal.classList.contains('active') && modal.style.display !== 'none');
+}
+
+function wizardHasWorkInProgress() {
+    const state = universalOrderWizardState || {};
+    const forms = state.formValues || {};
+    const docs = state.uploadedDocs || {};
+    return !!(
+        state.selectedCustomer
+        || (state.selectedProducts && state.selectedProducts.length)
+        || Object.keys(forms).some((key) => String(forms[key] || '').trim())
+        || Object.keys(docs).length
+        || state.draftOrderId
+    );
+}
+
+function onWizardBeforeUnload(event) {
+    if (!isUniversalOrderWizardOpen()) return;
+    event.preventDefault();
+    event.returnValue = '';
+}
+
+function onWizardPopState() {
+    if (!isUniversalOrderWizardOpen()) return;
+    history.pushState({ brixenOrderWizard: 1 }, '', location.href);
+}
+
+function onWizardHashChange() {
+    if (!isUniversalOrderWizardOpen()) return;
+    const keep = wizardLockedHash || location.hash || '';
+    if (keep && location.hash !== keep) {
+        history.replaceState({ brixenOrderWizard: 1 }, '', location.pathname + location.search + keep);
+    }
+}
+
+function onWizardKeydown(event) {
+    if (!isUniversalOrderWizardOpen()) return;
+    if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        requestCloseUniversalOrderWizard();
+    }
+}
+
+function onWizardOverlayClick(event) {
+    if (event.target && event.target.id === 'modal-universal-order-wizard') {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+}
+
+function lockUniversalOrderWizardSession() {
+    if (wizardSessionLocked) return;
+    wizardSessionLocked = true;
+    wizardLockedHash = location.hash || '';
+    document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
+    window.addEventListener('beforeunload', onWizardBeforeUnload);
+    window.addEventListener('popstate', onWizardPopState);
+    window.addEventListener('hashchange', onWizardHashChange, true);
+    document.addEventListener('keydown', onWizardKeydown, true);
+    const modal = document.getElementById('modal-universal-order-wizard');
+    if (modal && modal.dataset.guardBound !== '1') {
+        modal.addEventListener('click', onWizardOverlayClick);
+        const card = modal.querySelector('.modal-card');
+        if (card) card.addEventListener('click', (event) => event.stopPropagation());
+        modal.dataset.guardBound = '1';
+    }
+    history.pushState({ brixenOrderWizard: 1 }, '', location.href);
+}
+
+function unlockUniversalOrderWizardSession() {
+    if (!wizardSessionLocked) return;
+    wizardSessionLocked = false;
+    document.body.style.overflow = '';
+    document.documentElement.style.overflow = '';
+    window.removeEventListener('beforeunload', onWizardBeforeUnload);
+    window.removeEventListener('popstate', onWizardPopState);
+    window.removeEventListener('hashchange', onWizardHashChange, true);
+    document.removeEventListener('keydown', onWizardKeydown, true);
+}
+
+function requestCloseUniversalOrderWizard() {
+    if (!isUniversalOrderWizardOpen()) return;
+    if (wizardHasWorkInProgress()) {
+        const ok = window.confirm('Leave this order? Unsaved details will be lost unless you saved a draft.');
+        if (!ok) return;
+    }
+    closeUniversalOrderWizard(true);
+}
+
+function closeUniversalOrderWizard(force) {
+    if (!force && isUniversalOrderWizardOpen()) {
+        requestCloseUniversalOrderWizard();
+        return;
+    }
+    unlockUniversalOrderWizardSession();
     const modal = document.getElementById('modal-universal-order-wizard');
     if (modal) {
         modal.style.display = 'none';
@@ -12068,6 +13925,244 @@ function selectWizardCustomer(customerId) {
     jumpToWizardStep(2);
 }
 
+function wizardSelectedProducts() {
+    const list = universalOrderWizardState.selectedProducts;
+    if (Array.isArray(list) && list.length) return list;
+    if (universalOrderWizardState.selectedProduct) return [universalOrderWizardState.selectedProduct];
+    return [];
+}
+
+function syncWizardPrimaryProduct() {
+    const products = wizardSelectedProducts();
+    universalOrderWizardState.selectedProducts = products;
+    universalOrderWizardState.selectedProduct = products[0] || null;
+}
+
+function wizardProductIsSelected(productId) {
+    return wizardSelectedProducts().some((p) => String(p.id) === String(productId));
+}
+
+function wizardSelectionSummary() {
+    const products = wizardSelectedProducts();
+    if (!products.length) return { title: 'No products selected', category: 'Service', price: 0, names: [] };
+    const names = products.map((p) => p.name || 'Service');
+    const categories = [...new Set(products.map((p) => p.category || 'Service'))];
+    const price = products.reduce((sum, p) => sum + (parseFloat(p.price || 0) || 0), 0);
+    return {
+        title: products.length === 1 ? names[0] : `${products.length} services`,
+        category: categories.length === 1 ? categories[0] : 'Mixed services',
+        price,
+        names,
+        products,
+    };
+}
+
+const WIZARD_CORE_FIELD_IDS = new Set([
+    'company_name', 'proposed_company_name', 'registered_company_name', 'business_name', 'desired_company_name',
+    'company_number', 'director_name', 'full_name', 'end_client_name',
+    'director_dob', 'dob', 'date_of_birth', 'registered_office_address', 'address', 'registered_address',
+    'home_address', 'director_home_address',
+    'end_client_email', 'email', 'forwarding_email', 'registered_email', 'access_email',
+    'end_client_phone', 'phone', 'uk_contact', 'uk_phone', 'uk_contact_number', 'contact_phone',
+    'trading_proof', 'access_email_password', 'email_password', 'service_password', 'service_notes',
+    'contact_person', 'nationality', 'director_nationality',
+    'business_activities', 'sic_code', 'sic_codes', 'business_activity',
+    'business_type', 'company_type'
+]);
+
+function wizardProductIsUnregisteredPackage(product) {
+    return wizardProductFormProfile(product) === 'formation';
+}
+
+function wizardAnySelectedIsUnregisteredPackage() {
+    return wizardSelectedProducts().some((product) => wizardProductIsUnregisteredPackage(product));
+}
+
+function wizardProductFormProfile(product) {
+    if (product && product.form_profile) return String(product.form_profile);
+    const text = `${(product && product.name) || ''} ${(product && product.category) || ''}`.toLowerCase();
+    const name = String((product && product.name) || '').toLowerCase();
+    if (!text.trim()) return 'generic';
+    const isWebsite = /website|web design|webdesign|business email|email and website|domain|logo design/.test(text);
+    const isFormation = (
+        /digital package|professional package|all inclusive/.test(name)
+        || (/\bpackage\b/.test(name) && !isWebsite)
+        || /company formation|incorporat|register (a )?company|ltd formation|new company/.test(name)
+    );
+    if (isFormation && !(/identity verification|kyc|companies house id/.test(name) && !/package/.test(name))) {
+        return 'formation';
+    }
+    if (isWebsite) return 'website';
+    if (/personal physical bank|personal bank/.test(text)) return 'personal_bank';
+    if (/bank|tide|zempler|wise business|monzo|ifast|countingup|transwap/.test(text)) return 'bank';
+    if (/identity verification|kyc|companies house id/.test(text)) return 'identity';
+    if (/confirmation statement|annual compliance|vat registration|dissolution|name change|director|dormant/.test(text)) return 'compliance';
+    if (/registered office|mail forwarding|mail handling|virtual office|shared office|registered agent|\bad01\b/.test(text)) return 'existing_company';
+    if (/virtual number|call answering|phone answering/.test(text)) return 'comms';
+    return 'generic';
+}
+
+function wizardSelectedProfiles() {
+    return [...new Set(wizardSelectedProducts().map((product) => wizardProductFormProfile(product)))];
+}
+
+function wizardNeedsWebsiteForm() {
+    return wizardSelectedProfiles().includes('website');
+}
+
+function wizardProductIsPersonalBank(product) {
+    if (product && product.is_personal_bank === true) return true;
+    if (product && product.form_profile === 'personal_bank') return true;
+    const text = `${(product && product.name) || ''} ${(product && product.category) || ''}`.toLowerCase();
+    return /personal physical bank|personal bank/.test(text);
+}
+
+function wizardNeedsPersonalBankForm() {
+    return wizardSelectedProducts().some((product) => wizardProductIsPersonalBank(product));
+}
+
+function wizardNeedsExistingCompanyForm() {
+    const products = wizardSelectedProducts();
+    if (products.length && products.every((product) => wizardProductFormProfile(product) === 'website')) {
+        return false;
+    }
+    return wizardSelectedProfiles().some((profile) => (
+        profile === 'existing_company' || profile === 'bank' || profile === 'identity' || profile === 'compliance'
+    ));
+}
+
+function wizardProductSkipsDirectorDob(product) {
+    if (product && product.skips_director_dob === true) return true;
+    const text = `${(product && product.name) || ''} ${(product && product.category) || ''}`.toLowerCase();
+    return /confirmation statement|annual compliance/.test(text);
+}
+
+function wizardSkipsDirectorDob() {
+    if (wizardAnySelectedIsUnregisteredPackage()) return false;
+    const products = wizardSelectedProducts().filter((product) => {
+        const profile = wizardProductFormProfile(product);
+        return profile === 'existing_company' || profile === 'bank' || profile === 'identity' || profile === 'compliance';
+    });
+    return products.length > 0 && products.every((product) => wizardProductSkipsDirectorDob(product));
+}
+
+function wizardProductIsSoleTrader(product) {
+    if (product && product.is_sole_trader === true) return true;
+    const text = `${(product && product.name) || ''} ${(product && product.category) || ''}`.toLowerCase();
+    return /sole\s*trad/.test(text);
+}
+
+function wizardBusinessTypeValue() {
+    const fv = (typeof universalOrderWizardState !== 'undefined' && universalOrderWizardState.formValues) || {};
+    const picked = String(fv.business_type || fv.company_type || '').toLowerCase();
+    if (/sole/.test(picked)) return 'sole_trader';
+    if (/limited|ltd|llp|plc|guarantee/.test(picked)) return 'limited';
+    if (wizardSelectedProducts().some((product) => wizardProductIsSoleTrader(product))) return 'sole_trader';
+    return 'limited';
+}
+
+function wizardIsSoleTrader() {
+    return wizardBusinessTypeValue() === 'sole_trader';
+}
+
+function onWizardBusinessTypeChange(value) {
+    const next = String(value || '').trim() === 'sole_trader' ? 'sole_trader' : 'limited';
+    updateWizardFieldValue('business_type', next === 'sole_trader' ? 'Sole trader' : 'Limited company');
+    updateWizardFieldValue(
+        'company_type',
+        next === 'sole_trader' ? 'Sole Trader / Partnership' : 'Private Limited Company by Shares (LTD)',
+    );
+    if (next === 'sole_trader') {
+        updateWizardFieldValue('company_number', '');
+    }
+    renderWizardStep3Form();
+    if (window.lucide) lucide.createIcons();
+}
+
+function wizardNeedsAccessCredentials() {
+    return wizardSelectedProducts().some((product) => (
+        product.needs_access_credentials === true || wizardProductFormProfile(product) === 'bank'
+    ));
+}
+
+function wizardShouldSkipDocumentsStep() {
+    return !wizardDocumentRequirements().some((doc) => doc.required);
+}
+
+function wizardMergedExtraFields() {
+    const extras = [];
+    const byId = new Map();
+    const skipCore = wizardAnySelectedIsUnregisteredPackage() || wizardNeedsExistingCompanyForm();
+    const websiteShown = wizardNeedsWebsiteForm();
+    const websiteIds = new Set([
+        'company_name', 'domain_name', 'desired_domain', 'website_domain', 'logo', 'proposed_company_name',
+        'access_email', 'access_email_password', 'email', 'email_password', 'service_password',
+    ]);
+    wizardSelectedProducts().forEach((product) => {
+        const fields = product.form_config || product.fields || [];
+        (Array.isArray(fields) ? fields : []).forEach((field) => {
+            const id = String(field.id || field.name || '').trim();
+            if (!id) return;
+            if (skipCore && WIZARD_CORE_FIELD_IDS.has(id)) return;
+            if (websiteShown && websiteIds.has(id)) return;
+            if (!byId.has(id)) {
+                const merged = { ...field, id };
+                byId.set(id, merged);
+                extras.push(merged);
+            } else if (field.required) {
+                byId.get(id).required = true;
+            }
+        });
+    });
+    return extras;
+}
+
+function wizardMergedRepeatableSections() {
+    const seen = new Set();
+    const sections = [];
+    wizardSelectedProducts().forEach((product) => {
+        (product.repeatable_sections || []).forEach((sec) => {
+            const id = String(sec.id || sec.title || '').trim();
+            if (!id || seen.has(id)) return;
+            seen.add(id);
+            sections.push(sec);
+        });
+    });
+    return sections;
+}
+
+function wizardFieldDefault(field) {
+    const f = field || {};
+    const id = String(f.id || f.name || '').toLowerCase();
+    const label = String(f.label || '').toLowerCase();
+    if (id.includes('nationality') || label.includes('nationality')) return '';
+    return f.default_value == null ? '' : String(f.default_value);
+}
+
+function initWizardMergedRepeatable() {
+    const sections = wizardMergedRepeatableSections();
+    const next = { ...(universalOrderWizardState.repeatableData || {}) };
+    sections.forEach((sec) => {
+        if (!Array.isArray(next[sec.id]) || next[sec.id].length === 0) {
+            next[sec.id] = [];
+            const minEntries = sec.min_entries || 1;
+            for (let i = 0; i < minEntries; i++) {
+                const entry = {};
+                (sec.fields || []).forEach((f) => { entry[f.id] = wizardFieldDefault(f); });
+                next[sec.id].push(entry);
+            }
+        }
+    });
+    universalOrderWizardState.repeatableData = next;
+}
+
+function wizardAnySelectedNeedsBankProof() {
+    return wizardSelectedProducts().some((p) => {
+        if (wizardProductIsPersonalBank(p)) return false;
+        return /bank|tide/i.test(`${p.name || ''} ${p.category || ''}`);
+    });
+}
+
 async function fetchWizardCatalogProducts() {
     const grid = document.getElementById('wizard-products-grid');
     if (grid) grid.innerHTML = '<div style="text-align:center; padding:40px; color:var(--color-text-muted); grid-column:1/-1;">Loading Services Catalog...</div>';
@@ -12142,8 +14237,10 @@ function renderWizardCatalogGrid() {
         return;
     }
 
-    grid.innerHTML = filtered.map(p => `
-        <div style="background:var(--color-surface); border:1px solid var(--color-border); border-radius:14px; padding:18px; display:flex; flex-direction:column; justify-content:space-between; transition:all 0.15s ease;" class="card-hover-effect">
+    grid.innerHTML = filtered.map(p => {
+        const selected = wizardProductIsSelected(p.id);
+        return `
+        <div class="wizard-product-card card-hover-effect${selected ? ' is-selected' : ''}" style="background:var(--color-surface); border:2px solid ${selected ? 'var(--color-primary)' : 'var(--color-border)'}; border-radius:14px; padding:18px; display:flex; flex-direction:column; justify-content:space-between; transition:all 0.15s ease; cursor:pointer;" onclick="toggleWizardProduct(${p.id})">
             <div>
                 <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px;">
                     <span class="status-badge info">${escapeHtml(p.category || 'Service')}</span>
@@ -12162,42 +14259,59 @@ function renderWizardCatalogGrid() {
                     <span><i data-lucide="clock" style="width:12px; height:12px; margin-right:2px;"></i> ${escapeHtml(p.estimated_delivery_time || '24-48 Hours')}</span>
                     <span><i data-lucide="file-text" style="width:12px; height:12px; margin-right:2px;"></i> ${p.document_requirements && p.document_requirements.length ? p.document_requirements.length + ' Docs' : 'Online Specs'}</span>
                 </div>
-                <button type="button" class="btn-primary" style="width:100%; justify-content:center; padding:8px 14px; font-size:0.84rem;" onclick="selectWizardProduct(${p.id})">
-                    Select &amp; Configure <i data-lucide="arrow-right" style="width:14px; height:14px; margin-left:4px;"></i>
+                <button type="button" class="btn-${selected ? 'primary' : 'secondary'}" style="width:100%; justify-content:center; padding:8px 14px; font-size:0.84rem;" onclick="event.stopPropagation(); toggleWizardProduct(${p.id})">
+                    ${selected ? 'Selected ✓' : 'Add to order'}
                 </button>
             </div>
         </div>
-    `).join('');
+        `;
+    }).join('');
 
+    renderWizardSelectedTray();
     safeCreateIcons();
 }
 
-function selectWizardProduct(productId) {
-    const product = universalOrderWizardState.catalogProducts.find(p => p.id == productId);
+function renderWizardSelectedTray() {
+    const tray = document.getElementById('wizard-selected-tray');
+    const list = document.getElementById('wizard-selected-tray-list');
+    const count = document.getElementById('wizard-selected-tray-count');
+    const products = wizardSelectedProducts();
+    if (tray) tray.hidden = products.length === 0;
+    if (count) count.textContent = products.length === 1 ? '1 product selected' : `${products.length} products selected`;
+    if (list) {
+        list.innerHTML = products.map((p) => `
+            <span class="wizard-selected-chip">
+                ${escapeHtml(p.name || 'Service')}
+                <button type="button" onclick="toggleWizardProduct(${p.id})" aria-label="Remove ${escapeHtml(p.name || '')}">×</button>
+            </span>
+        `).join('');
+    }
+}
+
+function toggleWizardProduct(productId) {
+    const product = universalOrderWizardState.catalogProducts.find((p) => p.id == productId);
     if (!product) return;
+    const selected = wizardSelectedProducts().slice();
+    const idx = selected.findIndex((p) => String(p.id) === String(product.id));
+    if (idx >= 0) selected.splice(idx, 1);
+    else selected.push(product);
+    universalOrderWizardState.selectedProducts = selected;
+    syncWizardPrimaryProduct();
+    hideWizardError();
+    renderWizardCatalogGrid();
+}
 
-    universalOrderWizardState.selectedProduct = product;
-    universalOrderWizardState.formValues = {};
-    universalOrderWizardState.repeatableData = {};
-
-    if (product.repeatable_sections && Array.isArray(product.repeatable_sections)) {
-        product.repeatable_sections.forEach(sec => {
-            universalOrderWizardState.repeatableData[sec.id] = [];
-            const minEntries = sec.min_entries || 1;
-            for (let i = 0; i < minEntries; i++) {
-                addWizardRepeatableEntry(sec.id, false);
-            }
-        });
+function confirmWizardProducts() {
+    if (!wizardSelectedProducts().length) {
+        showWizardError('Select at least one product.');
+        return;
     }
-
-    const cust = universalOrderWizardState.selectedCustomer;
-    if (cust) {
-        universalOrderWizardState.formValues['full_name'] = cust.full_name || '';
-        universalOrderWizardState.formValues['email'] = cust.email || '';
-        universalOrderWizardState.formValues['phone'] = cust.phone || '';
-    }
-
+    initWizardMergedRepeatable();
     jumpToWizardStep(3);
+}
+
+function selectWizardProduct(productId) {
+    toggleWizardProduct(productId);
 }
 
 function jumpToWizardStep(stepNum) {
@@ -12226,15 +14340,26 @@ function jumpToWizardStep(stepNum) {
             return;
         }
     }
-    if (stepNum > 2 && !universalOrderWizardState.selectedProduct) {
-        showWizardError('Please select a service/product first.');
+    if (stepNum > 2 && !wizardSelectedProducts().length) {
+        showWizardError('Please select at least one service/product first.');
         return;
     }
-    if (stepNum === 4) {
+    if (stepNum === 4 && wizardShouldSkipDocumentsStep()) {
+        stepNum = 5;
+    }
+    if (stepNum === 4 || stepNum === 5) {
         const valErr = validateWizardStep3Fields();
         if (valErr) {
             showWizardError(valErr);
             return;
+        }
+    }
+    if (stepNum === 5) {
+        const docsErr = validateWizardStep4Documents();
+        if (docsErr) {
+            showWizardError(docsErr);
+            if (universalOrderWizardState.currentStep === 4) return;
+            if (!wizardShouldSkipDocumentsStep()) stepNum = 4;
         }
     }
 
@@ -12244,6 +14369,11 @@ function jumpToWizardStep(stepNum) {
         const pill = document.getElementById(`wizard-step-pill-${i}`);
         const pane = document.getElementById(`wizard-step-${i}`);
         if (pill) {
+            if (i === 4 && wizardShouldSkipDocumentsStep()) {
+                pill.style.opacity = '0.45';
+            } else {
+                pill.style.opacity = '';
+            }
             if (i === stepNum) pill.classList.add('active');
             else if (i < stepNum) pill.classList.add('completed');
             else pill.classList.remove('active', 'completed');
@@ -12263,6 +14393,13 @@ function jumpToWizardStep(stepNum) {
     if (btnSubmit) btnSubmit.style.display = (stepNum === 5) ? 'inline-flex' : 'none';
 
     if (stepNum === 3) {
+        initWizardMergedRepeatable();
+        const cust = universalOrderWizardState.selectedCustomer;
+        if (cust) {
+            universalOrderWizardState.formValues['full_name'] = universalOrderWizardState.formValues['full_name'] || cust.full_name || '';
+            universalOrderWizardState.formValues['email'] = universalOrderWizardState.formValues['email'] || cust.email || '';
+            universalOrderWizardState.formValues['phone'] = universalOrderWizardState.formValues['phone'] || cust.phone || '';
+        }
         renderWizardStep3Form();
     } else if (stepNum === 4) {
         renderWizardStep4Documents();
@@ -12274,47 +14411,469 @@ function jumpToWizardStep(stepNum) {
 }
 
 function navigateWizardStep(delta) {
-    const target = universalOrderWizardState.currentStep + delta;
+    let target = universalOrderWizardState.currentStep + delta;
+    if (delta > 0 && target === 4 && wizardShouldSkipDocumentsStep()) target = 5;
+    if (delta < 0 && target === 4 && wizardShouldSkipDocumentsStep()) target = 3;
     if (target >= 1 && target <= 5) {
         jumpToWizardStep(target);
     }
 }
 
 function renderWizardStep3Form() {
-    const p = universalOrderWizardState.selectedProduct;
+    const products = wizardSelectedProducts();
+    const p = products[0];
     const cust = universalOrderWizardState.selectedCustomer;
     if (!p) return;
 
+    const summary = wizardSelectionSummary();
     const activeUser = getCurrentUser();
     const isB2B = (cust && (cust.is_b2b === 1 || cust.client_type === 'B2B')) || (activeUser && (activeUser.is_b2b === 1 || activeUser.client_type === 'B2B'));
-    document.getElementById('wizard-selected-cat').textContent = p.category || 'Service';
-    document.getElementById('wizard-selected-title').textContent = p.name;
-    document.getElementById('wizard-selected-price').textContent = isB2B ? 'Custom B2B Rate' : `£${parseFloat(p.price || 0).toFixed(2)}`;
-    document.getElementById('wizard-selected-est').textContent = `Est: ${p.estimated_delivery_time || '24-48 Hours'}`;
+    document.getElementById('wizard-selected-cat').textContent = summary.category;
+    document.getElementById('wizard-selected-title').textContent = summary.title;
+    document.getElementById('wizard-selected-price').textContent = isB2B ? 'Custom B2B Rate' : `£${summary.price.toFixed(2)}`;
+    const estTimes = [...new Set(products.map((item) => item.estimated_delivery_time || '24-48 Hours'))];
+    document.getElementById('wizard-selected-est').textContent = `Est: ${estTimes[0]}${estTimes.length > 1 ? ' +' : ''}`;
     const custSummary = document.getElementById('wizard-selected-customer-summary');
     if (custSummary) {
-        if (isB2B && cust.b2b_id) {
-            custSummary.innerHTML = `Customer: <strong>${escapeHtml(cust.full_name || 'Client')}</strong> (${escapeHtml(cust.email)}) • <span style="color:var(--color-success); font-weight:700;">${escapeHtml(cust.b2b_id)}</span>`;
-        } else {
-            custSummary.innerHTML = `Customer: <strong>${escapeHtml((cust || {}).full_name || 'Client')}</strong> (${escapeHtml((cust || {}).email || '')})`;
-        }
+        const productLine = summary.names.map((name) => escapeHtml(name)).join(' · ');
+        const who = (isB2B && cust && cust.b2b_id)
+            ? `Customer: <strong>${escapeHtml(cust.full_name || 'Client')}</strong> (${escapeHtml(cust.email)}) • <span style="color:var(--color-success); font-weight:700;">${escapeHtml(cust.b2b_id)}</span>`
+            : `Customer: <strong>${escapeHtml((cust || {}).full_name || 'Client')}</strong> (${escapeHtml((cust || {}).email || '')})`;
+        custSummary.innerHTML = `${who}<div style="margin-top:4px; color:var(--color-text-secondary);">${productLine}</div>`;
     }
 
     const fieldsContainer = document.getElementById('wizard-dynamic-fields-container');
     if (fieldsContainer) {
-        fieldsContainer.innerHTML = renderStandardizedProductStep3HTML(p);
+        const extras = wizardMergedExtraFields();
+        const extraHTML = extras.length ? `
+            <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:14px; padding:24px; margin-bottom:8px; box-shadow:0 1px 3px 0 rgba(0,0,0,0.05);">
+                <div style="font-size:1.05rem; font-weight:800; color:#0f172a; margin-bottom:6px;">Extra details for selected services</div>
+                <div style="font-size:0.84rem; color:#64748b; margin-bottom:18px;">Asked once, even if more than one product needs the same information.</div>
+                ${extras.map((f) => renderSingleWizardFieldHTML(f, p)).join('')}
+            </div>
+        ` : '';
+        fieldsContainer.innerHTML = renderStandardizedProductStep3HTML(p) + extraHTML;
+    }
+
+    const credWrap = document.getElementById('wizard-access-credentials');
+    if (credWrap) {
+        credWrap.style.display = wizardNeedsAccessCredentials() ? '' : 'none';
     }
 
     renderWizardRepeatableSections();
-    setTimeout(initAllCompaniesHouseLiveSearch, 100);
+    setTimeout(() => {
+        if (!wizardIsSoleTrader() && (wizardAnySelectedIsUnregisteredPackage() || wizardNeedsExistingCompanyForm())) {
+            initAllCompaniesHouseLiveSearch();
+        }
+        if (wizardAnySelectedIsUnregisteredPackage()) {
+            initWizardFormationCompanyNameCheck();
+            initWizardSicActivitiesSearch();
+            initWizardFormationAddressHelpers();
+        } else if (wizardNeedsExistingCompanyForm()) {
+            renderWizardExistingCompanyHint(null);
+        }
+    }, 100);
+}
+
+function wizardStep3InputStyle() {
+    return 'width:100%; box-sizing:border-box; margin-top:8px;';
+}
+
+function isoDateInputValue(raw) {
+    const text = String(raw || '').trim();
+    if (!text) return '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+    const uk = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+    if (uk) {
+        const dd = uk[1].padStart(2, '0');
+        const mm = uk[2].padStart(2, '0');
+        return `${uk[3]}-${mm}-${dd}`;
+    }
+    return text.slice(0, 10);
+}
+
+function renderPackageFormationStep3HTML(product) {
+    const cust = universalOrderWizardState.selectedCustomer;
+    const isB2B = (cust && (cust.is_b2b === 1 || cust.client_type === 'B2B'));
+    const inputCls = 'select-filter wizard-field-input';
+    const inputStyle = wizardStep3InputStyle();
+    const fv = universalOrderWizardState.formValues || {};
+    const companyVal = fv.desired_company_name || fv.proposed_company_name || fv.company_name || '';
+    const addressVal = fv.registered_office_address || fv.address || fv.registered_address || '';
+    const directorVal = fv.director_name || fv.full_name || fv.end_client_name || (isB2B ? '' : (cust ? cust.full_name : '')) || '';
+    const dobVal = isoDateInputValue(fv.director_dob || fv.dob || fv.date_of_birth || '');
+    const nationalityVal = fv.nationality || fv.director_nationality || '';
+    const homeAddressVal = fv.home_address || fv.director_home_address || '';
+    const businessVal = fv.business_activities || fv.sic_code || fv.sic_codes || '';
+    const emailVal = fv.access_email || fv.registered_email || fv.end_client_email || fv.email || (isB2B ? '' : (cust ? cust.email : '')) || '';
+    const emailPassVal = fv.access_email_password || fv.email_password || fv.service_password || '';
+    const phoneVal = fv.uk_phone || fv.uk_contact_number || fv.uk_contact || fv.end_client_phone || fv.phone || (isB2B ? '' : (cust ? cust.phone : '')) || '';
+    const packageLabel = (product && product.name) || 'Package';
+
+    return `
+        <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:14px; padding:24px; margin-bottom:24px; box-shadow:0 1px 3px 0 rgba(0,0,0,0.05);">
+            <div style="font-size:1.05rem; font-weight:800; color:#0f172a; margin-bottom:6px; display:flex; align-items:center; gap:8px;">
+                <i data-lucide="package" style="width:20px; height:20px; color:var(--color-primary);"></i>
+                Company formation details
+            </div>
+            <div style="font-size:0.84rem; color:#64748b; margin-bottom:18px;">
+                <strong>${escapeHtml(packageLabel)}</strong> means the company is not registered yet. Enter the details we need to form it.
+                ${isB2B ? ` Ordering under B2B: <strong>${escapeHtml(cust.full_name || 'Partner')}</strong> (${escapeHtml(cust.b2b_id || 'B2B')}).` : ''}
+            </div>
+
+            <div style="display:grid; grid-template-columns:1fr; gap:18px;">
+                <div>
+                    <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
+                        Desired company name <span style="color:#ef4444; font-weight:700;">*</span>
+                    </label>
+                    <input type="text" id="wfield-company_name" class="${inputCls}" style="${inputStyle}"
+                           placeholder="e.g. NORTHSTAR DIGITAL LTD"
+                           data-ch-name-check="true"
+                           autocomplete="off"
+                           value="${escapeHtml(companyVal)}"
+                           oninput="updateWizardFieldValue('company_name', this.value); updateWizardFieldValue('proposed_company_name', this.value); updateWizardFieldValue('desired_company_name', this.value); onWizardCompanyNameInput(this.value);">
+                    <div id="wizard-company-name-availability" class="wizard-ch-name-status" aria-live="polite"></div>
+                    <div style="font-size:0.8rem; color:#64748b; margin-top:6px; font-weight:500;">
+                        Type the proposed name — we check Companies House instantly for an exact match.
+                    </div>
+                </div>
+
+                <div>
+                    <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
+                        Business activities <span style="color:#ef4444; font-weight:700;">*</span>
+                    </label>
+                    <input type="text" id="wfield-business_activities" class="${inputCls}" style="${inputStyle}"
+                           placeholder="Search SIC code or activity (e.g. consultancy, retail)"
+                           data-sic-search="true"
+                           autocomplete="off"
+                           value="${escapeHtml(businessVal)}"
+                           oninput="updateWizardFieldValue('business_activities', this.value); updateWizardFieldValue('sic_code', this.value);">
+                    <div style="font-size:0.8rem; color:#64748b; margin-top:6px; font-weight:500;">
+                        Official SIC descriptions from Companies House — pick from suggestions or type your own summary.
+                    </div>
+                </div>
+
+                <div>
+                    <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
+                        Registered office address <span style="color:#ef4444; font-weight:700;">*</span>
+                    </label>
+                    <div class="wizard-postcode-row">
+                        <input type="text" id="wfield-registered-postcode" class="${inputCls}" style="margin-top:8px;"
+                               placeholder="UK postcode e.g. OX11 8RN"
+                               autocomplete="postal-code"
+                               value="${escapeHtml(fv.registered_postcode || '')}"
+                               oninput="updateWizardFieldValue('registered_postcode', this.value);">
+                        <button type="button" class="btn-secondary wizard-postcode-find-btn" onclick="lookupWizardRegisteredPostcode()">Find address</button>
+                    </div>
+                    <div id="wizard-postcode-status" class="wizard-ch-name-status" aria-live="polite"></div>
+                    <div id="wizard-postcode-results" class="wizard-postcode-results" hidden></div>
+                    <input type="text" id="wfield-registered_office_address" class="${inputCls}" style="${inputStyle}"
+                           placeholder="Street, city, postcode, United Kingdom"
+                           value="${escapeHtml(addressVal)}"
+                           oninput="onWizardRegisteredAddressInput(this.value);">
+                    <div style="font-size:0.8rem; color:#64748b; margin-top:6px; font-weight:500;">
+                        Search by UK postcode, pick an address, or type the full registered office manually.
+                    </div>
+                </div>
+
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:18px;">
+                    <div>
+                        <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
+                            Director name <span style="color:#ef4444; font-weight:700;">*</span>
+                        </label>
+                        <input type="text" id="wfield-director_name" class="${inputCls}" style="${inputStyle}"
+                               placeholder="Full legal name"
+                               value="${escapeHtml(directorVal)}"
+                               oninput="updateWizardFieldValue('director_name', this.value); updateWizardFieldValue('full_name', this.value); updateWizardFieldValue('end_client_name', this.value);">
+                    </div>
+                    <div>
+                        <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
+                            Date of birth <span style="color:#ef4444; font-weight:700;">*</span>
+                        </label>
+                        <input type="date" id="wfield-director_dob" class="${inputCls}" style="${inputStyle}"
+                               value="${escapeHtml(dobVal)}"
+                               oninput="updateWizardFieldValue('director_dob', this.value); updateWizardFieldValue('dob', this.value); updateWizardFieldValue('date_of_birth', this.value);">
+                    </div>
+                </div>
+
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:18px;">
+                    <div>
+                        <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
+                            Nationality <span style="color:#ef4444; font-weight:700;">*</span>
+                        </label>
+                        <input type="text" id="wfield-nationality" class="${inputCls}" style="${inputStyle}"
+                               placeholder="e.g. British / Pakistani"
+                               value="${escapeHtml(nationalityVal)}"
+                               oninput="updateWizardFieldValue('nationality', this.value); updateWizardFieldValue('director_nationality', this.value);">
+                    </div>
+                    <div>
+                        <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
+                            UK phone number <span style="color:#ef4444; font-weight:700;">*</span>
+                        </label>
+                        <input type="tel" id="wfield-uk-phone" class="${inputCls}" style="${inputStyle}"
+                               placeholder="e.g. 07700 900123"
+                               value="${escapeHtml(phoneVal)}"
+                               oninput="updateWizardFieldValue('uk_phone', this.value); updateWizardFieldValue('uk_contact_number', this.value); updateWizardFieldValue('uk_contact', this.value); updateWizardFieldValue('end_client_phone', this.value); updateWizardFieldValue('phone', this.value);">
+                    </div>
+                </div>
+
+                <div>
+                    <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
+                        Personal address <span style="color:#ef4444; font-weight:700;">*</span>
+                    </label>
+                    <label class="wizard-same-address-check">
+                        <input type="checkbox" id="wfield-same-as-registered"
+                               ${fv.same_as_registered_address === true || fv.same_as_registered_address === '1' || fv.same_as_registered_address === 1 ? 'checked' : ''}
+                               onchange="onWizardSameAsRegisteredToggle(this.checked);">
+                        <span>Same as registered office address</span>
+                    </label>
+                    <input type="text" id="wfield-home_address" class="${inputCls}" style="${inputStyle}"
+                           placeholder="Director residential address (full UK address)"
+                           value="${escapeHtml(homeAddressVal)}"
+                           oninput="updateWizardFieldValue('home_address', this.value); updateWizardFieldValue('director_home_address', this.value); updateWizardFieldValue('same_as_registered_address', false); const cb=document.getElementById('wfield-same-as-registered'); if(cb) cb.checked=false;">
+                </div>
+
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:18px;">
+                    <div>
+                        <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
+                            Email <span style="color:#ef4444; font-weight:700;">*</span>
+                        </label>
+                        <input type="email" id="wfield-access-email" class="${inputCls}" style="${inputStyle}"
+                               placeholder="company@email.com"
+                               value="${escapeHtml(emailVal)}"
+                               oninput="updateWizardFieldValue('access_email', this.value); updateWizardFieldValue('registered_email', this.value); updateWizardFieldValue('end_client_email', this.value); updateWizardFieldValue('email', this.value);">
+                    </div>
+                    <div>
+                        <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
+                            Email password <span style="color:#ef4444; font-weight:700;">*</span>
+                        </label>
+                        <input type="text" id="wfield-access-email-password" class="${inputCls}" style="${inputStyle}"
+                               placeholder="Mailbox password for this email"
+                               autocomplete="off"
+                               value="${escapeHtml(emailPassVal)}"
+                               oninput="updateWizardFieldValue('access_email_password', this.value); updateWizardFieldValue('email_password', this.value); updateWizardFieldValue('service_password', this.value);">
+                        <div style="font-size:0.8rem; color:#64748b; margin-top:6px; font-weight:500;">
+                            Stored on the order for staff access to the company mailbox.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function renderWebsiteStep3HTML(product) {
+    const inputCls = 'select-filter wizard-field-input';
+    const inputStyle = wizardStep3InputStyle();
+    const fv = universalOrderWizardState.formValues || {};
+    const companyVal = fv.company_name || fv.proposed_company_name || fv.business_name || '';
+    const domainVal = fv.domain_name || fv.website_domain || fv.desired_domain || '';
+    const emailVal = fv.access_email || fv.end_client_email || fv.email || '';
+    const emailPassVal = fv.access_email_password || fv.email_password || fv.service_password || '';
+    const productLabel = (product && product.name) || 'Website';
+    const logoFiles = wizardLogoUploads();
+    const logoList = logoFiles.length ? logoFiles.map((file, idx) => `
+        <div style="display:flex; align-items:center; justify-content:space-between; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:8px 12px;">
+            <span style="font-size:0.84rem; font-weight:600; color:#0f172a;">${escapeHtml(file.file_name || 'Logo')}</span>
+            <button type="button" class="btn-ghost" style="color:#dc2626; font-size:0.78rem; font-weight:700;" onclick="removeWizardUploadedDoc('logo', ${idx})">Remove</button>
+        </div>
+    `).join('') : '';
+
+    return `
+        <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:14px; padding:24px; margin-bottom:24px; box-shadow:0 1px 3px 0 rgba(0,0,0,0.05);">
+            <div style="font-size:1.05rem; font-weight:800; color:#0f172a; margin-bottom:6px; display:flex; align-items:center; gap:8px;">
+                <i data-lucide="globe" style="width:20px; height:20px; color:var(--color-primary);"></i>
+                Website details
+            </div>
+            <div style="font-size:0.84rem; color:#64748b; margin-bottom:18px;">
+                For <strong>${escapeHtml(productLabel)}</strong> we only need the company name, desired domain, and mailbox login. A logo is optional. No ID documents.
+            </div>
+            <div style="display:grid; grid-template-columns:1fr; gap:18px;">
+                <div>
+                    <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
+                        Client company name <span style="color:#ef4444; font-weight:700;">*</span>
+                    </label>
+                    <input type="text" id="wfield-company_name" class="${inputCls}" style="${inputStyle}"
+                           placeholder="e.g. Northstar Digital Ltd"
+                           value="${escapeHtml(companyVal)}"
+                           oninput="updateWizardFieldValue('company_name', this.value); updateWizardFieldValue('proposed_company_name', this.value);">
+                </div>
+                <div>
+                    <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
+                        Desired domain <span style="color:#ef4444; font-weight:700;">*</span>
+                    </label>
+                    <input type="text" id="wfield-domain_name" class="${inputCls}" style="${inputStyle}"
+                           placeholder="e.g. yourcompany.co.uk"
+                           value="${escapeHtml(domainVal)}"
+                           oninput="updateWizardFieldValue('domain_name', this.value); updateWizardFieldValue('desired_domain', this.value); updateWizardFieldValue('website_domain', this.value);">
+                    <div style="font-size:0.8rem; color:#64748b; margin-top:6px; font-weight:500;">
+                        The domain they want. Include .co.uk or .com if they already own it.
+                    </div>
+                </div>
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:18px;">
+                    <div>
+                        <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
+                            Email address <span style="color:#ef4444; font-weight:700;">*</span>
+                        </label>
+                        <input type="email" id="wfield-access-email" class="${inputCls}" style="${inputStyle}"
+                               placeholder="e.g. info@yourcompany.co.uk"
+                               value="${escapeHtml(emailVal)}"
+                               oninput="updateWizardFieldValue('access_email', this.value); updateWizardFieldValue('email', this.value); updateWizardFieldValue('end_client_email', this.value);">
+                    </div>
+                    <div>
+                        <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
+                            Email password <span style="color:#ef4444; font-weight:700;">*</span>
+                        </label>
+                        <input type="text" id="wfield-access-email-password" class="${inputCls}" style="${inputStyle}"
+                               placeholder="Mailbox password / access code"
+                               autocomplete="off"
+                               value="${escapeHtml(emailPassVal)}"
+                               oninput="updateWizardFieldValue('access_email_password', this.value); updateWizardFieldValue('email_password', this.value); updateWizardFieldValue('service_password', this.value);">
+                    </div>
+                </div>
+                <div>
+                    <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
+                        Company logo <span style="font-weight:600; color:#94a3b8;">optional</span>
+                    </label>
+                    <div id="wizard-logo-box" style="margin-top:8px; border:1.5px dashed #cbd5e1; border-radius:14px; padding:18px; background:#f8fafc; display:grid; gap:10px;">
+                        <div style="font-size:0.84rem; color:#64748b;">PNG, JPG, SVG or PDF. Leave empty if they do not have a logo yet.</div>
+                        <div>
+                            <input type="file" id="wizard-logo-file" accept=".png,.jpg,.jpeg,.svg,.webp,.pdf" style="display:none;" onchange="handleWizardFileUpload('logo', this)">
+                            <button type="button" class="btn-secondary" style="padding:8px 14px; font-size:0.84rem;" onclick="document.getElementById('wizard-logo-file').click()">
+                                ${logoFiles.length ? 'Replace / add logo' : 'Upload logo'}
+                            </button>
+                        </div>
+                        ${logoList}
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function wizardLogoUploads() {
+    const uploadedVal = (universalOrderWizardState.uploadedDocs || {}).logo;
+    return Array.isArray(uploadedVal) ? uploadedVal : (uploadedVal ? [uploadedVal] : []);
 }
 
 function renderStandardizedProductStep3HTML(product) {
     const p = product || universalOrderWizardState.selectedProduct;
+    const allWebsite = wizardSelectedProducts().length && wizardSelectedProducts().every((item) => wizardProductFormProfile(item) === 'website');
+    if (allWebsite) {
+        return renderWebsiteStep3HTML(wizardSelectedProducts()[0] || p);
+    }
+    const blocks = [];
+    if (wizardAnySelectedIsUnregisteredPackage()) {
+        blocks.push(renderPackageFormationStep3HTML(p));
+    }
+    if (wizardNeedsWebsiteForm()) {
+        const websiteProduct = wizardSelectedProducts().find((item) => wizardProductFormProfile(item) === 'website') || p;
+        blocks.push(renderWebsiteStep3HTML(websiteProduct));
+    }
+    if (wizardNeedsExistingCompanyForm()) {
+        blocks.push(renderExistingCompanyStep3HTML(p));
+    }
+    if (wizardNeedsPersonalBankForm()) {
+        blocks.push(renderPersonalBankStep3HTML(p));
+    }
+    if (blocks.length) return blocks.join('');
+    return renderSimpleProductStep3HTML(p);
+}
+
+function renderSimpleProductStep3HTML(product) {
+    const extras = wizardMergedExtraFields();
+    if (extras.length) return '';
+    const inputCls = 'select-filter wizard-field-input';
+    const inputStyle = wizardStep3InputStyle();
+    const fv = universalOrderWizardState.formValues || {};
+    const companyVal = fv.company_name || fv.business_name || '';
+    const notesVal = fv.service_notes || '';
+    return `
+        <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:14px; padding:24px; margin-bottom:24px; box-shadow:0 1px 3px 0 rgba(0,0,0,0.05);">
+            <div style="font-size:1.05rem; font-weight:800; color:#0f172a; margin-bottom:6px;">Order details</div>
+            <div style="font-size:0.84rem; color:#64748b; margin-bottom:18px;">Only the information this service needs.</div>
+            <div style="display:grid; gap:18px;">
+                <div>
+                    <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">Client company name <span style="color:#ef4444;">*</span></label>
+                    <input type="text" id="wfield-company_name" class="${inputCls}" style="${inputStyle}" value="${escapeHtml(companyVal)}" placeholder="Company or trading name" oninput="updateWizardFieldValue('company_name', this.value)">
+                </div>
+                <div>
+                    <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">Notes</label>
+                    <textarea id="wfield-service_notes" class="${inputCls}" style="${inputStyle} min-height:90px;" placeholder="Anything the team needs to complete this order" oninput="updateWizardFieldValue('service_notes', this.value)">${escapeHtml(notesVal)}</textarea>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function renderPersonalBankStep3HTML(product) {
+    const cust = universalOrderWizardState.selectedCustomer;
+    const isB2B = (cust && (cust.is_b2b === 1 || cust.client_type === 'B2B'));
+    const inputCls = 'select-filter wizard-field-input';
+    const inputStyle = wizardStep3InputStyle();
+    const fv = universalOrderWizardState.formValues || {};
+    const nameVal = fv.full_name || fv.director_name || fv.end_client_name || (isB2B ? '' : (cust ? cust.full_name : '')) || '';
+    const dobVal = isoDateInputValue(fv.dob || fv.director_dob || fv.date_of_birth || '');
+    const addressVal = fv.home_address || fv.director_home_address || fv.address || '';
+    const emailVal = fv.email || fv.end_client_email || (isB2B ? '' : (cust ? cust.email : '')) || '';
+    const phoneVal = fv.phone || fv.end_client_phone || fv.uk_contact || (isB2B ? '' : (cust ? cust.phone : '')) || '';
+    return `
+        <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:14px; padding:24px; margin-bottom:24px; box-shadow:0 1px 3px 0 rgba(0,0,0,0.05);">
+            <div style="font-size:1.05rem; font-weight:800; color:#0f172a; margin-bottom:6px; display:flex; align-items:center; gap:8px;">
+                <i data-lucide="user" style="width:20px; height:20px; color:var(--color-primary);"></i>
+                Personal details
+            </div>
+            <div style="font-size:0.84rem; color:#64748b; margin-bottom:18px;">This is a personal account. No company, Companies House, or bank statement is needed.</div>
+            <div style="display:grid; gap:18px;">
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:18px;">
+                    <div>
+                        <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">Full name <span style="color:#ef4444; font-weight:700;">*</span></label>
+                        <input type="text" id="wfield-full_name" class="${inputCls}" style="${inputStyle}"
+                               placeholder="As it appears on their personal ID"
+                               value="${escapeHtml(nameVal)}"
+                               oninput="updateWizardFieldValue('full_name', this.value); updateWizardFieldValue('director_name', this.value); updateWizardFieldValue('end_client_name', this.value);">
+                    </div>
+                    <div>
+                        <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">Date of birth <span style="color:#ef4444; font-weight:700;">*</span></label>
+                        <input type="date" id="wfield-dob" class="${inputCls}" style="${inputStyle}"
+                               value="${escapeHtml(dobVal)}"
+                               oninput="updateWizardFieldValue('dob', this.value); updateWizardFieldValue('director_dob', this.value);">
+                    </div>
+                </div>
+                <div>
+                    <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">Personal address <span style="color:#ef4444; font-weight:700;">*</span></label>
+                    <input type="text" id="wfield-home_address" class="${inputCls}" style="${inputStyle}"
+                           placeholder="Home address, city, postcode"
+                           value="${escapeHtml(addressVal)}"
+                           oninput="updateWizardFieldValue('home_address', this.value); updateWizardFieldValue('director_home_address', this.value); updateWizardFieldValue('address', this.value);">
+                </div>
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:18px;">
+                    <div>
+                        <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">Email address <span style="color:#ef4444; font-weight:700;">*</span></label>
+                        <input type="email" id="wfield-end-client-email" class="${inputCls}" style="${inputStyle}"
+                               placeholder="Personal email"
+                               value="${escapeHtml(emailVal)}"
+                               oninput="updateWizardFieldValue('email', this.value); updateWizardFieldValue('end_client_email', this.value);">
+                    </div>
+                    <div>
+                        <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">Phone number <span style="color:#ef4444; font-weight:700;">*</span></label>
+                        <input type="tel" id="wfield-end-client-phone" class="${inputCls}" style="${inputStyle}"
+                               placeholder="+44 ..."
+                               value="${escapeHtml(phoneVal)}"
+                               oninput="updateWizardFieldValue('phone', this.value); updateWizardFieldValue('end_client_phone', this.value); updateWizardFieldValue('uk_contact', this.value);">
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function renderExistingCompanyStep3HTML(product) {
     const cust = universalOrderWizardState.selectedCustomer;
     const isB2B = (cust && (cust.is_b2b === 1 || cust.client_type === 'B2B'));
 
-    const inputStyle = "width:100%; box-sizing:border-box; padding:14px 18px; font-size:1.05rem; line-height:1.6; color:#0f172a; background:#ffffff; border:1px solid #cbd5e1; border-radius:10px; margin-top:8px; outline:none; transition:border-color 0.15s ease, box-shadow 0.15s ease;";
+    const inputCls = 'select-filter wizard-field-input';
+    const inputStyle = wizardStep3InputStyle();
 
     const companyVal = universalOrderWizardState.formValues['company_name'] || universalOrderWizardState.formValues['proposed_company_name'] || '';
     const companyNumVal = universalOrderWizardState.formValues['company_number'] || '';
@@ -12326,6 +14885,11 @@ function renderStandardizedProductStep3HTML(product) {
     const clientPhoneVal = universalOrderWizardState.formValues['end_client_phone'] || universalOrderWizardState.formValues['phone'] || universalOrderWizardState.formValues['uk_contact'] || (isB2B ? '' : (cust ? cust.phone : '')) || '';
     
     const tradingProofVal = universalOrderWizardState.formValues['trading_proof'] || '';
+    const soleTrader = wizardIsSoleTrader();
+    const businessType = wizardBusinessTypeValue();
+    if (universalOrderWizardState.formValues && !universalOrderWizardState.formValues.business_type) {
+        universalOrderWizardState.formValues.business_type = businessType === 'sole_trader' ? 'Sole trader' : 'Limited company';
+    }
 
     return `
         <!-- CLIENT DETAILS SECTION CARD -->
@@ -12335,43 +14899,61 @@ function renderStandardizedProductStep3HTML(product) {
                 Client Details
             </div>
             <div style="font-size:0.84rem; color:#64748b; margin-bottom:18px;">
-                ${isB2B ? `Ordering under B2B Account: <strong>${escapeHtml(cust.full_name || 'Partner')}</strong> (${escapeHtml(cust.b2b_id || 'B2B')}). Type company name below to search Companies House automatically.` : 'Enter company details below to search Companies House automatically.'}
+                ${soleTrader
+                    ? `${isB2B ? `Ordering under B2B Account: <strong>${escapeHtml(cust.full_name || 'Partner')}</strong> (${escapeHtml(cust.b2b_id || 'B2B')}). ` : ''}Sole traders are not on Companies House. Enter the trading name and owner details.`
+                    : (isB2B ? `Ordering under B2B Account: <strong>${escapeHtml(cust.full_name || 'Partner')}</strong> (${escapeHtml(cust.b2b_id || 'B2B')}). Search for an <strong>existing</strong> Companies House company below.` : 'Search for an existing registered company on Companies House. If it is not listed, leave fields blank and type details manually.')}
             </div>
 
             <div style="display:grid; grid-template-columns:1fr; gap:18px;">
-                <!-- 1. COMPANY NAME WITH LIVE COMPANIES HOUSE AUTOCOMPLETE -->
+                <div>
+                    <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">Business type <span style="color:#ef4444; font-weight:700;">*</span></label>
+                    <div class="wizard-business-type" style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;">
+                        <label class="wizard-same-address-check" style="margin:0;">
+                            <input type="radio" name="wizard-business-type" value="limited" ${businessType === 'limited' ? 'checked' : ''} onchange="onWizardBusinessTypeChange('limited')">
+                            <span>Limited company</span>
+                        </label>
+                        <label class="wizard-same-address-check" style="margin:0;">
+                            <input type="radio" name="wizard-business-type" value="sole_trader" ${businessType === 'sole_trader' ? 'checked' : ''} onchange="onWizardBusinessTypeChange('sole_trader')">
+                            <span>Sole trader</span>
+                        </label>
+                    </div>
+                </div>
                 <div>
                     <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
-                        Company Name <span style="color:#ef4444; font-weight:700;">*</span>
+                        ${soleTrader ? 'Trading / business name' : 'Company name (registered on Companies House)'} <span style="color:#ef4444; font-weight:700;">*</span>
                     </label>
-                    <input type="text" id="wfield-company_name" class="select-filter" style="${inputStyle}" 
-                           placeholder="Type to search Companies House (e.g. BRIXEN CONSULTANTS LTD)..." 
-                           data-ch-search="true" autocomplete="off"
+                    <input type="text" id="wfield-company_name" class="${inputCls}" style="${inputStyle}" 
+                           placeholder="${soleTrader ? 'e.g. Abbas Trading' : 'Type to search Companies House (e.g. BRIXEN CONSULTANTS LTD)...'}" 
+                           ${soleTrader ? '' : 'data-ch-search="true" data-ch-existing-company="true"'} autocomplete="off"
                            value="${escapeHtml(companyVal)}"
                            oninput="updateWizardFieldValue('company_name', this.value); updateWizardFieldValue('proposed_company_name', this.value);">
+                    ${soleTrader ? '' : '<div id="wizard-ch-existing-company-status" class="wizard-ch-name-status" aria-live="polite"></div>'}
                     <div style="font-size:0.8rem; color:#64748b; margin-top:6px; font-weight:500;">
-                        Type company name to search Companies House live API and auto-fill details below.
+                        ${soleTrader
+                            ? 'No Companies House check — sole traders do not have a company number.'
+                            : `Pick a result to load a live Companies House record — name, number, director, registered office${wizardSkipsDirectorDob() ? ', and confirmation statement due date' : ''}.`}
                     </div>
                 </div>
 
                 <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:18px;">
-                    <!-- 2. COMPANY REGISTRATION NUMBER -->
+                    ${soleTrader ? '' : `
                     <div>
                         <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
                             Company Registration Number <span style="color:#ef4444; font-weight:700;">*</span>
                         </label>
-                        <input type="text" id="wfield-company_number" class="select-filter" style="${inputStyle}" 
+                        <input type="text" id="wfield-company_number" class="${inputCls}" style="${inputStyle}" 
                                placeholder="e.g. 12345678" 
                                value="${escapeHtml(companyNumVal)}"
-                               oninput="updateWizardFieldValue('company_number', this.value)">
+                               oninput="updateWizardFieldValue('company_number', this.value)"
+                               onchange="refreshWizardExistingCompanyFromLiveCh()">
+                        <button type="button" class="btn-secondary wizard-postcode-find-btn" style="margin-top:8px;" onclick="refreshWizardExistingCompanyFromLiveCh()">Refresh from Companies House</button>
                     </div>
-
-                    <!-- 3. DIRECTOR FULL NAME -->
+                    `}
                     <div>
                         <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
-                            Director Full Name <span style="color:#ef4444; font-weight:700;">*</span>
+                            ${soleTrader ? 'Owner / trader name' : 'Director Full Name'} <span style="color:#ef4444; font-weight:700;">*</span>
                         </label>
-                        <input type="text" id="wfield-director_name" class="select-filter" style="${inputStyle}" 
+                        <input type="text" id="wfield-director_name" class="${inputCls}" style="${inputStyle}" 
                                placeholder="e.g. Muhammad Rohan" 
                                value="${escapeHtml(directorVal)}"
                                oninput="updateWizardFieldValue('director_name', this.value); updateWizardFieldValue('full_name', this.value); updateWizardFieldValue('end_client_name', this.value);">
@@ -12379,25 +14961,24 @@ function renderStandardizedProductStep3HTML(product) {
                 </div>
 
                 <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:18px;">
-                    <!-- 4. DIRECTOR DATE OF BIRTH (MANUAL - PRIVATE) -->
+                    ${wizardSkipsDirectorDob() ? '' : `
                     <div>
                         <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
                             Director Date of Birth (Private / Manual) <span style="color:#ef4444; font-weight:700;">*</span>
                         </label>
-                        <input type="date" id="wfield-director_dob" class="select-filter" style="${inputStyle}" 
+                        <input type="date" id="wfield-director_dob" class="${inputCls}" style="${inputStyle}" 
                                value="${escapeHtml(directorDobVal)}"
                                oninput="updateWizardFieldValue('director_dob', this.value); updateWizardFieldValue('dob', this.value);">
                         <div style="font-size:0.8rem; color:#64748b; margin-top:6px; font-weight:500;">
                             Date of birth is not public on Companies House API, please enter manually.
                         </div>
                     </div>
-
-                    <!-- 5. REGISTERED OFFICE ADDRESS -->
+                    `}
                     <div>
                         <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
-                            Registered Office Address <span style="color:#ef4444; font-weight:700;">*</span>
+                            ${soleTrader ? 'Business address' : 'Registered Office Address'} <span style="color:#ef4444; font-weight:700;">*</span>
                         </label>
-                        <input type="text" id="wfield-registered_office_address" class="select-filter" style="${inputStyle}" 
+                        <input type="text" id="wfield-registered_office_address" class="${inputCls}" style="${inputStyle}" 
                                placeholder="Address Line 1, City, Postcode, Country" 
                                value="${escapeHtml(officeAddressVal)}"
                                oninput="updateWizardFieldValue('registered_office_address', this.value); updateWizardFieldValue('address', this.value);">
@@ -12410,7 +14991,7 @@ function renderStandardizedProductStep3HTML(product) {
                         <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
                             Client Email Address <span style="color:#ef4444; font-weight:700;">*</span>
                         </label>
-                        <input type="email" id="wfield-end-client-email" class="select-filter" style="${inputStyle}" 
+                        <input type="email" id="wfield-end-client-email" class="${inputCls}" style="${inputStyle}" 
                                placeholder="e.g. client@company.com" 
                                value="${escapeHtml(clientEmailVal)}"
                                oninput="updateWizardFieldValue('end_client_email', this.value); updateWizardFieldValue('email', this.value);">
@@ -12421,19 +15002,19 @@ function renderStandardizedProductStep3HTML(product) {
                         <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
                             Client Phone Number
                         </label>
-                        <input type="tel" id="wfield-end-client-phone" class="select-filter" style="${inputStyle}" 
+                        <input type="tel" id="wfield-end-client-phone" class="${inputCls}" style="${inputStyle}" 
                                placeholder="+44 7911 123456" 
                                value="${escapeHtml(clientPhoneVal)}"
                                oninput="updateWizardFieldValue('end_client_phone', this.value); updateWizardFieldValue('phone', this.value); updateWizardFieldValue('uk_contact', this.value);">
                     </div>
                 </div>
 
-                ${(p.name && (p.name.includes('Bank') || p.name.includes('Tide'))) ? `
+                ${wizardAnySelectedNeedsBankProof() ? `
                     <div>
                         <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">
                             Business Trading Proof (Website or Selling Platform)
                         </label>
-                        <input type="text" id="wfield-trading_proof" class="select-filter" style="${inputStyle}" 
+                        <input type="text" id="wfield-trading_proof" class="${inputCls}" style="${inputStyle}" 
                                placeholder="Enter website URL or platform name (Optional)" 
                                value="${escapeHtml(tradingProofVal)}"
                                oninput="updateWizardFieldValue('trading_proof', this.value)">
@@ -12448,6 +15029,7 @@ function renderStandardizedProductStep3HTML(product) {
 }
 
 function isCompanySearchMandatoryField(f, product) {
+    if (typeof wizardIsSoleTrader === 'function' && wizardIsSoleTrader()) return false;
     if (!f || !product) return false;
     const label = (f.label || '').toLowerCase();
     const id = (f.id || '').toLowerCase();
@@ -12480,21 +15062,33 @@ function isCompanySearchMandatoryField(f, product) {
 
 function renderSingleWizardFieldHTML(f, product) {
     const p = product || universalOrderWizardState.selectedProduct;
-    const val = universalOrderWizardState.formValues[f.id] !== undefined ? universalOrderWizardState.formValues[f.id] : (f.default_value || '');
+    const val = universalOrderWizardState.formValues[f.id] !== undefined ? universalOrderWizardState.formValues[f.id] : wizardFieldDefault(f);
     const isHidden = shouldHideWizardConditionalField(f);
 
     let inputHTML = '';
     const fieldType = (f.type || 'text').toLowerCase();
-    const inputStyle = "width:100%; box-sizing:border-box; padding:12px 16px; font-size:0.95rem; line-height:1.5; color:var(--color-text-primary); background:#ffffff; border:1px solid #cbd5e1; border-radius:8px; margin-top:6px; outline:none; transition:border-color 0.15s ease, box-shadow 0.15s ease;";
+    const inputCls = 'select-filter wizard-field-input';
+    const inputStyle = wizardStep3InputStyle();
 
     if (fieldType === 'textarea' || fieldType === 'long text') {
-        inputHTML = `<textarea id="wfield-${f.id}" class="select-filter" style="${inputStyle} min-height:95px;" placeholder="${escapeHtml(f.placeholder || '')}" onchange="updateWizardFieldValue('${f.id}', this.value)">${escapeHtml(val)}</textarea>`;
+        inputHTML = `<textarea id="wfield-${f.id}" class="${inputCls}" style="${inputStyle} min-height:95px;" placeholder="${escapeHtml(f.placeholder || '')}" onchange="updateWizardFieldValue('${f.id}', this.value)">${escapeHtml(val)}</textarea>`;
     } else if (fieldType === 'dropdown' || fieldType === 'select') {
         const opts = f.options || [];
         inputHTML = `
-            <select id="wfield-${f.id}" class="select-filter" style="${inputStyle} cursor:pointer;" onchange="updateWizardFieldValue('${f.id}', this.value)">
+            <select id="wfield-${f.id}" class="${inputCls}" style="${inputStyle} cursor:pointer;" onchange="updateWizardFieldValue('${f.id}', this.value)">
                 ${opts.map(o => `<option value="${escapeHtml(o)}" ${val === o ? 'selected' : ''}>${escapeHtml(o)}</option>`).join('')}
             </select>`;
+    } else if (fieldType === 'file') {
+        const files = ((universalOrderWizardState.uploadedDocs || {})[f.id]);
+        const uploads = Array.isArray(files) ? files : (files ? [files] : []);
+        inputHTML = `
+            <div style="margin-top:8px; border:1.5px dashed #cbd5e1; border-radius:14px; padding:16px; background:#f8fafc;">
+                <input type="file" id="wfield-${f.id}" ${f.required ? '' : ''} accept=".png,.jpg,.jpeg,.svg,.webp,.pdf,.zip" style="display:none;" onchange="handleWizardFileUpload('${f.id}', this)">
+                <button type="button" class="btn-secondary" style="padding:8px 14px; font-size:0.84rem;" onclick="document.getElementById('wfield-${f.id}').click()">
+                    ${uploads.length ? 'Replace / add file' : (f.required ? 'Upload file' : 'Upload file (optional)')}
+                </button>
+                ${uploads.map((u) => `<div style="margin-top:8px; font-size:0.82rem; font-weight:600;">${escapeHtml(u.file_name || 'File')}</div>`).join('')}
+            </div>`;
     } else if (fieldType === 'radio') {
         const opts = f.options || ['YES', 'NO'];
         inputHTML = `
@@ -12509,7 +15103,7 @@ function renderSingleWizardFieldHTML(f, product) {
         const inputType = (fieldType === 'email') ? 'email' : (fieldType === 'phone') ? 'tel' : (fieldType === 'number') ? 'number' : (fieldType === 'date') ? 'date' : 'text';
         const isChSearch = isCompanySearchMandatoryField(f, p);
         const chAttr = isChSearch ? ' data-ch-search="true" autocomplete="off"' : '';
-        inputHTML = `<input type="${inputType}" id="wfield-${f.id}" class="select-filter" style="${inputStyle}" value="${escapeHtml(val)}" placeholder="${escapeHtml(f.placeholder || '')}" ${chAttr} autocomplete="off" oninput="updateWizardFieldValue('${f.id}', this.value)">`;
+        inputHTML = `<input type="${inputType}" id="wfield-${f.id}" class="${inputCls}" style="${inputStyle}" value="${escapeHtml(val)}" placeholder="${escapeHtml(f.placeholder || '')}" ${chAttr} autocomplete="off" oninput="updateWizardFieldValue('${f.id}', this.value)">`;
     }
 
     return `
@@ -12535,26 +15129,22 @@ function shouldHideWizardConditionalField(f) {
 function updateWizardFieldValue(fieldId, value) {
     universalOrderWizardState.formValues[fieldId] = value;
     
-    const p = universalOrderWizardState.selectedProduct;
-    if (p && p.form_config) {
-        p.form_config.forEach(f => {
-            if (f.depends_on === fieldId) {
-                const wrap = document.getElementById(`wfield-wrap-${f.id}`);
-                if (wrap) {
-                    const hide = shouldHideWizardConditionalField(f);
-                    wrap.style.display = hide ? 'none' : 'block';
-                }
+    wizardMergedExtraFields().forEach((f) => {
+        if (f.depends_on === fieldId) {
+            const wrap = document.getElementById(`wfield-wrap-${f.id}`);
+            if (wrap) {
+                const hide = shouldHideWizardConditionalField(f);
+                wrap.style.display = hide ? 'none' : 'block';
             }
-        });
-    }
+        }
+    });
 }
 
 function renderWizardRepeatableSections() {
     const container = document.getElementById('wizard-repeatable-sections-container');
     if (!container) return;
 
-    const p = universalOrderWizardState.selectedProduct;
-    const sections = p.repeatable_sections || [];
+    const sections = wizardMergedRepeatableSections();
     if (sections.length === 0) {
         container.innerHTML = '';
         return;
@@ -12621,19 +15211,169 @@ function updateWizardRepeatableFieldValue(sectionId, idx, fieldId, value) {
     }
 }
 
-function validateWizardStep3Fields() {
-    const p = universalOrderWizardState.selectedProduct;
-    if (!p || !p.form_config) return null;
+function wizardFieldValue(...ids) {
+    for (const id of ids) {
+        const val = (universalOrderWizardState.formValues[id] || '').toString().trim();
+        if (val) return val;
+    }
+    return '';
+}
 
-    for (let f of p.form_config) {
-        if (f.required && !shouldHideWizardConditionalField(f)) {
-            const val = (universalOrderWizardState.formValues[f.id] || '').toString().trim();
-            if (!val) {
-                return `Please complete required field: ${f.label}`;
-            }
+function validateWizardStep3Fields() {
+    if (!wizardSelectedProducts().length) return 'Please select at least one product.';
+    const checks = [];
+    if (wizardAnySelectedIsUnregisteredPackage()) {
+        checks.push(
+            [['company_name', 'proposed_company_name', 'desired_company_name', 'registered_company_name', 'business_name'], 'Desired company name'],
+            [['registered_office_address', 'address', 'registered_address'], 'Registered office address'],
+            [['director_name', 'full_name', 'end_client_name'], 'Director name'],
+            [['director_dob', 'dob', 'date_of_birth'], 'Date of birth'],
+            [['nationality', 'director_nationality'], 'Nationality'],
+            [['business_activities', 'sic_code', 'sic_codes'], 'Business activities'],
+            [['home_address', 'director_home_address'], 'Personal address'],
+            [['access_email', 'registered_email', 'end_client_email', 'email'], 'Email'],
+            [['access_email_password', 'email_password', 'service_password'], 'Email password'],
+            [['uk_phone', 'uk_contact_number', 'uk_contact', 'end_client_phone', 'phone'], 'UK phone number'],
+        );
+    }
+    if (wizardNeedsExistingCompanyForm()) {
+        if (wizardIsSoleTrader()) {
+            checks.push(
+                [['company_name', 'proposed_company_name', 'registered_company_name', 'business_name'], 'Trading / business name'],
+                [['director_name', 'full_name', 'end_client_name'], 'Owner / trader name'],
+                [['registered_office_address', 'address'], 'Business address'],
+                [['end_client_email', 'email'], 'Client email address'],
+            );
+        } else {
+            checks.push(
+                [['company_name', 'proposed_company_name', 'registered_company_name', 'business_name'], 'Company name'],
+                [['company_number'], 'Company registration number'],
+                [['director_name', 'full_name', 'end_client_name'], 'Director full name'],
+                [['registered_office_address', 'address'], 'Registered office address'],
+                [['end_client_email', 'email'], 'Client email address'],
+            );
+        }
+        if (!wizardSkipsDirectorDob()) {
+            checks.push([['director_dob', 'dob'], wizardIsSoleTrader() ? 'Date of birth' : 'Director date of birth']);
+        }
+    }
+    if (wizardNeedsWebsiteForm()) {
+        checks.push(
+            [['company_name', 'proposed_company_name', 'business_name'], 'Company name'],
+            [['domain_name', 'website_domain', 'desired_domain'], 'Desired domain'],
+            [['access_email', 'end_client_email', 'email'], 'Email address'],
+            [['access_email_password', 'email_password', 'service_password'], 'Email password'],
+        );
+    }
+    if (wizardNeedsPersonalBankForm()) {
+        checks.push(
+            [['full_name', 'director_name', 'end_client_name'], 'Full name'],
+            [['dob', 'director_dob', 'date_of_birth'], 'Date of birth'],
+            [['home_address', 'director_home_address', 'address'], 'Personal address'],
+            [['end_client_email', 'email'], 'Email address'],
+            [['end_client_phone', 'phone', 'uk_contact'], 'Phone number'],
+        );
+    }
+    if (!checks.length) {
+        checks.push([['company_name', 'proposed_company_name', 'business_name'], 'Client company name']);
+    }
+    for (const [ids, label] of checks) {
+        if (!wizardFieldValue(...ids)) return `Please complete required field: ${label}`;
+    }
+    for (const field of wizardMergedExtraFields()) {
+        if (field.required && !shouldHideWizardConditionalField(field) && !wizardFieldValue(field.id, field.name)) {
+            return `Please complete required field: ${field.label}`;
         }
     }
     return null;
+}
+
+function wizardProductNeedsStandardKycDocs(product) {
+    const text = `${(product && product.name) || ''} ${(product && product.category) || ''}`.toLowerCase();
+    if (/\bad01\b|registered office address|change of registered office|change registered office/.test(text)) {
+        return false;
+    }
+    if (wizardProductIsPersonalBank(product) || /personal physical bank|personal bank/.test(text)) {
+        return false;
+    }
+    if (product && product.needs_kyc_docs === true) return true;
+    if (product && product.needs_kyc_docs === false) return false;
+    const profile = wizardProductFormProfile(product);
+    if (profile === 'website' || profile === 'comms' || profile === 'generic' || profile === 'personal_bank') return false;
+    return ['package', 'bank', 'identity', 'kyc', 'incorporat', 'formation', 'mail forwarding', 'all inclusive', 'tide']
+        .some((needle) => text.includes(needle));
+}
+
+function wizardStandardRequiredDocuments() {
+    return [
+        {
+            id: 'id_document',
+            name: 'ID Document (Passport / Driving Licence / Photo ID)',
+            description: 'Valid passport, national ID, or driving licence (PDF, JPG, PNG, DOC, DOCX).',
+            required: true,
+            allowed_extensions: ['.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx']
+        },
+        {
+            id: 'proof_of_address',
+            name: 'Proof of Address (Utility bill / Bank statement)',
+            description: 'Proof of residential or business address issued within the last 3 months.',
+            required: true,
+            allowed_extensions: ['.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx']
+        },
+        {
+            id: 'additional_documents',
+            name: 'Additional Documents',
+            description: 'Optional extra supporting files for this service (certificates, forms, briefs).',
+            required: false,
+            allowed_extensions: ['.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx', '.zip']
+        }
+    ];
+}
+
+function wizardDocumentRequirements() {
+    const products = wizardSelectedProducts();
+    if (!products.length) return wizardStandardRequiredDocuments();
+    if (products.some((product) => wizardProductNeedsStandardKycDocs(product))) {
+        return wizardStandardRequiredDocuments();
+    }
+    const byId = new Map();
+    products.forEach((product) => {
+        (product.document_requirements || []).forEach((doc) => {
+            const id = String(doc.id || doc.name || '').trim();
+            if (!id) return;
+            if (!byId.has(id)) byId.set(id, { ...doc, id });
+            else if (doc.required) byId.get(id).required = true;
+        });
+    });
+    const merged = Array.from(byId.values());
+    merged.forEach((doc) => {
+        if (String(doc.id || '') === 'additional_documents') doc.required = false;
+    });
+    const noKyc = !products.some((product) => wizardProductNeedsStandardKycDocs(product));
+    const filtered = noKyc
+        ? merged.filter((doc) => !['id_document', 'proof_of_address'].includes(String(doc.id || '')))
+        : merged;
+    return filtered;
+}
+
+function wizardDocUploadCount(docReqId) {
+    const uploadedVal = universalOrderWizardState.uploadedDocs[docReqId];
+    const uploads = Array.isArray(uploadedVal) ? uploadedVal : (uploadedVal ? [uploadedVal] : []);
+    return uploads.length;
+}
+
+function validateWizardStep4Documents() {
+    const missing = wizardDocumentRequirements().filter((doc) => doc.required && wizardDocUploadCount(doc.id) < 1);
+    if (!missing.length) return null;
+    if (wizardSelectedProducts().some((product) => wizardProductNeedsStandardKycDocs(product))) {
+        return `Please upload the required documents: ID and Proof of Address. Missing: ${missing.map((d) => d.name).join('; ')}`;
+    }
+    return `Please upload the required documents. Missing: ${missing.map((d) => d.name).join('; ')}`;
+}
+
+function syncWizardLogoFieldValue() {
+    const names = wizardLogoUploads().map((file) => file.file_name).filter(Boolean);
+    updateWizardFieldValue('logo', names.join(', '));
 }
 
 function removeWizardUploadedDoc(docReqId, index) {
@@ -12646,37 +15386,117 @@ function removeWizardUploadedDoc(docReqId, index) {
     } else {
         delete universalOrderWizardState.uploadedDocs[docReqId];
     }
-    renderWizardStep4Documents();
+    if (docReqId === 'logo') syncWizardLogoFieldValue();
+    if (universalOrderWizardState.currentStep === 3 && document.getElementById('wizard-logo-box')) {
+        renderWizardStep3Form();
+    } else {
+        renderWizardStep4Documents();
+    }
+}
+
+function wizardUploadProgressEls() {
+    return {
+        wrap: document.getElementById('wizard-upload-progress'),
+        label: document.getElementById('wizard-upload-progress-label'),
+        pct: document.getElementById('wizard-upload-progress-pct'),
+        bar: document.getElementById('wizard-upload-progress-bar'),
+    };
+}
+
+function setWizardUploadProgress(percent, labelText) {
+    const els = wizardUploadProgressEls();
+    const value = Math.max(0, Math.min(100, Math.round(percent || 0)));
+    if (els.wrap) els.wrap.style.display = 'block';
+    if (els.label) els.label.textContent = labelText || 'Uploading…';
+    if (els.pct) els.pct.textContent = `${value}%`;
+    if (els.bar) els.bar.style.width = `${value}%`;
+    showWizardError(`${labelText || 'Uploading'} — ${value}%`, false);
+}
+
+function hideWizardUploadProgress() {
+    const els = wizardUploadProgressEls();
+    if (els.wrap) els.wrap.style.display = 'none';
+    if (els.bar) els.bar.style.width = '0%';
+    if (els.pct) els.pct.textContent = '0%';
+}
+
+function setWizardDocRowProgress(docReqId, percent, fileName) {
+    const row = document.getElementById(`wizard-doc-progress-${docReqId}`);
+    const bar = document.getElementById(`wizard-doc-progress-bar-${docReqId}`);
+    const text = document.getElementById(`wizard-doc-progress-text-${docReqId}`);
+    const value = Math.max(0, Math.min(100, Math.round(percent || 0)));
+    if (row) row.style.display = 'block';
+    if (bar) bar.style.width = `${value}%`;
+    if (text) text.textContent = fileName ? `${fileName} — ${value}%` : `${value}%`;
+}
+
+function hideWizardDocRowProgress(docReqId) {
+    const row = document.getElementById(`wizard-doc-progress-${docReqId}`);
+    if (row) row.style.display = 'none';
+}
+
+function uploadWizardFileWithProgress(file, meta, onProgress) {
+    return new Promise((resolve, reject) => {
+        const form = new FormData();
+        form.append('file', file, file.name);
+        form.append('name', file.name);
+        form.append('file_name', file.name);
+        form.append('category', 'Order Documents');
+        form.append('fast', '1');
+        form.append('wizard', '1');
+        if (meta && meta.client_id) form.append('client_id', String(meta.client_id));
+        if (meta && meta.company_id) form.append('company_id', String(meta.company_id));
+        if (meta && meta.order_id) form.append('order_id', String(meta.order_id));
+
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/client/documents/upload', true);
+        xhr.withCredentials = true;
+        const token = localStorage.getItem('brixen_session_token');
+        if (token) xhr.setRequestHeader('Authorization', 'Bearer ' + token);
+
+        xhr.upload.onprogress = (event) => {
+            if (!event.lengthComputable) return;
+            const pct = (event.loaded / event.total) * 100;
+            if (typeof onProgress === 'function') onProgress(pct, event.loaded, event.total);
+        };
+        xhr.onload = () => {
+            let data = {};
+            try {
+                data = JSON.parse(xhr.responseText || '{}');
+            } catch (_) {
+                data = {};
+            }
+            if (xhr.status >= 200 && xhr.status < 300 && (data.status === 'success' || data.doc_id || data.id)) {
+                resolve(data);
+            } else {
+                reject(new Error(data.message || `Upload failed for ${file.name}`));
+            }
+        };
+        xhr.onerror = () => reject(new Error(`Network error uploading ${file.name}`));
+        xhr.onabort = () => reject(new Error(`Upload cancelled for ${file.name}`));
+        xhr.send(form);
+    });
 }
 
 function renderWizardStep4Documents() {
     const container = document.getElementById('wizard-documents-checklist');
     if (!container) return;
 
-    // Standardized must-have 3 document requirements for ALL products
-    const reqs = [
-        {
-            id: 'id_document',
-            name: 'ID Document (Passport / Driving Licence / Photo ID)',
-            description: 'Valid passport or government photo ID (Accepted: PDF, JPG, PNG, DOC, DOCX).',
-            required: true,
-            allowed_extensions: ['.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx']
-        },
-        {
-            id: 'bank_statement',
-            name: 'Bank Statement (Last 3 Months)',
-            description: 'Recent local or UK bank statement issued within the last 90 days.',
-            required: true,
-            allowed_extensions: ['.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx']
-        },
-        {
-            id: 'additional_documents',
-            name: 'Additional Documents & Supporting Files',
-            description: 'Upload any extra client documents, certificates, briefs, or files (Multiple files supported).',
-            required: false,
-            allowed_extensions: ['.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx', '.zip']
-        }
-    ];
+    const reqs = wizardDocumentRequirements();
+    const title = document.getElementById('wizard-docs-title');
+    const lead = document.getElementById('wizard-docs-lead');
+    if (!reqs.length) {
+        if (title) title.textContent = 'No documents needed for this service';
+        if (lead) lead.textContent = 'This product does not need ID, proof of address, or other files.';
+        container.innerHTML = '<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:18px; color:#64748b;">You can continue to review.</div>';
+        return;
+    }
+    if (title) title.textContent = reqs.some((doc) => doc.required) ? 'Upload required documents once' : 'Optional files';
+    if (lead) {
+        lead.textContent = reqs.some((doc) => doc.required)
+            ? 'If you selected several products, we merge the requirements and ask only once.'
+            : 'Nothing here is required. Add a file only if you already have it.';
+    }
 
     container.innerHTML = reqs.map(doc => {
         const uploadedVal = universalOrderWizardState.uploadedDocs[doc.id];
@@ -12713,6 +15533,14 @@ function renderWizardStep4Documents() {
                         </button>
                     </div>
                 </div>
+                <div id="wizard-doc-progress-${doc.id}" style="display:none; margin-top:12px;">
+                    <div style="display:flex; justify-content:space-between; font-size:0.78rem; color:#047857; font-weight:700; margin-bottom:6px;">
+                        <span id="wizard-doc-progress-text-${doc.id}">0%</span>
+                    </div>
+                    <div style="height:8px; background:#d1fae5; border-radius:999px; overflow:hidden;">
+                        <div id="wizard-doc-progress-bar-${doc.id}" style="height:100%; width:0%; background:#10b981; transition:width 0.1s linear;"></div>
+                    </div>
+                </div>
                 ${uploadedFilesHTML ? `<div style="margin-top:10px;">${uploadedFilesHTML}</div>` : ''}
             </div>
         `;
@@ -12724,82 +15552,212 @@ function renderWizardStep4Documents() {
 async function handleWizardFileUpload(docReqId, fileInput) {
     if (!fileInput.files || fileInput.files.length === 0) return;
     const files = Array.from(fileInput.files);
+    const targetClient = universalOrderWizardState.selectedCustomer;
+    const meta = {
+        client_id: targetClient ? targetClient.id : null,
+        company_id: (targetClient && targetClient.company_id) || null,
+        order_id: universalOrderWizardState.draftOrderId || null,
+    };
 
-    showWizardError(`Uploading ${files.length} document file(s)...`, false);
+    if (!universalOrderWizardState.uploadedDocs[docReqId]) {
+        universalOrderWizardState.uploadedDocs[docReqId] = [];
+    } else if (!Array.isArray(universalOrderWizardState.uploadedDocs[docReqId])) {
+        universalOrderWizardState.uploadedDocs[docReqId] = [universalOrderWizardState.uploadedDocs[docReqId]];
+    }
+
+    const totalBytes = files.reduce((sum, file) => sum + (file.size || 0), 0) || files.length;
+    let completedBytes = 0;
+    let failed = null;
+
+    setWizardUploadProgress(0, `Uploading ${files.length} file${files.length > 1 ? 's' : ''}…`);
+    setWizardDocRowProgress(docReqId, 0, files[0] ? files[0].name : '');
 
     try {
-        const targetClient = universalOrderWizardState.selectedCustomer;
-        const headers = { 'Content-Type': 'application/json' };
-        const token = localStorage.getItem('brixen_session_token');
-        if (token) headers['Authorization'] = 'Bearer ' + token;
-
-        if (!universalOrderWizardState.uploadedDocs[docReqId]) {
-            universalOrderWizardState.uploadedDocs[docReqId] = [];
-        } else if (!Array.isArray(universalOrderWizardState.uploadedDocs[docReqId])) {
-            universalOrderWizardState.uploadedDocs[docReqId] = [universalOrderWizardState.uploadedDocs[docReqId]];
-        }
-
-        for (const file of files) {
-            const b64 = await readFileAsBase64(file);
-            const res = await fetch('/api/client/documents/upload', {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: headers,
-                body: JSON.stringify({
-                    name: file.name,
-                    category: 'Order Documents',
-                    file_name: file.name,
-                    file_content_base64: b64,
-                    client_id: targetClient ? targetClient.id : null,
-                    company_id: (targetClient && targetClient.company_id) || null
-                })
+        for (let i = 0; i < files.length; i += 1) {
+            const file = files[i];
+            const fileSize = file.size || 1;
+            const baseCompleted = completedBytes;
+            const data = await uploadWizardFileWithProgress(file, meta, (filePct) => {
+                const overallLoaded = baseCompleted + ((filePct / 100) * fileSize);
+                const overallPct = (overallLoaded / totalBytes) * 100;
+                setWizardUploadProgress(overallPct, `Uploading ${i + 1} of ${files.length}: ${file.name}`);
+                setWizardDocRowProgress(docReqId, overallPct, file.name);
             });
-            const data = await res.json().catch(() => ({}));
-            if (res.ok && (data.status === 'success' || data.doc_id || data.id)) {
-                universalOrderWizardState.uploadedDocs[docReqId].push({
-                    document_id: data.doc_id || data.id || data.document_id,
-                    file_name: file.name,
-                    file_path: data.file_path || '',
-                    status: 'Uploaded'
-                });
-            } else {
-                showWizardError(data.message || `File upload failed for ${file.name}.`);
-            }
+            completedBytes += fileSize;
+            universalOrderWizardState.uploadedDocs[docReqId].push({
+                document_id: data.doc_id || data.id || data.document_id,
+                file_name: file.name,
+                file_path: data.file_path || '',
+                status: 'Uploaded',
+                fast_upload: !!data.fast_upload,
+            });
+            setWizardUploadProgress((completedBytes / totalBytes) * 100, `Uploaded ${i + 1} of ${files.length}`);
+            setWizardDocRowProgress(docReqId, (completedBytes / totalBytes) * 100, file.name);
         }
+        setWizardUploadProgress(100, 'Upload complete');
         hideWizardError();
-        renderWizardStep4Documents();
+        hideWizardUploadProgress();
+        hideWizardDocRowProgress(docReqId);
+        if (docReqId === 'logo') syncWizardLogoFieldValue();
+        if (universalOrderWizardState.currentStep === 3 && document.getElementById('wizard-logo-box')) {
+            renderWizardStep3Form();
+        } else {
+            renderWizardStep4Documents();
+        }
+        fileInput.value = '';
     } catch (err) {
+        failed = err;
         showWizardError('Document upload error: ' + (err.message || err));
+        hideWizardUploadProgress();
+        hideWizardDocRowProgress(docReqId);
+        renderWizardStep4Documents();
+        fileInput.value = '';
     }
+    return failed;
+}
+
+function wizardReviewPick(formValues, keys) {
+    const fv = formValues || {};
+    for (const key of keys) {
+        const val = fv[key];
+        if (val != null && String(val).trim() !== '') return String(val).trim();
+    }
+    return '';
+}
+
+function buildWizardReviewRows(formValues) {
+    const fv = formValues || {};
+    const isPackage = typeof wizardAnySelectedIsUnregisteredPackage === 'function' && wizardAnySelectedIsUnregisteredPackage();
+    const isWebsite = typeof wizardNeedsWebsiteForm === 'function' && wizardNeedsWebsiteForm();
+    const isExisting = typeof wizardNeedsExistingCompanyForm === 'function' && wizardNeedsExistingCompanyForm();
+    const isPersonalBank = typeof wizardNeedsPersonalBankForm === 'function' && wizardNeedsPersonalBankForm();
+    const groups = [];
+    if (isWebsite) {
+        groups.push(
+            { label: 'Company name', keys: ['company_name', 'proposed_company_name', 'business_name'], wide: true },
+            { label: 'Desired domain', keys: ['domain_name', 'website_domain', 'desired_domain'], wide: true },
+            { label: 'Email address', keys: ['access_email', 'end_client_email', 'email'] },
+            { label: 'Email password', keys: ['access_email_password', 'email_password', 'service_password'], secret: true },
+            { label: 'Logo', keys: ['logo'] },
+        );
+    }
+    if (isPackage) {
+        groups.push(
+            { label: 'Desired company name', keys: ['desired_company_name', 'proposed_company_name', 'company_name', 'registered_company_name', 'business_name'], wide: true },
+            { label: 'Registered office address', keys: ['registered_office_address', 'registered_address', 'address'], wide: true },
+            { label: 'Director name', keys: ['director_name', 'full_name', 'end_client_name'] },
+            { label: 'Date of birth', keys: ['director_dob', 'date_of_birth', 'dob'] },
+            { label: 'Nationality', keys: ['nationality', 'director_nationality'] },
+            { label: 'Business activities', keys: ['business_activities', 'sic_code', 'sic_codes'], wide: true },
+            { label: 'UK phone number', keys: ['uk_phone', 'uk_contact_number', 'uk_contact', 'end_client_phone', 'phone', 'contact_phone'] },
+            { label: 'Personal address', keys: ['home_address', 'director_home_address'], wide: true },
+            { label: 'Email', keys: ['access_email', 'registered_email', 'end_client_email', 'email'] },
+            { label: 'Email password', keys: ['access_email_password', 'email_password', 'service_password'], secret: true },
+        );
+    } else if (isExisting) {
+        groups.push(
+            { label: 'Business type', keys: ['business_type', 'company_type'] },
+            { label: (typeof wizardIsSoleTrader === 'function' && wizardIsSoleTrader()) ? 'Trading / business name' : 'Company name', keys: ['company_name', 'proposed_company_name', 'registered_company_name', 'business_name', 'desired_company_name'], wide: true },
+            ...((typeof wizardIsSoleTrader === 'function' && wizardIsSoleTrader()) ? [] : [{ label: 'Company number', keys: ['company_number'] }]),
+            { label: (typeof wizardIsSoleTrader === 'function' && wizardIsSoleTrader()) ? 'Owner / trader name' : 'Director name', keys: ['director_name', 'full_name', 'end_client_name'] },
+            ...(typeof wizardSkipsDirectorDob === 'function' && wizardSkipsDirectorDob() ? [] : [{ label: 'Date of birth', keys: ['director_dob', 'dob', 'date_of_birth'] }]),
+            { label: (typeof wizardIsSoleTrader === 'function' && wizardIsSoleTrader()) ? 'Business address' : 'Registered office address', keys: ['registered_office_address', 'address', 'registered_address'], wide: true },
+            { label: 'Email', keys: ['end_client_email', 'email', 'access_email', 'registered_email'] },
+            { label: 'Phone', keys: ['end_client_phone', 'phone', 'uk_contact', 'uk_phone', 'uk_contact_number', 'contact_phone'] },
+            { label: 'Trading proof', keys: ['trading_proof'], wide: true },
+        );
+    }
+    if (isPersonalBank) {
+        groups.push(
+            { label: 'Full name', keys: ['full_name', 'director_name', 'end_client_name'] },
+            { label: 'Date of birth', keys: ['dob', 'director_dob', 'date_of_birth'] },
+            { label: 'Personal address', keys: ['home_address', 'director_home_address', 'address'], wide: true },
+            { label: 'Email', keys: ['end_client_email', 'email'] },
+            { label: 'Phone', keys: ['end_client_phone', 'phone', 'uk_contact'] },
+        );
+    }
+
+    const used = new Set();
+    const seenValues = new Set();
+    const rows = [];
+    const normVal = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    groups.forEach((group) => {
+        const value = wizardReviewPick(fv, group.keys);
+        if (!value) return;
+        group.keys.forEach((k) => used.add(k));
+        const nv = group.secret ? `__secret__:${normVal(value)}` : normVal(value);
+        if (seenValues.has(nv)) return;
+        seenValues.add(nv);
+        rows.push({
+            label: group.label,
+            value: group.secret ? '••••••••' : value,
+            wide: !!group.wide,
+        });
+    });
+
+    Object.keys(fv).forEach((key) => {
+        if (used.has(key)) return;
+        const value = String(fv[key] == null ? '' : fv[key]).trim();
+        if (!value) return;
+        const lower = key.toLowerCase();
+        const isSecret = /(password|secret|token)/.test(lower);
+        const nv = isSecret ? `__secret__:${normVal(value)}` : normVal(value);
+        if (seenValues.has(nv)) return;
+        seenValues.add(nv);
+        if (isSecret) {
+            rows.push({ label: key.replace(/_/g, ' '), value: '••••••••', wide: false });
+            return;
+        }
+        rows.push({
+            label: key.replace(/_/g, ' '),
+            value,
+            wide: value.length > 60,
+        });
+    });
+    return rows;
+}
+
+function renderWizardReviewSummaryHtml(formValues) {
+    const rows = buildWizardReviewRows(formValues);
+    if (!rows.length) {
+        return '<div class="wizard-review-empty">No order specifications entered yet.</div>';
+    }
+    return rows.map((row) => `
+        <div class="wizard-review-cell${row.wide ? ' is-wide' : ''}">
+            <span class="wizard-review-label">${escapeHtml(row.label)}</span>
+            <span class="wizard-review-value">${escapeHtml(row.value)}</span>
+        </div>
+    `).join('');
 }
 
 function renderWizardStep5Review() {
-    const p = universalOrderWizardState.selectedProduct;
+    const products = wizardSelectedProducts();
+    const p = products[0];
     const cust = universalOrderWizardState.selectedCustomer;
     if (!p) return;
 
-    const price = parseFloat(p.price || 0);
-    const vat = roundToTwo(price * 0.20);
-    const total = roundToTwo(price + vat);
+    const summary = wizardSelectionSummary();
+    const price = summary.price;
+    const total = roundToTwo(price);
 
     const activeUser = getCurrentUser();
     const isB2B = (cust && (cust.is_b2b === 1 || cust.client_type === 'B2B')) || (activeUser && (activeUser.is_b2b === 1 || activeUser.client_type === 'B2B'));
-    document.getElementById('review-service-category').textContent = (p.category || 'Service').toUpperCase();
-    document.getElementById('review-service-name').textContent = p.name;
+    document.getElementById('review-service-category').textContent = (summary.category || 'Service').toUpperCase();
+    document.getElementById('review-service-name').textContent = summary.title;
     if (isB2B) {
         document.getElementById('review-total-price').textContent = 'Custom B2B Rate';
         document.getElementById('review-vat-breakdown').textContent = 'Admin will assign custom rate upon order review.';
     } else {
         document.getElementById('review-total-price').textContent = `£${total.toFixed(2)}`;
-        document.getElementById('review-vat-breakdown').textContent = `Subtotal £${price.toFixed(2)} + VAT (20%) £${vat.toFixed(2)}`;
+        document.getElementById('review-vat-breakdown').textContent = 'No VAT';
     }
     const custIdentity = document.getElementById('review-customer-identity');
     if (custIdentity) {
-        if (isB2B && cust.b2b_id) {
-            custIdentity.innerHTML = `Customer: <strong>${escapeHtml(cust.full_name || 'Client')}</strong> (${escapeHtml(cust.email)}) • <span class="status-badge active">${escapeHtml(cust.b2b_id)}</span>`;
-        } else {
-            custIdentity.innerHTML = `Customer: <strong>${escapeHtml((cust || {}).full_name || 'Client')}</strong> (${escapeHtml((cust || {}).email || '')})`;
-        }
+        const productLine = summary.names.map((name) => escapeHtml(name)).join(' · ');
+        const who = (isB2B && cust && cust.b2b_id)
+            ? `Customer: <strong>${escapeHtml(cust.full_name || 'Client')}</strong> (${escapeHtml(cust.email)}) • <span class="status-badge active">${escapeHtml(cust.b2b_id)}</span>`
+            : `Customer: <strong>${escapeHtml((cust || {}).full_name || 'Client')}</strong> (${escapeHtml((cust || {}).email || '')})`;
+        custIdentity.innerHTML = `${who}<div style="margin-top:4px;">${productLine}</div>`;
     }
 
     const fieldsErr = validateWizardStep3Fields();
@@ -12815,22 +15773,30 @@ function renderWizardStep5Review() {
     }
 
     const summaryContainer = document.getElementById('review-form-values-summary');
+    const docsErr = validateWizardStep4Documents();
+    const docsIcon = document.getElementById('review-docs-check-icon');
+    const docsTitle = document.getElementById('review-docs-check-title');
+    const docsSub = document.getElementById('review-docs-check-sub');
+    const requiredDocs = wizardDocumentRequirements().filter((d) => d.required);
+    const uploadedRequired = requiredDocs.filter((d) => wizardDocUploadCount(d.id) > 0).length;
+    if (docsSub) docsSub.textContent = `${uploadedRequired} of ${requiredDocs.length} required files attached`;
+    if (docsErr) {
+        if (docsIcon) { docsIcon.setAttribute('data-lucide', 'alert-circle'); docsIcon.style.color = 'var(--color-danger)'; }
+        if (docsTitle) docsTitle.textContent = 'Required documents missing';
+    } else {
+        if (docsIcon) { docsIcon.setAttribute('data-lucide', 'check-circle'); docsIcon.style.color = 'var(--color-success)'; }
+        if (docsTitle) docsTitle.textContent = 'Required Documents Uploaded';
+    }
     if (summaryContainer) {
-        const entries = Object.entries(universalOrderWizardState.formValues);
-        if (entries.length === 0) {
-            summaryContainer.innerHTML = '<div style="color:var(--color-text-muted);">Standard catalog order specifications.</div>';
-        } else {
-            summaryContainer.innerHTML = entries.map(([k, v]) => `
-                <div><span style="color:var(--color-text-muted);">${escapeHtml(k)}:</span> <strong>${escapeHtml(v)}</strong></div>
-            `).join('');
-        }
+        summaryContainer.innerHTML = renderWizardReviewSummaryHtml(universalOrderWizardState.formValues);
     }
 
     safeCreateIcons();
 }
 
 async function saveUniversalOrderDraft() {
-    const p = universalOrderWizardState.selectedProduct;
+    const products = wizardSelectedProducts();
+    const p = products[0];
     const cust = universalOrderWizardState.selectedCustomer;
     if (!p) {
         showWizardError('Please select a product first.');
@@ -12839,7 +15805,8 @@ async function saveUniversalOrderDraft() {
 
     const payload = {
         service_id: p.id,
-        service_name: p.name,
+        service_name: products.length === 1 ? p.name : 'Multiple Products',
+        line_items: products.map((item) => ({ product_name: item.name, price: parseFloat(item.price || 0) || 0 })),
         client_id: (cust || {}).id,
         current_step: universalOrderWizardState.currentStep,
         form_values: universalOrderWizardState.formValues,
@@ -12869,7 +15836,8 @@ async function saveUniversalOrderDraft() {
 }
 
 async function submitUniversalOrder() {
-    const p = universalOrderWizardState.selectedProduct;
+    const products = wizardSelectedProducts();
+    const p = products[0];
     const cust = universalOrderWizardState.selectedCustomer;
 
     if (!cust) {
@@ -12889,16 +15857,28 @@ async function submitUniversalOrder() {
         jumpToWizardStep(3);
         return;
     }
+    const docsErr = validateWizardStep4Documents();
+    if (docsErr) {
+        showWizardError(docsErr);
+        jumpToWizardStep(4);
+        return;
+    }
 
     const submitBtn = document.getElementById('wizard-btn-submit');
     if (submitBtn) submitBtn.disabled = true;
 
     const isClient = currentUser && currentUser.role === 'CLIENT';
     const clientId = cust.id;
+    const isB2B = (cust.is_b2b === 1 || cust.client_type === 'B2B');
 
     const payload = {
         service_id: p.id,
-        service_name: p.name,
+        service_name: products.length === 1 ? p.name : 'Multiple Products',
+        line_items: products.map((item) => ({
+            product_name: item.name,
+            price: isB2B ? 0 : (parseFloat(item.price || 0) || 0),
+            category_name: item.category || '',
+        })),
         client_id: clientId,
         company_email: cust.email,
         form_values: universalOrderWizardState.formValues,
@@ -12918,7 +15898,7 @@ async function submitUniversalOrder() {
         });
         const data = await res.json().catch(() => ({}));
         if (res.ok && data.status === 'success') {
-            closeUniversalOrderWizard();
+            closeUniversalOrderWizard(true);
             alert(`🎉 Order ${data.order?.order_number || data.order_number || 'created'} submitted successfully!`);
             if (typeof loadAdminOrders === 'function') loadAdminOrders();
             if (typeof loadClientOrders === 'function') loadClientOrders();
@@ -12993,13 +15973,18 @@ function roundToTwo(num) {
 /* ====================================================
    DEDICATED CREATE CUSTOMER ENGINE
    ==================================================== */
-function openCreateCustomerModal() {
+function openCreateCustomerModal(preferredType) {
     const modal = document.getElementById('modal-create-customer');
     if (!modal) return;
 
     const form = document.getElementById('form-create-customer');
     if (form) form.reset();
-    onCustomerTypeCardChange('Normal');
+    const type = String(preferredType || '').toLowerCase() === 'b2b' ? 'B2B' : 'Normal';
+    const radios = document.getElementsByName('create_cust_type');
+    for (const r of radios) {
+        r.checked = (r.value === type);
+    }
+    onCustomerTypeCardChange(type);
     
     const errBanner = document.getElementById('create-customer-error-banner');
     if (errBanner) errBanner.style.display = 'none';
@@ -13078,15 +16063,29 @@ async function submitCreateCustomerForm(event) {
             body: JSON.stringify(payload)
         });
         const data = await res.json().catch(() => ({}));
+        const created = !!(data.user && data.user.id);
+        const ok = (res.ok && data.status === 'success') || (created && data.status !== 'error');
 
-        if (res.ok && data.status === 'success') {
+        if (ok) {
             closeCreateCustomerModal();
-            alert(`🎉 Customer account created successfully! (${custType === 'B2B' ? 'B2B Customer: ' + (data.user?.b2b_id || 'B2B Account') : 'Normal Customer'})`);
-            if (typeof loadAdminCustomers === 'function') loadAdminCustomers();
+            alert(data.message || (custType === 'B2B'
+                ? `B2B customer created. They can sign in to the CRM portal with this email and password${data.user?.b2b_id ? ' (' + data.user.b2b_id + ')' : ''}.`
+                : 'Normal customer created. They can sign in on the Brixen website with this email and password.'));
+            if (typeof loadAdminCustomers === 'function') {
+                if (custType === 'B2B') adminCustomerTypeFilter = 'B2B';
+                else adminCustomerTypeFilter = 'Normal';
+                loadAdminCustomers();
+                setAdminCustomerTypeFilter(adminCustomerTypeFilter);
+            }
         } else {
+            if (created && typeof loadAdminCustomers === 'function') {
+                loadAdminCustomers();
+            }
             if (errBanner) {
-                errBanner.textContent = data.message || 'Could not create customer.';
+                errBanner.textContent = data.message || `Could not create customer${res.status ? ' (' + res.status + ')' : ''}.`;
                 errBanner.style.display = 'block';
+            } else {
+                alert(data.message || 'Could not create customer.');
             }
         }
     } catch (err) {
@@ -13374,6 +16373,9 @@ function setupCompaniesHouseLiveSearch(inputEl, options = {}) {
         const query = (e.target.value || '').trim();
         clearTimeout(chSearchDebounceTimer);
         searchRequestId += 1;
+        if (inputEl.getAttribute('data-ch-existing-company') === 'true') {
+            if (query.length < 2) renderWizardExistingCompanyHint(null);
+        }
         if (query.length < 2) {
             hideDropdown();
             return;
@@ -13392,10 +16394,22 @@ function setupCompaniesHouseLiveSearch(inputEl, options = {}) {
                 if (requestId !== searchRequestId || inputEl.dataset.chSuppressSearch === '1') return;
                 if (!res.ok || data.status !== 'success' || !data.companies || !data.companies.length) {
                     dropdown.innerHTML = '<div style="padding:14px; font-size:0.88rem; color:#94a3b8; text-align:center;">No companies found on Companies House.</div>';
+                    if (inputEl.getAttribute('data-ch-existing-company') === 'true') {
+                        renderWizardExistingCompanyHint({
+                            status: 'not_found',
+                            message: 'Not on Companies House — keep the name you typed and fill company number, director, and address manually below.',
+                        });
+                    }
                     setTimeout(() => {
                         if (requestId === searchRequestId) hideDropdown();
                     }, 2000);
                     return;
+                }
+                if (inputEl.getAttribute('data-ch-existing-company') === 'true') {
+                    renderWizardExistingCompanyHint({
+                        status: 'checking',
+                        message: `${data.companies.length} match${data.companies.length === 1 ? '' : 'es'} — select one or enter details manually.`,
+                    });
                 }
 
                 dropdown.innerHTML = data.companies.map((c) => {
@@ -13437,7 +16451,19 @@ function setupCompaniesHouseLiveSearch(inputEl, options = {}) {
                         hideDropdown();
 
                         inputEl.value = selectedName;
-                        if (typeof updateWizardFieldValue === 'function') {
+                        if (inputEl.getAttribute('data-ch-existing-company') === 'true') {
+                            applyWizardExistingCompanyFromCh({
+                                name: selectedName,
+                                number: selectedNum,
+                                director: selectedDirector,
+                                office: selectedOffice,
+                            });
+                            renderWizardExistingCompanyHint({
+                                status: 'checking',
+                                message: 'Refreshing live Companies House record…',
+                            });
+                            refreshWizardExistingCompanyFromLiveCh(selectedNum);
+                        } else if (typeof updateWizardFieldValue === 'function') {
                             updateWizardFieldValue('company_name', selectedName);
                             updateWizardFieldValue('proposed_company_name', selectedName);
                             if (selectedNum) updateWizardFieldValue('company_number', selectedNum);
@@ -13456,14 +16482,16 @@ function setupCompaniesHouseLiveSearch(inputEl, options = {}) {
                         const dirEl = document.getElementById('wfield-director_name');
                         const officeEl = document.getElementById('wfield-registered_office_address');
 
-                        setFieldValue(numEl, selectedNum);
-                        setFieldValue(dirEl, selectedDirector);
-                        setFieldValue(officeEl, selectedOffice);
+                        if (inputEl.getAttribute('data-ch-existing-company') !== 'true') {
+                            setFieldValue(numEl, selectedNum);
+                            setFieldValue(dirEl, selectedDirector);
+                            setFieldValue(officeEl, selectedOffice);
+                        }
                         flashFilled(numEl);
                         flashFilled(dirEl);
                         flashFilled(officeEl);
 
-                        if (typeof universalOrderWizardState !== 'undefined') {
+                        if (inputEl.getAttribute('data-ch-existing-company') !== 'true' && typeof universalOrderWizardState !== 'undefined') {
                             universalOrderWizardState.formValues['company_name'] = selectedName;
                             universalOrderWizardState.formValues['proposed_company_name'] = selectedName;
                             if (selectedNum) universalOrderWizardState.formValues['company_number'] = selectedNum;
@@ -13522,10 +16550,378 @@ function setupCompaniesHouseLiveSearch(inputEl, options = {}) {
     });
 }
 
+let wizardCompanyNameCheckTimer = null;
+let wizardCompanyNameCheckSeq = 0;
+
+function renderWizardExistingCompanyHint(payload) {
+    const el = document.getElementById('wizard-ch-existing-company-status');
+    if (!el) return;
+    if (!payload) {
+        el.innerHTML = '';
+        el.className = 'wizard-ch-name-status';
+        return;
+    }
+    const status = payload.status || '';
+    let cls = 'wizard-ch-name-status';
+    if (status === 'matched') cls += ' wizard-ch-name-status--ok';
+    else if (status === 'not_found') cls += ' wizard-ch-name-status--muted';
+    else if (status === 'checking') cls += ' wizard-ch-name-status--pending';
+    else cls += ' wizard-ch-name-status--muted';
+    el.className = cls;
+    el.innerHTML = payload.message ? `<span>${escapeHtml(payload.message)}</span>` : '';
+}
+
+function applyWizardExistingCompanyFromCh({ name, number, director, office, confirmationDue, sicCodes }) {
+    const setGroup = (fieldIds, keys, value) => {
+        const text = String(value || '').trim();
+        if (!text) return;
+        keys.forEach((key) => updateWizardFieldValue(key, text));
+        fieldIds.forEach((id) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.value = text;
+        });
+    };
+    setGroup([], ['company_name', 'proposed_company_name'], name);
+    const nameEl = document.getElementById('wfield-company_name');
+    if (nameEl && String(name || '').trim()) nameEl.value = String(name || '').trim();
+    setGroup(['wfield-company_number'], ['company_number'], number);
+    setGroup(
+        ['wfield-director_name'],
+        ['director_name', 'full_name', 'end_client_name'],
+        director,
+    );
+    setGroup(
+        ['wfield-registered_office_address'],
+        ['registered_office_address', 'address'],
+        office,
+    );
+    setGroup(['wfield-cs_period'], ['cs_period'], confirmationDue);
+    setGroup(['wfield-business_activities', 'wfield-sic_code'], ['business_activities', 'sic_code', 'sic_codes'], sicCodes);
+    if (typeof universalOrderWizardState !== 'undefined') {
+        if (String(name || '').trim()) {
+            universalOrderWizardState.formValues.company_name = String(name || '').trim();
+            universalOrderWizardState.formValues.proposed_company_name = String(name || '').trim();
+        }
+    }
+}
+
+let wizardChLiveRefreshSeq = 0;
+
+async function refreshWizardExistingCompanyFromLiveCh(explicitNumber) {
+    const number = String(
+        explicitNumber
+        || (document.getElementById('wfield-company_number') || {}).value
+        || (typeof universalOrderWizardState !== 'undefined' && universalOrderWizardState.formValues && universalOrderWizardState.formValues.company_number)
+        || ''
+    ).trim();
+    if (!number || number.replace(/\s+/g, '').length < 6) {
+        renderWizardExistingCompanyHint({
+            status: 'not_found',
+            message: 'Enter a Companies House number, then refresh for the live record.',
+        });
+        return null;
+    }
+    const requestId = ++wizardChLiveRefreshSeq;
+    renderWizardExistingCompanyHint({
+        status: 'checking',
+        message: 'Refreshing live Companies House record…',
+    });
+    try {
+        const res = await fetch(`/api/admin/companies/ch-live?number=${encodeURIComponent(number)}`, { credentials: 'same-origin' });
+        const data = await res.json().catch(() => ({}));
+        if (requestId !== wizardChLiveRefreshSeq) return null;
+        if (!res.ok || data.status !== 'success' || !data.company) {
+            renderWizardExistingCompanyHint({
+                status: 'not_found',
+                message: data.message || 'Could not refresh this company from Companies House.',
+            });
+            return null;
+        }
+        const company = data.company;
+        applyWizardExistingCompanyFromCh({
+            name: company.name,
+            number: company.company_number,
+            director: company.director || company.director_name,
+            office: company.reg_office,
+            confirmationDue: company.confirmation_next_due,
+            sicCodes: company.sic_codes,
+        });
+        const due = company.confirmation_next_due ? ` · CS due ${company.confirmation_next_due}` : '';
+        const overdue = company.confirmation_overdue ? ' (overdue)' : '';
+        renderWizardExistingCompanyHint({
+            status: 'matched',
+            message: `Live Companies House: ${company.name} · ${company.status || 'Active'}${due}${overdue}.`,
+        });
+        return company;
+    } catch (_err) {
+        if (requestId !== wizardChLiveRefreshSeq) return null;
+        renderWizardExistingCompanyHint({
+            status: 'not_found',
+            message: 'Could not reach Companies House. Try Refresh again.',
+        });
+        return null;
+    }
+}
+
+function renderWizardCompanyNameAvailability(payload) {
+    const el = document.getElementById('wizard-company-name-availability');
+    if (!el) return;
+    if (!payload) {
+        el.innerHTML = '';
+        el.className = 'wizard-ch-name-status';
+        return;
+    }
+    const status = payload.status || '';
+    let cls = 'wizard-ch-name-status';
+    if (status === 'taken') cls += ' wizard-ch-name-status--bad';
+    else if (status === 'likely_available' || status === 'dissolved_match') cls += ' wizard-ch-name-status--ok';
+    else if (status === 'checking') cls += ' wizard-ch-name-status--pending';
+    else cls += ' wizard-ch-name-status--muted';
+    const msg = escapeHtml(payload.message || '');
+    el.className = cls;
+    el.innerHTML = msg ? `<span>${msg}</span>` : '';
+}
+
+function setWizardRegisteredAddressValue(address) {
+    const text = String(address || '').trim();
+    const el = document.getElementById('wfield-registered_office_address');
+    if (el) el.value = text;
+    updateWizardFieldValue('registered_office_address', text);
+    updateWizardFieldValue('address', text);
+    updateWizardFieldValue('registered_address', text);
+    syncWizardPersonalAddressFromRegisteredIfNeeded();
+}
+
+function syncWizardPersonalAddressFromRegisteredIfNeeded() {
+    const cb = document.getElementById('wfield-same-as-registered');
+    if (!cb || !cb.checked) return;
+    const registered = (
+        (document.getElementById('wfield-registered_office_address') || {}).value
+        || (universalOrderWizardState.formValues || {}).registered_office_address
+        || ''
+    ).trim();
+    const homeEl = document.getElementById('wfield-home_address');
+    if (homeEl) homeEl.value = registered;
+    updateWizardFieldValue('home_address', registered);
+    updateWizardFieldValue('director_home_address', registered);
+    updateWizardFieldValue('same_as_registered_address', true);
+}
+
+function onWizardRegisteredAddressInput(value) {
+    updateWizardFieldValue('registered_office_address', value);
+    updateWizardFieldValue('address', value);
+    updateWizardFieldValue('registered_address', value);
+    syncWizardPersonalAddressFromRegisteredIfNeeded();
+}
+
+function onWizardSameAsRegisteredToggle(checked) {
+    updateWizardFieldValue('same_as_registered_address', !!checked);
+    const homeEl = document.getElementById('wfield-home_address');
+    if (checked) {
+        syncWizardPersonalAddressFromRegisteredIfNeeded();
+        if (homeEl) {
+            homeEl.readOnly = true;
+            homeEl.classList.add('wizard-field-readonly');
+        }
+    } else if (homeEl) {
+        homeEl.readOnly = false;
+        homeEl.classList.remove('wizard-field-readonly');
+    }
+}
+
+function renderWizardPostcodeStatus(payload) {
+    const el = document.getElementById('wizard-postcode-status');
+    if (!el) return;
+    if (!payload) {
+        el.innerHTML = '';
+        el.className = 'wizard-ch-name-status';
+        return;
+    }
+    const status = payload.status || '';
+    let cls = 'wizard-ch-name-status';
+    if (status === 'ok') cls += ' wizard-ch-name-status--ok';
+    else if (status === 'error') cls += ' wizard-ch-name-status--bad';
+    else if (status === 'pending') cls += ' wizard-ch-name-status--pending';
+    else cls += ' wizard-ch-name-status--muted';
+    el.className = cls;
+    el.innerHTML = payload.message ? `<span>${escapeHtml(payload.message)}</span>` : '';
+}
+
+function renderWizardPostcodeResults(addresses) {
+    const box = document.getElementById('wizard-postcode-results');
+    if (!box) return;
+    const list = Array.isArray(addresses) ? addresses.filter(Boolean) : [];
+    if (!list.length) {
+        box.hidden = true;
+        box.innerHTML = '';
+        return;
+    }
+    box.hidden = false;
+    box.innerHTML = list.map((addr, idx) => (
+        `<button type="button" class="wizard-postcode-option" data-addr-idx="${idx}">${escapeHtml(addr)}</button>`
+    )).join('');
+    box.querySelectorAll('.wizard-postcode-option').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const idx = Number(btn.getAttribute('data-addr-idx'));
+            const picked = list[idx] || btn.textContent || '';
+            setWizardRegisteredAddressValue(picked);
+            box.hidden = true;
+            box.innerHTML = '';
+            renderWizardPostcodeStatus({ status: 'ok', message: 'Address selected — you can still edit it.' });
+        });
+    });
+}
+
+async function lookupWizardRegisteredPostcode() {
+    const postcodeEl = document.getElementById('wfield-registered-postcode');
+    const postcode = String((postcodeEl && postcodeEl.value) || '').trim();
+    if (!postcode) {
+        renderWizardPostcodeStatus({ status: 'error', message: 'Enter a UK postcode first.' });
+        return;
+    }
+    updateWizardFieldValue('registered_postcode', postcode);
+    renderWizardPostcodeStatus({ status: 'pending', message: 'Looking up addresses…' });
+    renderWizardPostcodeResults([]);
+    try {
+        const res = await fetch(`/api/uk-postcode/addresses?postcode=${encodeURIComponent(postcode)}`, { credentials: 'same-origin' });
+        const data = await res.json().catch(() => ({}));
+        const addresses = data.addresses || [];
+        if (!res.ok && !addresses.length) {
+            renderWizardPostcodeStatus({ status: 'error', message: data.message || 'Postcode lookup failed.' });
+            return;
+        }
+        if (data.postcode && postcodeEl) postcodeEl.value = data.postcode;
+        renderWizardPostcodeResults(addresses);
+        if (addresses.length === 1) {
+            setWizardRegisteredAddressValue(addresses[0]);
+        }
+        renderWizardPostcodeStatus({
+            status: addresses.length ? 'ok' : 'muted',
+            message: data.message || (addresses.length ? 'Select an address below.' : 'No addresses found.'),
+        });
+    } catch (_err) {
+        renderWizardPostcodeStatus({ status: 'error', message: 'Could not reach postcode lookup.' });
+    }
+}
+
+function initWizardFormationAddressHelpers() {
+    const cb = document.getElementById('wfield-same-as-registered');
+    if (cb) onWizardSameAsRegisteredToggle(cb.checked);
+    const postcodeEl = document.getElementById('wfield-registered-postcode');
+    if (postcodeEl && postcodeEl.dataset.postcodeBound !== '1') {
+        postcodeEl.dataset.postcodeBound = '1';
+        postcodeEl.addEventListener('keydown', (evt) => {
+            if (evt.key === 'Enter') {
+                evt.preventDefault();
+                lookupWizardRegisteredPostcode();
+            }
+        });
+    }
+}
+
+function onWizardCompanyNameInput(value) {
+    const q = String(value || '').trim();
+    clearTimeout(wizardCompanyNameCheckTimer);
+    if (q.length < 3) {
+        renderWizardCompanyNameAvailability(q ? { status: 'too_short', message: 'Enter at least 3 characters to check availability.' } : null);
+        return;
+    }
+    renderWizardCompanyNameAvailability({ status: 'checking', message: 'Checking Companies House…' });
+    const seq = ++wizardCompanyNameCheckSeq;
+    wizardCompanyNameCheckTimer = setTimeout(async () => {
+        try {
+            const res = await fetch(`/api/companies-house/name-availability?q=${encodeURIComponent(q)}`, { credentials: 'same-origin' });
+            const data = await res.json();
+            if (seq !== wizardCompanyNameCheckSeq) return;
+            if (data.status === 'error') {
+                renderWizardCompanyNameAvailability({ status: 'error', message: data.message || 'Could not check name.' });
+                return;
+            }
+            renderWizardCompanyNameAvailability(data);
+        } catch (_err) {
+            if (seq === wizardCompanyNameCheckSeq) {
+                renderWizardCompanyNameAvailability({ status: 'error', message: 'Could not reach Companies House.' });
+            }
+        }
+    }, 450);
+}
+
+function initWizardFormationCompanyNameCheck() {
+    if (!wizardAnySelectedIsUnregisteredPackage()) return;
+    const input = document.getElementById('wfield-company_name');
+    if (!input || input.dataset.nameCheckBound === '1') return;
+    input.dataset.nameCheckBound = '1';
+    if (String(input.value || '').trim().length >= 3) onWizardCompanyNameInput(input.value);
+}
+
+function setupWizardSicLiveSearch(inputEl) {
+    if (!inputEl || inputEl.dataset.sicBound === '1') return;
+    inputEl.dataset.sicBound = '1';
+    let debounce = null;
+    let seq = 0;
+    const parent = inputEl.parentElement;
+    if (!parent) return;
+    parent.style.position = parent.style.position || 'relative';
+    const dropdown = document.createElement('div');
+    dropdown.className = 'ch-live-dropdown wizard-sic-dropdown';
+    dropdown.hidden = true;
+    parent.appendChild(dropdown);
+
+    const hide = () => { dropdown.hidden = true; dropdown.innerHTML = ''; };
+
+    inputEl.addEventListener('input', () => {
+        clearTimeout(debounce);
+        const q = String(inputEl.value || '').trim();
+        if (q.length < 2) {
+            hide();
+            return;
+        }
+        const requestId = ++seq;
+        debounce = setTimeout(async () => {
+            try {
+                const res = await fetch(`/api/companies-house/sic-codes?q=${encodeURIComponent(q)}&limit=12`, { credentials: 'same-origin' });
+                const data = await res.json();
+                if (requestId !== seq) return;
+                const items = data.items || [];
+                if (!items.length) {
+                    hide();
+                    return;
+                }
+                dropdown.innerHTML = items.map((item) => {
+                    const label = escapeHtml(item.label || `${item.code} — ${item.description}`);
+                    return `<button type="button" class="ch-live-option" data-label="${label}">${label}</button>`;
+                }).join('');
+                dropdown.hidden = false;
+                dropdown.querySelectorAll('.ch-live-option').forEach((btn) => {
+                    btn.addEventListener('click', () => {
+                        const picked = btn.getAttribute('data-label') || btn.textContent || '';
+                        inputEl.value = picked;
+                        updateWizardFieldValue('business_activities', picked);
+                        updateWizardFieldValue('sic_code', picked);
+                        hide();
+                    });
+                });
+            } catch (_err) {
+                hide();
+            }
+        }, 280);
+    });
+
+    document.addEventListener('click', (evt) => {
+        if (!parent.contains(evt.target)) hide();
+    });
+}
+
+function initWizardSicActivitiesSearch() {
+    document.querySelectorAll('input[data-sic-search="true"]').forEach((input) => setupWizardSicLiveSearch(input));
+}
+
 function initAllCompaniesHouseLiveSearch() {
     const inputs = document.querySelectorAll('input[data-ch-search="true"], input[data-ch-live="true"]');
     inputs.forEach((input) => {
         if (input.id === 'set-company-name' || input.id === 'filter-admin-company-search' || input.id === 'filter-client-company-search') return;
+        if (input.dataset.chNameCheck === 'true') return;
         setupCompaniesHouseLiveSearch(input);
     });
 }

@@ -66,7 +66,7 @@
             if (app) app.setAttribute('hidden', '');
         });
     </script>
-    <link rel="stylesheet" href="/static/css/styles.css?v=3100.0">
+    <link rel="stylesheet" href="/static/css/styles.css?v=3254.11">
     <script src="/static/js/vendor/lucide.min.js"></script>
     <script src="/static/js/vendor/chart.umd.min.js"></script>
 </head>
@@ -85,15 +85,8 @@
         <aside id="client-sidebar" class="sidebar" hidden style="display: none;">
             <div class="sidebar-logo">
                 <div class="sidebar-brand-wrap">
-                    <div class="sidebar-brand-icon">
-                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M12 2L3 7V12C3 17.52 7.02 21.74 12 22C16.98 21.74 21 17.52 21 12V7L12 2Z" fill="#0066ff"/>
-                            <path d="M9 12L11.2 14.2L15.5 9.5" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
-                        </svg>
-                    </div>
-                    <div class="sidebar-brand-text">
-                        <span class="brand-title">Brixen Consultants</span>
-                        <span class="brand-subtitle">CLIENT PORTAL</span>
+                    <div class="sidebar-brand-logo-wrap">
+                        <img src="/static/img/brixen-logo.png" alt="Brixen Consultants" class="sidebar-brand-logo">
                     </div>
                 </div>
                 <button type="button" class="sidebar-close-btn" onclick="closeMobileNav()" aria-label="Close menu"><i data-lucide="x"></i></button>
@@ -161,15 +154,8 @@
         <aside id="admin-sidebar" class="sidebar" hidden style="display: none;">
             <div class="sidebar-logo">
                 <div class="sidebar-brand-wrap">
-                    <div class="sidebar-brand-icon">
-                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M12 2L3 7V12C3 17.52 7.02 21.74 12 22C16.98 21.74 21 17.52 21 12V7L12 2Z" fill="#0066ff"/>
-                            <path d="M9 12L11.2 14.2L15.5 9.5" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
-                        </svg>
-                    </div>
-                    <div class="sidebar-brand-text">
-                        <span class="brand-title">Brixen Consultants</span>
-                        <span class="brand-subtitle">ADMIN PORTAL</span>
+                    <div class="sidebar-brand-logo-wrap">
+                        <img src="/static/img/brixen-logo.png" alt="Brixen Consultants" class="sidebar-brand-logo">
                     </div>
                 </div>
                 <button type="button" class="sidebar-close-btn" onclick="closeMobileNav()" aria-label="Close menu"><i data-lucide="x"></i></button>
@@ -186,28 +172,35 @@
                         <li class="nav-item" data-view="admin-orders"><a href="#admin-orders"><i data-lucide="package-check"></i> <span>Orders Manager</span></a></li>
                         <li class="nav-item" data-view="admin-tasks"><a href="#admin-tasks"><i data-lucide="list-checks"></i> <span>Tasks &amp; Team</span></a></li>
                         <li class="nav-item" data-view="admin-services"><a href="#admin-services"><i data-lucide="layers"></i> <span>Services Catalog</span></a></li>
-                        <li class="nav-item" data-view="admin-invoices"><a href="#admin-invoices"><i data-lucide="receipt"></i> <span>Invoices Manager</span></a></li>
+                        <li class="nav-item" data-view="admin-invoices"><a href="#admin-payments" onclick="event.preventDefault();switchView('admin-invoices')"><i data-lucide="wallet"></i> <span>Payment/Invoices</span></a></li>
                         <li class="nav-item" data-view="admin-documents"><a href="#admin-documents" onclick="event.preventDefault();switchView('admin-documents')"><i data-lucide="file-check"></i> <span>Documents Review</span></a></li>
                         <li class="nav-item" data-view="admin-intake"><a href="#admin-intake" onclick="event.preventDefault();switchView('admin-intake')"><i data-lucide="file-search"></i> <span>Smart Intake</span></a></li>
-                        <li class="nav-item" data-view="admin-incentives"><a href="#admin-incentives" onclick="event.preventDefault();switchView('admin-incentives')"><i data-lucide="award"></i> <span>Team Incentives &amp; Grades</span></a></li>
-                        <li class="nav-item" data-view="staff-dashboard"><a href="#staff-dashboard" onclick="event.preventDefault();switchView('staff-dashboard')"><i data-lucide="layout-dashboard"></i> <span>My Performance Dashboard</span></a></li>
                         <li class="nav-item" data-view="admin-logs"><a href="#admin-logs"><i data-lucide="history"></i> <span>Audit Logs</span></a></li>
                         <li class="nav-item" data-view="admin-settings"><a href="#admin-settings"><i data-lucide="settings"></i> <span>System Settings</span></a></li>
                         <li class="nav-item" data-view="client-profile"><a href="#profile"><i data-lucide="user-cog"></i> <span>Profile &amp; Password</span></a></li>
+                    </ul>
+                </div>
+
+                <div class="nav-group">
+                    <div class="nav-group-title">Performance Dashboard</div>
+                    <ul class="nav-list">
+                        <li class="nav-item" data-view="staff-dashboard"><a href="#staff-dashboard" onclick="event.preventDefault();switchView('staff-dashboard')"><i data-lucide="layout-dashboard"></i> <span>Performance</span></a></li>
                     </ul>
                 </div>
             </nav>
 
             <div class="sidebar-user">
                 <div class="user-info-wrapper">
-                    <div class="user-avatar" id="admin-user-avatar" style="background: #ef4444;"></div>
+                    <div class="user-avatar" id="admin-user-avatar" aria-hidden="true"></div>
                     <div class="user-details">
                         <div class="name" id="admin-user-name"></div>
                         <div class="role-badge" id="admin-user-role"></div>
                     </div>
                 </div>
-                <button type="button" class="btn-logout" title="Sign Out" onclick="handleLogout()">
-                    <i data-lucide="log-out" style="pointer-events:none;"></i>
+                <button type="button" class="btn-logout" title="Sign out" aria-label="Sign out" onclick="handleLogout()">
+                    <span class="btn-logout-icon" aria-hidden="true">
+                        <i data-lucide="log-out"></i>
+                    </span>
                 </button>
             </div>
         </aside>
@@ -361,6 +354,9 @@
                             <li class="top-menu-item" data-view="admin-documents">
                                 <a href="#admin-documents" onclick="event.preventDefault();switchView('admin-documents')"><i data-lucide="folder-lock"></i> <span>Documents</span></a>
                             </li>
+                            <li class="top-menu-item" data-view="admin-invoices" id="top-menu-payments">
+                                <a href="#admin-payments" onclick="event.preventDefault();switchView('admin-invoices')"><i data-lucide="wallet"></i> <span>Payment/Invoices</span></a>
+                            </li>
                             <li class="top-menu-item" data-view="admin-intake">
                                 <a href="#admin-intake" onclick="event.preventDefault();switchView('admin-intake')"><i data-lucide="file-search"></i> <span>Smart Intake</span></a>
                             </li>
@@ -382,6 +378,9 @@
                     <button type="button" id="theme-toggle-btn" class="theme-toggle-btn" onclick="toggleTheme()" aria-label="Toggle theme" title="Toggle Light or Dark Mode">
                         <i data-lucide="sun" id="theme-toggle-icon" style="width:16px; height:16px;"></i>
                         <span id="theme-toggle-text">Light</span>
+                    </button>
+                    <button type="button" id="header-money-eye" class="star-money-eye header-money-eye" data-money-eye hidden onclick="toggleMoneyVisible()" title="Show or hide figures" aria-label="Show or hide profit and revenue">
+                        <i data-lucide="eye-off"></i>
                     </button>
 
                     <div id="notification-bell-wrap" style="position:relative; display:none;">
@@ -428,31 +427,49 @@
                 <div id="app-flash-notice" style="display:none; padding:10px 14px; border-radius:8px; background:#ecfdf5; color:#047857; font-size:0.82rem; font-weight:600; margin-bottom:12px;" role="status"></div>
 
                 <!-- 0. LOGIN VIEW -->
-                <div id="view-login" class="view-panel login-panel is-active" style="display:none; max-width: 440px; margin: 40px auto;">
-                    <div class="apple-card">
-                        <div class="apple-card-intro">
-                            <img src="/static/img/brixen-logo.png" alt="Brixen Consultants">
-                            <h2>Sign in</h2>
-                            <p>Use the email and password for your account. Team accounts are created by an administrator — there is no public signup.</p>
-                        </div>
-                        <form id="login-form" class="apple-form" onsubmit="handleFormLogin(event)">
-                            <div class="apple-field">
-                                <label for="login-email">Email address</label>
-                                <input type="email" id="login-email" required placeholder="you@company.com" autocomplete="username">
+                <div id="view-login" class="view-panel login-split-panel is-active" style="display:none;">
+                    <div class="login-split">
+                        <aside class="login-hero" aria-hidden="false">
+                            <div class="login-hero-brand">
+                                <span class="login-hero-logo-pill">
+                                    <img src="/static/img/brixen-logo.png" alt="Brixen Consultants">
+                                </span>
                             </div>
-                            <div class="apple-field">
-                                <label for="login-password">Password</label>
-                                <input type="password" id="login-password" required placeholder="••••••••" autocomplete="current-password">
+                            <div class="login-hero-copy">
+                                <h1>Grow your practice with the Brixen portal</h1>
+                                <p>Access your CRM dashboard to track orders, manage clients, and run compliance work in one place.</p>
                             </div>
-                            <div class="login-form-options" style="display: flex; justify-content: space-between; align-items: center; margin: 12px 0 16px 0; font-size: 0.85rem;">
-                                <label class="show-password-checkbox-label" style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer; color: var(--color-text-secondary); user-select: none;">
-                                    <input type="checkbox" id="login-show-password" onchange="toggleLoginPasswordVisibility()"> Show password
-                                </label>
-                                <a href="javascript:void(0)" class="forgot-password-link" style="color: var(--color-primary); font-weight: 600; text-decoration: none;" onclick="openForgotPasswordModal(event)">Forgot password?</a>
+                            <p class="login-hero-foot">&copy; 2026 Brixen Consultants Ltd. All rights reserved.</p>
+                        </aside>
+                        <section class="login-form-pane">
+                            <div class="login-form-inner">
+                                <div class="login-form-intro">
+                                    <h2>Portal Login</h2>
+                                    <p>Enter your credentials to access your portal</p>
+                                </div>
+                                <form id="login-form" class="login-split-form" onsubmit="handleFormLogin(event)">
+                                    <div class="login-field">
+                                        <label for="login-email">Email Address</label>
+                                        <input type="email" id="login-email" required placeholder="you@company.com" autocomplete="username">
+                                    </div>
+                                    <div class="login-field">
+                                        <label for="login-password">Password</label>
+                                        <input type="password" id="login-password" required placeholder="••••••••" autocomplete="current-password">
+                                    </div>
+                                    <div class="login-form-options">
+                                        <label class="show-password-checkbox-label">
+                                            <input type="checkbox" id="login-show-password" onchange="toggleLoginPasswordVisibility()"> Show password
+                                        </label>
+                                        <a href="javascript:void(0)" class="forgot-password-link" onclick="openForgotPasswordModal(event)">Forgot password?</a>
+                                    </div>
+                                    <div id="login-error-msg" class="apple-form-error" style="display: none;"></div>
+                                    <button type="submit" class="btn-login-primary">Login to Dashboard</button>
+                                </form>
+                                <div class="login-divider"><span>New here?</span></div>
+                                <a class="btn-login-secondary" href="https://brixenconsultants.com/" target="_blank" rel="noopener">Visit Brixen website</a>
+                                <p class="login-form-note">Staff and B2B clients sign in here. Normal website customers use <a href="https://brixenconsultants.com/my-account/" target="_blank" rel="noopener">My Account</a>.</p>
                             </div>
-                            <div id="login-error-msg" class="apple-form-error" style="display: none;"></div>
-                            <button type="submit" class="btn-primary btn-block">Sign In</button>
-                        </form>
+                        </section>
                     </div>
                 </div>
 
@@ -461,8 +478,6 @@
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>Orders</h1>
-                            <div class="page-kicker">Client Portal</div>
-                            <p>Track your orders and view purchase history.</p>
                         </div>
                         <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                             <button class="btn-primary" onclick="openUniversalOrderWizard()">
@@ -525,7 +540,6 @@
                     <div class="tracker-section-header">
                         <div>
                             <h2>Order History</h2>
-                            <p>Click any order to view details and services.</p>
                         </div>
                         <div class="active-orders-pill" id="orders-count-label">0 Orders</div>
                     </div>
@@ -581,24 +595,61 @@
                         <section class="portal-home-welcome" aria-labelledby="portal-home-hello">
                             <p class="portal-home-date" id="portal-home-date"></p>
                             <h1 class="portal-home-hello" id="portal-home-hello"></h1>
-                            <p class="portal-home-lede">Welcome back to your Brixen Client Portal.</p>
-                            <p class="portal-home-sub">Manage your businesses, orders, documents and services from one place.</p>
+                        </section>
+
+                        <section id="portal-home-empty" class="portal-home-empty" hidden>
+                            <div class="portal-empty-art" aria-hidden="true">
+                                <svg viewBox="0 0 220 180" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <ellipse cx="110" cy="158" rx="78" ry="12" fill="#E8EEF7"/>
+                                    <rect x="38" y="58" width="144" height="92" rx="18" fill="#F8FBFF" stroke="#D7E2F0" stroke-width="2"/>
+                                    <rect x="52" y="74" width="52" height="38" rx="8" fill="#EEF4FF" stroke="#C9D8EE"/>
+                                    <rect x="116" y="74" width="52" height="16" rx="6" fill="#F4E7C3"/>
+                                    <rect x="116" y="96" width="36" height="8" rx="4" fill="#E6EDF6"/>
+                                    <rect x="116" y="110" width="28" height="8" rx="4" fill="#E6EDF6"/>
+                                    <circle cx="172" cy="46" r="18" fill="#FFF6D8" stroke="#E8C96A"/>
+                                    <path d="M172 34v24M160 46h24" stroke="#E0B84A" stroke-width="2" stroke-linecap="round"/>
+                                    <path d="M64 128c8-18 18-28 28-28s18 12 22 28" stroke="#3BA37A" stroke-width="3" stroke-linecap="round"/>
+                                    <circle cx="86" cy="96" r="5" fill="#7BC39A"/>
+                                    <circle cx="98" cy="104" r="4" fill="#4E9D78"/>
+                                    <path d="M28 42c8-2 12 6 12 6s2-9 10-8" stroke="#C9A227" stroke-width="2" stroke-linecap="round"/>
+                                    <path d="M188 88c7-1 10 5 10 5s2-8 9-7" stroke="#C9A227" stroke-width="2" stroke-linecap="round"/>
+                                    <circle cx="48" cy="36" r="3" fill="#C9A227"/>
+                                    <circle cx="196" cy="64" r="2.5" fill="#C9A227"/>
+                                </svg>
+                            </div>
+                            <div class="portal-empty-copy">
+                                <h2>Nothing on the desk just yet</h2>
+                                <div class="portal-empty-chips">
+                                    <span>Companies</span>
+                                    <span>Orders</span>
+                                    <span>Documents</span>
+                                    <span>Support</span>
+                                </div>
+                                <div class="portal-empty-actions">
+                                    <button type="button" class="btn-primary" onclick="openUploadDocumentModal()"><i data-lucide="sparkles"></i> Upload a document</button>
+                                    <button type="button" class="btn-secondary" onclick="event.preventDefault();switchView('client-support')">Say hello to support</button>
+                                </div>
+                            </div>
                         </section>
 
                         <section class="portal-home-overview" aria-label="Quick overview">
                             <button type="button" class="portal-overview-card" onclick="event.preventDefault();switchView('client-companies')">
+                                <span class="portal-overview-icon" aria-hidden="true"><i data-lucide="building-2"></i></span>
                                 <span class="portal-overview-label">My businesses</span>
                                 <span class="portal-overview-value" id="dash-card-businesses">—</span>
                             </button>
                             <button type="button" class="portal-overview-card" onclick="event.preventDefault();switchView('client-orders')">
+                                <span class="portal-overview-icon" aria-hidden="true"><i data-lucide="package"></i></span>
                                 <span class="portal-overview-label">Active orders</span>
                                 <span class="portal-overview-value" id="dash-card-orders">—</span>
                             </button>
                             <button type="button" class="portal-overview-card" onclick="event.preventDefault();switchView('client-documents')">
+                                <span class="portal-overview-icon" aria-hidden="true"><i data-lucide="file-text"></i></span>
                                 <span class="portal-overview-label">Documents</span>
                                 <span class="portal-overview-value" id="dash-card-documents">—</span>
                             </button>
                             <div class="portal-overview-card" id="dash-card-pending-wrap">
+                                <span class="portal-overview-icon" aria-hidden="true"><i data-lucide="bell"></i></span>
                                 <span class="portal-overview-label">Pending actions</span>
                                 <span class="portal-overview-value" id="dash-card-pending">—</span>
                             </div>
@@ -658,15 +709,14 @@
                             <div class="portfolio-title-icon" aria-hidden="true"><i data-lucide="building-2"></i></div>
                             <div>
                                 <h1>Company Registered<span style="display:none">Business Portfolio</span></h1>
-                                <p>Your full company portfolio — click any company to view details. Website registrations appear after the company name is confirmed.</p>
                             </div>
                         </div>
                         <div class="portfolio-count-pill" id="portfolio-company-count">0 UK</div>
                     </div>
                     <div class="portfolio-filter-bar" role="tablist" aria-label="Company registration filter">
                         <button type="button" data-company-reg-scope="client" data-company-reg-filter="attention" onclick="setCompanyRegFilter('client', 'attention')">Attention <span data-count>0</span></button>
-                        <button type="button" class="is-active" data-company-reg-scope="client" data-company-reg-filter="all" onclick="setCompanyRegFilter('client', 'all')">All <span data-count>0</span></button>
-                        <button type="button" data-company-reg-scope="client" data-company-reg-filter="ch" onclick="setCompanyRegFilter('client', 'ch')">Companies House <span data-count>0</span></button>
+                        <button type="button" data-company-reg-scope="client" data-company-reg-filter="all" onclick="setCompanyRegFilter('client', 'all')">All <span data-count>0</span></button>
+                        <button type="button" class="is-active" data-company-reg-scope="client" data-company-reg-filter="ch" onclick="setCompanyRegFilter('client', 'ch')">Companies House <span data-count>0</span></button>
                         <button type="button" data-company-reg-scope="client" data-company-reg-filter="pending" onclick="setCompanyRegFilter('client', 'pending')">Not registered <span data-count>0</span></button>
                     </div>
                     <div id="client-attention-banner" class="portfolio-attention-banner" hidden></div>
@@ -674,29 +724,44 @@
                 </div>
 
                 <div id="view-client-accountancy" class="view-panel" style="display: none;">
-                    <div class="page-title-row">
-                        <div class="page-title-text">
-                            <h1>Accountancy</h1>
-                            <p>See identity, PSC, registered office, and yearly accounts status for your companies.</p>
+                    <div class="portfolio-page-head">
+                        <div class="portfolio-title-wrap">
+                            <div class="portfolio-title-icon" aria-hidden="true"><i data-lucide="calculator"></i></div>
+                            <div>
+                                <h1>Accountancy</h1>
+                            </div>
                         </div>
                     </div>
-                    <div id="client-accountancy-error" class="dash-banner-error" style="display:none;" role="alert"></div>
-                    <div class="data-table-container">
-                        <table class="data-table">
-                            <thead>
-                                <tr>
-                                    <th>Company</th>
-                                    <th>Address</th>
-                                    <th>IDV</th>
-                                    <th>PSC</th>
-                                    <th>Year end</th>
-                                    <th>Due</th>
-                                    <th>Status</th>
-                                    <th>Action</th>
-                                </tr>
-                            </thead>
-                            <tbody id="client-accountancy-table-body"></tbody>
-                        </table>
+                    <div class="portfolio-filter-bar accountancy-mode-bar accountancy-inner-tabs" role="tablist" aria-label="Accountancy sections">
+                        <button type="button" class="is-active" data-accountancy-pane="filing" data-accountancy-scope="client">Filing status</button>
+                        <button type="button" data-accountancy-pane="accounts" data-accountancy-scope="client">Company Accounts</button>
+                        <button type="button" data-accountancy-pane="hmrc" data-accountancy-scope="client">HMRC</button>
+                    </div>
+                    <div id="client-accountancy-pane-filing" class="accountancy-pane">
+                        <div id="client-accountancy-error" class="accounts-file-note is-error" style="display:none;" role="alert"></div>
+                        <div class="data-table-container">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Company</th>
+                                        <th>Address</th>
+                                        <th>IDV</th>
+                                        <th>PSC</th>
+                                        <th>Year end</th>
+                                        <th>Due</th>
+                                        <th>Status</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="client-accountancy-table-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div id="client-accountancy-pane-accounts" class="accountancy-pane" hidden>
+                        <div id="client-accounts-root" class="accounts-file-root" data-scope="client"></div>
+                    </div>
+                    <div id="client-accountancy-pane-hmrc" class="accountancy-pane" hidden>
+                        <div id="client-hmrc-root" class="accounts-file-root" data-scope="client"></div>
                     </div>
                 </div>
 
@@ -707,7 +772,6 @@
                             <div class="portfolio-title-icon" aria-hidden="true"><i data-lucide="building-2"></i></div>
                             <div>
                                 <h1>Company Registered</h1>
-                                <p>Website formation orders wait here until you confirm the company name. Named companies become cards. Add older companies that were registered before the portal.</p>
                             </div>
                         </div>
                         <div class="portfolio-page-actions">
@@ -718,8 +782,8 @@
                     </div>
                     <div class="portfolio-filter-bar" role="tablist" aria-label="Company registration filter">
                         <button type="button" data-company-reg-scope="admin" data-company-reg-filter="attention" onclick="setCompanyRegFilter('admin', 'attention')">Attention <span data-count>0</span></button>
-                        <button type="button" class="is-active" data-company-reg-scope="admin" data-company-reg-filter="all" onclick="setCompanyRegFilter('admin', 'all')">All <span data-count>0</span></button>
-                        <button type="button" data-company-reg-scope="admin" data-company-reg-filter="ch" onclick="setCompanyRegFilter('admin', 'ch')">Companies House <span data-count>0</span></button>
+                        <button type="button" data-company-reg-scope="admin" data-company-reg-filter="all" onclick="setCompanyRegFilter('admin', 'all')">All <span data-count>0</span></button>
+                        <button type="button" class="is-active" data-company-reg-scope="admin" data-company-reg-filter="ch" onclick="setCompanyRegFilter('admin', 'ch')">Companies House <span data-count>0</span></button>
                         <button type="button" data-company-reg-scope="admin" data-company-reg-filter="pending" onclick="setCompanyRegFilter('admin', 'pending')">Not registered <span data-count>0</span></button>
                     </div>
                     <div class="lifecycle-toolbar portfolio-bulk-toolbar" id="admin-companies-toolbar">
@@ -738,40 +802,57 @@
                 </div>
 
                 <div id="view-admin-accountancy" class="view-panel" style="display: none;">
-                    <div class="page-title-row">
-                        <div class="page-title-text">
-                            <h1>Accountancy</h1>
-                            <p>Post bank statements into the cash book, complete UK Companies House checks, then file yearly accounts.</p>
+                    <div class="portfolio-page-head">
+                        <div class="portfolio-title-wrap">
+                            <div class="portfolio-title-icon" aria-hidden="true"><i data-lucide="calculator"></i></div>
+                            <div>
+                                <h1>Accountancy</h1>
+                            </div>
                         </div>
-                        <button type="button" class="btn-primary" onclick="openFileAccountsModal()"><i data-lucide="file-plus"></i> File accounts</button>
                     </div>
-                    <div class="stats-grid accountancy-stats" style="margin-bottom:18px;">
-                        <div class="stat-card"><div class="stat-info"><div class="label">Overdue</div><div class="value" id="accountancy-stat-overdue">0</div></div></div>
-                        <div class="stat-card"><div class="stat-info"><div class="label">Due in 60 days</div><div class="value" id="accountancy-stat-due">0</div></div></div>
-                        <div class="stat-card"><div class="stat-info"><div class="label">In progress</div><div class="value" id="accountancy-stat-progress">0</div></div></div>
-                        <div class="stat-card"><div class="stat-info"><div class="label">Issues</div><div class="value" id="accountancy-stat-issues">0</div></div></div>
-                        <div class="stat-card"><div class="stat-info"><div class="label">Filed</div><div class="value" id="accountancy-stat-filed">0</div></div></div>
+                    <div class="portfolio-filter-bar accountancy-mode-bar accountancy-inner-tabs" role="tablist" aria-label="Accountancy sections">
+                        <button type="button" class="is-active" data-accountancy-pane="filing" data-accountancy-scope="admin">Filing status</button>
+                        <button type="button" data-accountancy-pane="accounts" data-accountancy-scope="admin">Company Accounts</button>
+                        <button type="button" data-accountancy-pane="hmrc" data-accountancy-scope="admin">HMRC</button>
                     </div>
-                    <div id="adm-accountancy-error" class="dash-banner-error" style="display:none;" role="alert"></div>
-                    <div class="data-table-container">
-                        <table class="data-table">
-                            <thead>
-                                <tr>
-                                    <th>Company</th>
-                                    <th>Owner</th>
-                                    <th>Address</th>
-                                    <th>IDV</th>
-                                    <th>PSC</th>
-                                    <th>Issues</th>
-                                    <th>Year end</th>
-                                    <th>Due</th>
-                                    <th>Type</th>
-                                    <th>Status</th>
-                                    <th>Action</th>
-                                </tr>
-                            </thead>
-                            <tbody id="adm-accountancy-table-body"></tbody>
-                        </table>
+                    <div id="admin-accountancy-pane-filing" class="accountancy-pane">
+                        <div class="accountancy-filing-toolbar">
+                            <button type="button" class="btn-primary" onclick="openFileAccountsModal()"><i data-lucide="file-plus"></i> File accounts</button>
+                        </div>
+                        <div class="stats-grid accountancy-stats">
+                            <div class="stat-card"><div class="stat-info"><div class="label">Overdue</div><div class="value" id="accountancy-stat-overdue">0</div></div></div>
+                            <div class="stat-card"><div class="stat-info"><div class="label">Due in 60 days</div><div class="value" id="accountancy-stat-due">0</div></div></div>
+                            <div class="stat-card"><div class="stat-info"><div class="label">In progress</div><div class="value" id="accountancy-stat-progress">0</div></div></div>
+                            <div class="stat-card"><div class="stat-info"><div class="label">Issues</div><div class="value" id="accountancy-stat-issues">0</div></div></div>
+                            <div class="stat-card"><div class="stat-info"><div class="label">Filed</div><div class="value" id="accountancy-stat-filed">0</div></div></div>
+                        </div>
+                        <div id="adm-accountancy-error" class="accounts-file-note is-error" style="display:none;" role="alert"></div>
+                        <div class="data-table-container">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Company</th>
+                                        <th>Owner</th>
+                                        <th>Address</th>
+                                        <th>IDV</th>
+                                        <th>PSC</th>
+                                        <th>Issues</th>
+                                        <th>Year end</th>
+                                        <th>Due</th>
+                                        <th>Type</th>
+                                        <th>Status</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="adm-accountancy-table-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div id="admin-accountancy-pane-accounts" class="accountancy-pane" hidden>
+                        <div id="admin-accounts-root" class="accounts-file-root" data-scope="admin"></div>
+                    </div>
+                    <div id="admin-accountancy-pane-hmrc" class="accountancy-pane" hidden>
+                        <div id="admin-hmrc-root" class="accounts-file-root" data-scope="admin"></div>
                     </div>
                 </div>
 
@@ -780,7 +861,6 @@
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>Addresses</h1>
-                            <p>Registered Office, Trading, and Virtual Office address subscriptions.</p>
                         </div>
                     </div>
                     <div class="data-table-container">
@@ -805,7 +885,6 @@
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>Invoices</h1>
-                            <p>View billing history, payment receipts, and VAT statements.</p>
                         </div>
                     </div>
                     <div class="data-table-container">
@@ -830,7 +909,6 @@
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>Payment History & Receipts</h1>
-                            <p>Track processed transactions, Stripe payment methods, and tax invoices.</p>
                         </div>
                     </div>
                     <div class="data-table-container">
@@ -856,7 +934,6 @@
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>Documents Vault</h1>
-                            <p>Upload, download, and review corporate certificates & KYC files.</p>
                         </div>
                         <button class="btn-primary" onclick="openUploadDocumentModal()"><i data-lucide="upload"></i> Upload Document</button>
                     </div>
@@ -882,7 +959,6 @@
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>Corporate Services Catalogue</h1>
-                            <p>Explore official UK company formation, compliance, and legal address services.</p>
                         </div>
                     </div>
                     <div id="services-cards-grid" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap:20px; margin-top:16px;">
@@ -895,7 +971,6 @@
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>Order Support</h1>
-                            <p>Submit inquiries and communicate directly with corporate staff.</p>
                         </div>
                         <button class="btn-primary" onclick="openNewTicketModal()"><i data-lucide="plus-circle"></i> New Support Ticket</button>
                     </div>
@@ -921,7 +996,6 @@
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>Messages & Advisory Inbox</h1>
-                            <p>Direct communication thread with your assigned Brixen corporate advisor.</p>
                         </div>
                     </div>
                     <div id="messages-container" class="messages-layout" style="display:grid; grid-template-columns: 300px 1fr; gap:20px; min-height:450px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:16px;">
@@ -942,7 +1016,6 @@
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>My Profile &amp; Password</h1>
-                            <p>Update your contact details or change the password you use to sign in.</p>
                         </div>
                     </div>
                     <div class="modal-card" style="max-width:800px; margin:0;">
@@ -1011,13 +1084,15 @@
 
                     <div class="star-dash-header">
                         <div class="star-dash-welcome">
-                            <h1 id="star-greeting-title">Good Morning, <span id="star-user-name">Admin</span></h1>
-                            <p>Your performance summary this week</p>
+                            <h1 id="star-greeting-title">Welcome, <span id="star-user-name">Admin</span></h1>
+                            <p id="star-dash-summary-label">Your performance summary this month</p>
                         </div>
                         <div class="star-dash-header-controls">
-                            <div class="star-date-pill">
+                            <div class="star-date-pill star-month-filter-wrap">
                                 <i data-lucide="calendar" style="width:14px; height:14px; color:var(--color-text-muted);"></i>
-                                <span id="star-current-date-label">09/12/2026</span>
+                                <select id="star-dashboard-month" class="select-filter star-month-filter" onchange="onStarDashboardMonthChange()" aria-label="Filter dashboard by month">
+                                    <option value="">This month</option>
+                                </select>
                             </div>
                             <button type="button" class="btn-primary" style="padding: 8px 16px; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 6px;" onclick="openUniversalOrderWizard()">
                                 <i data-lucide="plus" style="width:16px; height:16px;"></i> New Order
@@ -1033,23 +1108,23 @@
                         </div>
                         <div class="star-metric-item">
                             <div class="star-metric-label">Sales Revenue</div>
-                            <div class="star-metric-value" id="star-metric-revenue">—</div>
+                            <div class="star-metric-value is-money-hidden" id="star-metric-revenue" data-money-value data-home-money-value>—</div>
                         </div>
                         <div class="star-metric-item">
                             <div class="star-metric-label">Total Products</div>
-                            <div class="star-metric-value" id="star-metric-products">10</div>
+                            <div class="star-metric-value" id="star-metric-products">—</div>
                         </div>
                         <div class="star-metric-item">
                             <div class="star-metric-label">Total Customers</div>
                             <div class="star-metric-value" id="star-metric-customers">—</div>
                         </div>
                         <div class="star-metric-item">
-                            <div class="star-metric-label">Average Price</div>
-                            <div class="star-metric-value" id="star-metric-avgprice">—</div>
+                            <div class="star-metric-label">Total Turnover</div>
+                            <div class="star-metric-value is-money-hidden" id="star-metric-turnover" data-money-value data-home-money-value>—</div>
                         </div>
                         <div class="star-metric-item">
-                            <div class="star-metric-label">Total Turnover</div>
-                            <div class="star-metric-value" id="star-metric-turnover">—</div>
+                            <div class="star-metric-label">Net Profit</div>
+                            <div class="star-metric-value is-money-hidden" id="star-metric-profit" data-money-value>—</div>
                         </div>
                     </div>
 
@@ -1065,7 +1140,7 @@
                                     <option value="year">This year</option>
                                 </select>
                             </div>
-                            <div class="star-chart-container" style="height: 280px; position: relative;">
+                            <div class="star-chart-container money-chart-sensitive" style="height: 280px; position: relative;">
                                 <canvas id="star-revenue-bar-canvas" aria-label="Revenue Analytics Bar Chart"></canvas>
                             </div>
                         </div>
@@ -1096,7 +1171,7 @@
                             <div class="star-card-head">
                                 <div>
                                     <h3 class="star-card-title">Sales Trend</h3>
-                                    <div class="star-trend-legend" style="display:flex; gap:16px; margin-top:6px; font-size:0.78rem; font-weight:600;">
+                                    <div class="star-trend-legend" id="star-trend-legend" style="display:flex; gap:16px; margin-top:6px; font-size:0.78rem; font-weight:600;">
                                         <span style="color:#2563eb;">● Online Payment</span>
                                         <span style="color:#38bdf8;">● Offline Sales</span>
                                     </div>
@@ -1113,30 +1188,7 @@
                                 <h3 class="star-card-title">Top Performer</h3>
                             </div>
                             <div class="star-performers-list" id="star-performers-list">
-                                <div class="star-performer-item">
-                                    <img src="/static/img/apple-touch-icon.png" class="star-performer-avatar" alt="Eleanor Finch">
-                                    <div class="star-performer-info">
-                                        <div class="star-performer-name">Eleanor Finch</div>
-                                        <div class="star-performer-email">eleanor.finch@brixenconsultant.co.uk</div>
-                                    </div>
-                                    <span class="status-badge active">Senior Manager</span>
-                                </div>
-                                <div class="star-performer-item">
-                                    <img src="/static/img/apple-touch-icon.png" class="star-performer-avatar" alt="Marcus Sterling">
-                                    <div class="star-performer-info">
-                                        <div class="star-performer-name">Marcus Sterling</div>
-                                        <div class="star-performer-email">marcus.sterling@brixenconsultant.co.uk</div>
-                                    </div>
-                                    <span class="status-badge info">Orders Lead</span>
-                                </div>
-                                <div class="star-performer-item">
-                                    <img src="/static/img/apple-touch-icon.png" class="star-performer-avatar" alt="Sophia Montgomery">
-                                    <div class="star-performer-info">
-                                        <div class="star-performer-name">Sophia Montgomery</div>
-                                        <div class="star-performer-email">sophia.m@brixenconsultant.co.uk</div>
-                                    </div>
-                                    <span class="status-badge info">Compliance Specialist</span>
-                                </div>
+                                <div class="star-performer-item" style="justify-content:center; color:var(--text-muted); font-size:0.85rem;">Loading team performance…</div>
                             </div>
                         </div>
                     </div>
@@ -1147,7 +1199,6 @@
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>Admin Orders Manager</h1>
-                            <p>Every website and CRM order is here. After a customer asks for a change, open that order and update company name, email, director, address, package, or price.</p>
                         </div>
                         <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                             <button class="btn-primary" onclick="openUniversalOrderWizard()">
@@ -1164,7 +1215,7 @@
                         <div class="stat-card"><div class="stat-info"><div class="label">Pending</div><div class="value" id="adm-ord-stat-pending">—</div></div></div>
                         <div class="stat-card"><div class="stat-info"><div class="label">In Progress</div><div class="value" id="adm-ord-stat-progress">—</div></div></div>
                         <div class="stat-card"><div class="stat-info"><div class="label">Completed</div><div class="value" id="adm-ord-stat-completed">—</div></div></div>
-                        <div class="stat-card" data-admin-revenue hidden><div class="stat-info"><div class="label">Total Revenue</div><div class="value" id="adm-ord-stat-revenue">—</div></div></div>
+                        <div class="stat-card" data-admin-revenue hidden><div class="stat-info"><div class="label">Total Revenue</div><div class="value is-money-hidden" id="adm-ord-stat-revenue" data-money-value>—</div></div></div>
                     </div>
 
                     <div style="display:flex; gap:8px; margin:16px 0 12px 0;" id="admin-orders-client-type-tabs">
@@ -1173,9 +1224,25 @@
                         <button type="button" class="badge" id="tab-orders-b2b" onclick="setAdminOrderClientTypeFilter('B2B')" style="cursor:pointer; border:1px solid var(--color-border); padding:8px 16px; font-size:0.82rem; font-weight:700; background:var(--color-surface); color:var(--color-text-primary);">B2B Clients</button>
                     </div>
 
+                    <div id="adm-b2b-orders-picker" class="b2b-orders-picker" hidden>
+                        <div class="b2b-orders-picker-head">
+                            <div>
+                                <div class="b2b-orders-picker-title">Select a B2B client</div>
+                                <div id="adm-b2b-orders-picker-hint" class="b2b-orders-picker-hint">Open the B2B account first, then their orders appear below.</div>
+                            </div>
+                            <button type="button" class="btn-secondary" id="adm-b2b-orders-clear" hidden onclick="clearAdminB2BOrderClient()">Show all B2B clients</button>
+                        </div>
+                        <label class="b2b-orders-picker-search-label" for="adm-b2b-orders-client-search">Search B2B clients</label>
+                        <input type="search" id="adm-b2b-orders-client-search" class="select-filter b2b-orders-picker-search" placeholder="Search name, B2B ID, or email" oninput="filterAdminB2BOrdersClientList()" autocomplete="off">
+                        <div id="adm-b2b-orders-client-list" class="b2b-orders-client-list"></div>
+                    </div>
+
                     <div class="orders-filter-row orders-filter-toolbar">
                         <div class="filter-group orders-filter-bar">
                             <input type="search" class="select-filter filter-search" id="filter-admin-order-search" placeholder="Search" oninput="scheduleLoadAdminOrders()" aria-label="Search orders">
+                            <select class="select-filter" id="filter-admin-order-company" onchange="resetAdminOrdersPage(); loadAdminOrders()" aria-label="Company">
+                                <option value="">Company name</option>
+                            </select>
                             <select class="select-filter" id="filter-admin-order-status" onchange="resetAdminOrdersPage(); loadAdminOrders()" aria-label="Status">
                                 <option value="">Status</option>
                                 <option value="Pending Verification">Pending Verification</option>
@@ -1252,7 +1319,6 @@
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>Tasks &amp; Team</h1>
-                            <p>One-click workflows and team access.</p>
                         </div>
                         <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                             <button type="button" class="btn-primary" id="btn-create-user" onclick="openCreateUserModal()" style="display:none;"><i data-lucide="user-plus"></i> Create User</button>
@@ -1319,13 +1385,17 @@
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>Customers &amp; New Signups</h1>
-                            <p>Website registrations appear here automatically. Newest accounts are listed first. Use Create Customer for a CRM account.</p>
                         </div>
-                        <button type="button" class="btn-primary btn-create-user" id="btn-create-customer-page" onclick="openCreateCustomerModal()"><i data-lucide="user-plus"></i> Create Customer</button>
+                        <button type="button" class="btn-primary btn-create-user" id="btn-create-customer-page" onclick="openCreateCustomerModal(adminCustomerTypeFilter === 'B2B' ? 'b2b' : 'normal')"><i data-lucide="user-plus"></i> Create Customer</button>
+                    </div>
+                    <div style="display:flex; gap:8px; margin:0 0 12px 0;" id="admin-customers-type-tabs">
+                        <button type="button" class="badge active" id="tab-customers-all" onclick="setAdminCustomerTypeFilter('All')" style="cursor:pointer; border:1px solid var(--color-border); padding:8px 16px; font-size:0.82rem; font-weight:700; background:var(--color-primary); color:#FFFFFF;">All</button>
+                        <button type="button" class="badge" id="tab-customers-normal" onclick="setAdminCustomerTypeFilter('Normal')" style="cursor:pointer; border:1px solid var(--color-border); padding:8px 16px; font-size:0.82rem; font-weight:700; background:var(--color-surface); color:var(--color-text-primary);">Normal</button>
+                        <button type="button" class="badge" id="tab-customers-b2b" onclick="setAdminCustomerTypeFilter('B2B')" style="cursor:pointer; border:1px solid var(--color-border); padding:8px 16px; font-size:0.82rem; font-weight:700; background:var(--color-surface); color:var(--color-text-primary);">B2B Clients</button>
                     </div>
                     <div class="orders-filter-row orders-filter-toolbar">
                         <div class="filter-group" style="flex-wrap:wrap; width:100%;">
-                            <input type="search" class="select-filter" id="filter-admin-customer-search" placeholder="Search name or email…" oninput="filterAdminCustomers()" style="min-width:220px; flex:1;">
+                            <input type="search" class="select-filter" id="filter-admin-customer-search" placeholder="Search name, email, or B2B ID…" oninput="filterAdminCustomers()" style="min-width:220px; flex:1;">
                             <select class="select-filter" id="filter-admin-customer-source" onchange="filterAdminCustomers()">
                                 <option value="">All sources</option>
                                 <option value="website">Website signup</option>
@@ -1347,6 +1417,7 @@
                                     <th style="width:40px; text-align:center;"><input type="checkbox" id="chk-select-all-customers" onchange="toggleSelectAllCustomers(this)"></th>
                                     <th>Customer Name</th>
                                     <th>Email</th>
+                                    <th>Type</th>
                                     <th>Signed up</th>
                                     <th>Source</th>
                                     <th>Companies</th>
@@ -1364,7 +1435,6 @@
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>Services Catalog</h1>
-                            <p>Edit prices and product details for the CRM catalog. Website WooCommerce prices are separate unless you sync products again.</p>
                         </div>
                         <button type="button" class="btn-primary" id="btn-admin-add-service" onclick="openCreateServiceModal()" style="display:none;"><i data-lucide="plus-circle"></i> Add Service</button>
                     </div>
@@ -1375,7 +1445,9 @@
                                 <tr>
                                     <th>Service</th>
                                     <th>Category</th>
-                                    <th>Price</th>
+                                    <th>Sell price</th>
+                                    <th>Original price</th>
+                                    <th>Profit</th>
                                     <th>Duration</th>
                                     <th>Status</th>
                                     <th>Actions</th>
@@ -1389,27 +1461,155 @@
                 <div id="view-admin-invoices" class="view-panel" style="display: none;">
                     <div class="page-title-row">
                         <div class="page-title-text">
-                            <h1>Invoices Manager</h1>
-                            <p>Mark Advance if they paid before work, or After work if they pay when the job is done. Paid emails follow that timing.</p>
+                            <h1>Payment/Invoices</h1>
                         </div>
                     </div>
-                    <div id="adm-invoices-error" class="dash-banner-error" style="display:none;" role="alert"></div>
-                    <div class="data-table-container invoices-table-wrap">
-                        <table class="data-table">
-                            <thead>
-                                <tr>
-                                    <th>Invoice #</th>
-                                    <th>Owner</th>
-                                    <th>Order</th>
-                                    <th class="col-inv-total">Total</th>
-                                    <th>When</th>
-                                    <th>Status</th>
-                                    <th>Date</th>
-                                    <th></th>
-                                </tr>
-                            </thead>
-                            <tbody id="adm-invoices-table-body"></tbody>
-                        </table>
+
+                    <div class="portfolio-tabs" id="adm-payments-tabs" role="tablist" aria-label="Payment sections">
+                        <button type="button" class="portfolio-tab active" data-payments-tab="invoices" onclick="openAdminPaymentsTab('invoices')">Invoices</button>
+                        <button type="button" class="portfolio-tab" data-payments-tab="revenue" onclick="openAdminPaymentsTab('revenue')" data-payments-revenue>Revenue</button>
+                    </div>
+
+                    <div id="adm-payments-panel-invoices" class="adm-payments-panel" data-payments-panel="invoices">
+                        <div class="star-metrics-strip" id="adm-invoices-collections-strip" style="margin-bottom:14px;" data-payments-revenue>
+                            <div class="star-metric-item" role="button" tabindex="0" onclick="setAdminInvoicePayFilter('all')" onkeydown="if(event.key==='Enter')setAdminInvoicePayFilter('all')">
+                                <div class="star-metric-label">Total billed</div>
+                                <div class="star-metric-value is-money-hidden" id="adm-inv-stat-billed" data-money-value>—</div>
+                            </div>
+                            <div class="star-metric-item" role="button" tabindex="0" onclick="setAdminInvoicePayFilter('paid')" onkeydown="if(event.key==='Enter')setAdminInvoicePayFilter('paid')">
+                                <div class="star-metric-label">Received (paid)</div>
+                                <div class="star-metric-value" id="adm-inv-stat-paid" style="color:#059669;">—</div>
+                            </div>
+                            <div class="star-metric-item" role="button" tabindex="0" onclick="setAdminInvoicePayFilter('outstanding')" onkeydown="if(event.key==='Enter')setAdminInvoicePayFilter('outstanding')">
+                                <div class="star-metric-label">Clients still owe</div>
+                                <div class="star-metric-value" id="adm-inv-stat-owed" style="color:#dc2626;">—</div>
+                            </div>
+                            <div class="star-metric-item" role="button" tabindex="0" onclick="setAdminInvoicePayFilter('pending')" onkeydown="if(event.key==='Enter')setAdminInvoicePayFilter('pending')">
+                                <div class="star-metric-label">Pending</div>
+                                <div class="star-metric-value" id="adm-inv-stat-pending">—</div>
+                            </div>
+                            <div class="star-metric-item" role="button" tabindex="0" onclick="setAdminInvoicePayFilter('partial')" onkeydown="if(event.key==='Enter')setAdminInvoicePayFilter('partial')">
+                                <div class="star-metric-label">Part paid</div>
+                                <div class="star-metric-value" id="adm-inv-stat-partial">—</div>
+                            </div>
+                            <div class="star-metric-item" role="button" tabindex="0" onclick="setAdminInvoicePayFilter('overdue')" onkeydown="if(event.key==='Enter')setAdminInvoicePayFilter('overdue')">
+                                <div class="star-metric-label">Overdue</div>
+                                <div class="star-metric-value" id="adm-inv-stat-overdue">—</div>
+                            </div>
+                        </div>
+                        <div class="orders-filter-row" style="margin-bottom:12px;">
+                            <div class="filter-group orders-filter-bar">
+                                <input type="search" class="select-filter filter-search" id="filter-admin-invoice-search" placeholder="Search invoice, client, order" oninput="scheduleRenderAdminInvoices()" aria-label="Search invoices">
+                                <select class="select-filter" id="filter-admin-invoice-pay" onchange="renderAdminInvoicesTable()" aria-label="Payment status">
+                                    <option value="all">All payments</option>
+                                    <option value="outstanding">Outstanding (owed)</option>
+                                    <option value="pending">Pending</option>
+                                    <option value="partial">Part paid</option>
+                                    <option value="overdue">Overdue</option>
+                                    <option value="paid">Paid</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div id="adm-invoices-error" class="dash-banner-error" style="display:none;" role="alert"></div>
+                        <div class="data-table-container invoices-table-wrap">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Invoice #</th>
+                                        <th>Owner</th>
+                                        <th>Order</th>
+                                        <th class="col-inv-total">Total</th>
+                                        <th class="col-inv-paid" data-payments-revenue>Received</th>
+                                        <th class="col-inv-due" data-payments-revenue>Still owed</th>
+                                        <th>When</th>
+                                        <th>Status</th>
+                                        <th>Date</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="adm-invoices-table-body"></tbody>
+                            </table>
+                        </div>
+                        <div id="adm-invoices-owe-by-client" style="margin-top:18px;" data-payments-revenue>
+                            <h3 style="margin:0 0 10px; font-size:1rem;">Who still owes you</h3>
+                            <div class="data-table-container">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Client</th>
+                                            <th>Open invoices</th>
+                                            <th>Still owed</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="adm-invoices-owe-body"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="adm-payments-panel-revenue" class="adm-payments-panel" data-payments-panel="revenue" style="display:none;" data-payments-revenue>
+                        <div class="orders-filter-row" style="margin-bottom:12px;">
+                            <div class="filter-group orders-filter-bar">
+                                <input type="search" class="select-filter filter-search" id="filter-payments-cost-search" placeholder="Search customer, order, product" oninput="scheduleLoadAdminPaymentsCosts()" aria-label="Search revenue">
+                                <select class="select-filter" id="filter-payments-cost-month" onchange="loadAdminPaymentsRevenue()" aria-label="Month">
+                                    <option value="">All months</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="star-metrics-strip" style="margin-bottom:16px;">
+                            <div class="star-metric-item">
+                                <div class="star-metric-label">Orders</div>
+                                <div class="star-metric-value" id="adm-profit-orders">—</div>
+                            </div>
+                            <div class="star-metric-item">
+                                <div class="star-metric-label">Sell total</div>
+                                <div class="star-metric-value is-money-hidden" id="adm-profit-sell" data-money-value>—</div>
+                            </div>
+                            <div class="star-metric-item">
+                                <div class="star-metric-label">Total cost</div>
+                                <div class="star-metric-value" id="adm-profit-cost">—</div>
+                            </div>
+                            <div class="star-metric-item">
+                                <div class="star-metric-label">Net profit</div>
+                                <div class="star-metric-value is-money-hidden" id="adm-profit-net" data-money-value>—</div>
+                            </div>
+                        </div>
+                        <div id="adm-payments-costs-error" class="dash-banner-error" style="display:none;" role="alert"></div>
+                        <p style="font-size:0.82rem; color:#64748b; margin:0 0 10px;">Set <strong>Order cost</strong> per customer/order. Profit = Sell price − Cost.</p>
+                        <div class="data-table-container" style="margin-bottom:18px;">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Order #</th>
+                                        <th>Customer</th>
+                                        <th>Product</th>
+                                        <th>Sell price</th>
+                                        <th>Cost</th>
+                                        <th>Profit</th>
+                                        <th>Source</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="adm-payments-costs-body"></tbody>
+                            </table>
+                        </div>
+                        <h3 style="margin:0 0 10px; font-size:1rem;">Profit by customer</h3>
+                        <div id="adm-payments-profit-error" class="dash-banner-error" style="display:none;" role="alert"></div>
+                        <div class="data-table-container">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Customer</th>
+                                        <th>Orders</th>
+                                        <th>Sell total</th>
+                                        <th>Cost</th>
+                                        <th>Profit</th>
+                                        <th>Margin</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="adm-payments-profit-body"></tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
 
@@ -1418,7 +1618,6 @@
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>Documents Lifecycle</h1>
-                            <p>Customer uploads stay in triage until approved. Posted Documents are the permanent client vault.</p>
                         </div>
                         <button type="button" class="btn-primary" id="btn-admin-upload-document" onclick="openDeliverDocumentModalFromReview()"><i data-lucide="upload"></i> Upload Document</button>
                     </div>
@@ -1478,7 +1677,6 @@
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>Smart Document Intake &amp; Auto-Filing</h1>
-                            <p>Upload unorganized client files (bank statements, passports, ID documents, company formation docs). Files are confirmed as soon as you add them. Processing then OCRs scans, reads name and date of birth, and files against Companies House.</p>
                         </div>
                     </div>
 
@@ -1643,123 +1841,125 @@
                     </div>
                 </div>
 
-                <!-- 14B. TEAM INCENTIVES & GRADES VIEW -->
-                <div id="view-admin-incentives" class="view-panel" style="display: none;">
-                    <div class="page-title-row">
-                        <div class="page-title-text">
-                            <h1>Team Incentives &amp; Grades</h1>
-                            <div class="page-kicker">Admin Management</div>
-                            <p>Monthly staff performance leaderboard, SLA compliance, and incentive bonus eligibility.</p>
-                        </div>
-                        <div style="display:flex; align-items:center; gap:10px;">
-                            <input type="month" id="admin-incentives-month" class="select-filter" onchange="loadTeamIncentivesReport()" style="padding:6px 12px; font-size:0.85rem;">
-                            <button type="button" class="btn-secondary" onclick="loadTeamIncentivesReport()"><i data-lucide="rotate-cw"></i> Refresh</button>
-                        </div>
-                    </div>
-
-                    <div class="data-table-container" style="margin-top:16px;">
-                        <table class="data-table">
-                            <thead>
-                                <tr>
-                                    <th>Rank</th>
-                                    <th>Team Member</th>
-                                    <th>Department</th>
-                                    <th>Assigned</th>
-                                    <th>Completed</th>
-                                    <th>SLA On-Time</th>
-                                    <th>Overdue</th>
-                                    <th>Grade</th>
-                                    <th>Incentive Status</th>
-                                </tr>
-                            </thead>
-                            <tbody id="admin-incentives-table">
-                                <tr><td colspan="9" style="text-align:center; padding:24px; color:var(--text-muted);">Loading team incentives report...</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-
-                <!-- 14C. MY PERFORMANCE DASHBOARD VIEW -->
+                <!-- 14B. PERFORMANCE DASHBOARD (Performance | Team Incentives segmented control) -->
                 <div id="view-staff-dashboard" class="view-panel" style="display: none;">
-                    <div class="page-title-row">
+                    <div class="page-title-row performance-title-row">
                         <div class="page-title-text">
-                            <h1>My Performance Dashboard</h1>
-                            <div class="page-kicker">Staff Portal</div>
-                            <p>Track your assigned tasks, monthly SLA, incentive grade, and performance metrics.</p>
+                            <h1>Performance</h1>
                         </div>
-                        <button type="button" class="btn-secondary" onclick="loadStaffDashboard()"><i data-lucide="rotate-cw"></i> Refresh</button>
-                    </div>
-
-                    <div class="stats-grid" style="margin-top:16px;">
-                        <div class="stat-card">
-                            <div class="stat-info">
-                                <div class="label">Incentive Grade</div>
-                                <div class="value" id="staff-metric-grade" style="color:var(--brand-primary);">Grade --</div>
-                                <span class="stat-chip success" id="staff-grade-status">Calculating performance...</span>
-                            </div>
-                            <div class="stat-icon purple"><i data-lucide="award"></i></div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-info">
-                                <div class="label">Pending Tasks</div>
-                                <div class="value" id="staff-metric-pending">0</div>
-                                <span class="stat-chip warning">Action required</span>
-                            </div>
-                            <div class="stat-icon orange"><i data-lucide="clock"></i></div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-info">
-                                <div class="label">In Progress</div>
-                                <div class="value" id="staff-metric-in-progress">0</div>
-                                <span class="stat-chip info">Active work</span>
-                            </div>
-                            <div class="stat-icon blue"><i data-lucide="loader"></i></div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-info">
-                                <div class="label">Completed (This Month)</div>
-                                <div class="value" id="staff-metric-completed">0</div>
-                                <span class="stat-chip success" id="staff-sla-rate">100% On-Time</span>
-                            </div>
-                            <div class="stat-icon green"><i data-lucide="check-circle-2"></i></div>
+                        <div class="performance-toolbar">
+                            <input type="month" id="admin-incentives-month" class="select-filter performance-month" onchange="loadTeamIncentivesReport()" aria-label="Incentive month">
+                            <button type="button" class="btn-secondary" id="performance-refresh-btn" onclick="refreshPerformanceSection()"><i data-lucide="rotate-cw"></i> Refresh</button>
                         </div>
                     </div>
 
-                    <div id="staff-bonus-badge-wrap" style="margin:16px 0; padding:14px 18px; border-radius:10px; background:var(--color-primary-soft, #eff6ff); border:1px solid var(--color-primary-border, #bfdbfe); color:var(--text-primary);">
-                        <div style="font-weight:700; font-size:0.9rem; color:var(--color-primary, #2563eb); display:flex; align-items:center; gap:8px;">
-                            <i data-lucide="zap"></i> Incentive Eligibility &amp; SLA Status
+                    <div class="seg-control performance-tabs" role="tablist" aria-label="Performance sections">
+                        <button type="button" class="seg-control-btn active" id="tab-performance-mine" data-tab="performance" onclick="switchPerformanceTab('performance')">Performance</button>
+                        <button type="button" class="seg-control-btn" id="tab-performance-incentives" data-tab="incentives" onclick="switchPerformanceTab('incentives')" style="display:none;">Team Incentives</button>
+                    </div>
+
+                    <div class="performance-panel" data-panel="performance" id="panel-performance-mine">
+                        <div class="performance-metrics">
+                            <div class="perf-metric-card">
+                                <div class="perf-metric-top">
+                                    <span class="perf-metric-label">Incentive grade</span>
+                                    <span class="perf-metric-icon tone-blue"><i data-lucide="award"></i></span>
+                                </div>
+                                <div class="perf-metric-value" id="staff-metric-grade">Grade --</div>
+                                <div class="perf-metric-sub" id="staff-grade-status">Calculating…</div>
+                            </div>
+                            <div class="perf-metric-card">
+                                <div class="perf-metric-top">
+                                    <span class="perf-metric-label">Pending</span>
+                                    <span class="perf-metric-icon tone-amber"><i data-lucide="clock"></i></span>
+                                </div>
+                                <div class="perf-metric-value" id="staff-metric-pending">0</div>
+                                <div class="perf-metric-sub">Action required</div>
+                            </div>
+                            <div class="perf-metric-card">
+                                <div class="perf-metric-top">
+                                    <span class="perf-metric-label">In progress</span>
+                                    <span class="perf-metric-icon tone-sky"><i data-lucide="loader"></i></span>
+                                </div>
+                                <div class="perf-metric-value" id="staff-metric-in-progress">0</div>
+                                <div class="perf-metric-sub">Active work</div>
+                            </div>
+                            <div class="perf-metric-card">
+                                <div class="perf-metric-top">
+                                    <span class="perf-metric-label">Completed</span>
+                                    <span class="perf-metric-icon tone-green"><i data-lucide="check-circle-2"></i></span>
+                                </div>
+                                <div class="perf-metric-value" id="staff-metric-completed">0</div>
+                                <div class="perf-metric-sub" id="staff-sla-rate">100% on-time</div>
+                            </div>
                         </div>
-                        <div id="staff-bonus-badge" style="font-size:0.85rem; color:var(--text-secondary); margin-top:4px; font-weight:600;">
-                            Standard Incentive Bonus Tier • Monthly SLA On-Time completion
+
+                        <div id="staff-bonus-badge-wrap" class="performance-callout">
+                            <div class="performance-callout-title"><i data-lucide="zap"></i> Incentive eligibility &amp; SLA</div>
+                            <div id="staff-bonus-badge" class="performance-callout-body">Standard incentive bonus tier · Monthly SLA on-time completion</div>
+                        </div>
+
+                        <div class="performance-cage">
+                            <div class="performance-cage-head">
+                                <div>
+                                    <h2>Assigned tasks</h2>
+                                    <p>Active work assigned to you</p>
+                                </div>
+                            </div>
+                            <div class="data-table-container performance-table-wrap">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Task</th>
+                                            <th>Priority</th>
+                                            <th>Department</th>
+                                            <th>Due</th>
+                                            <th>Status</th>
+                                            <th>Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="staff-my-tasks-table">
+                                        <tr><td colspan="6" style="text-align:center; padding:24px; color:var(--text-muted);">Loading your active tasks...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                     </div>
 
-                    <div style="margin-top:20px;">
-                        <div class="tracker-section-header">
-                            <div>
-                                <h2>My Assigned Active Tasks</h2>
-                                <p>Tasks assigned to you requiring action or completion.</p>
+                    <div class="performance-panel" data-panel="incentives" id="panel-performance-incentives" hidden>
+                        <div class="performance-cage">
+                            <div class="performance-cage-head">
+                                <div>
+                                    <h2>Team incentives</h2>
+                                    <p>Monthly leaderboard, grades, and bonus eligibility</p>
+                                </div>
                             </div>
-                        </div>
-                        <div class="data-table-container" style="margin-top:12px;">
-                            <table class="data-table">
-                                <thead>
-                                    <tr>
-                                        <th>Task Title</th>
-                                        <th>Priority</th>
-                                        <th>Department</th>
-                                        <th>Due Date</th>
-                                        <th>Status</th>
-                                        <th>Action</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="staff-my-tasks-table">
-                                    <tr><td colspan="6" style="text-align:center; padding:24px; color:var(--text-muted);">Loading your active tasks...</td></tr>
-                                </tbody>
-                            </table>
+                            <div class="data-table-container performance-table-wrap">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Rank</th>
+                                            <th>Team member</th>
+                                            <th>Department</th>
+                                            <th>Assigned</th>
+                                            <th>Completed</th>
+                                            <th>SLA on-time</th>
+                                            <th>Overdue</th>
+                                            <th>Grade</th>
+                                            <th>Incentive</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="admin-incentives-table">
+                                        <tr><td colspan="9" style="text-align:center; padding:24px; color:var(--text-muted);">Loading team incentives report...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                     </div>
                 </div>
+
+                <!-- Legacy alias kept for deep links; content lives in Performance tabs -->
+                <div id="view-admin-incentives" class="view-panel" style="display: none;" hidden aria-hidden="true"></div>
 
                 <!-- 15. ADMIN LOGS VIEW -->
 
@@ -1768,7 +1968,6 @@
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>Audit & Activity Logs</h1>
-                            <p>System security trail and user action history.</p>
                         </div>
                     </div>
                     <div class="data-table-container">
@@ -1791,7 +1990,6 @@
                     <div class="page-title-row">
                         <div class="page-title-text">
                             <h1>System Settings</h1>
-                            <p>Configure company branding, logo, support contact, and prefixes.</p>
                         </div>
                     </div>
                     <div class="modal-card" style="max-width:800px; margin:0;">
@@ -1822,6 +2020,11 @@
                                     <label style="font-size:0.8rem; font-weight:700;">Companies House API key</label>
                                     <input type="password" id="set-companies-house-api-key" class="select-filter" style="width:100%; margin-top:4px;" placeholder="Paste REST API key" autocomplete="off">
                                     <p id="set-companies-house-status" style="margin:6px 0 0; font-size:0.78rem; color:#64748b;">Create a free key at developer.company-information.service.gov.uk, then paste it here.</p>
+                                </div>
+                                <div style="grid-column:1 / -1;">
+                                    <label style="font-size:0.8rem; font-weight:700;">getAddress.io API key (optional)</label>
+                                    <input type="password" id="set-getaddress-api-key" class="select-filter" style="width:100%; margin-top:4px;" placeholder="Paste getAddress.io API key for full UK street lists" autocomplete="off">
+                                    <p id="set-getaddress-status" style="margin:6px 0 0; font-size:0.78rem; color:#64748b;">Optional. Without it, postcode lookup still works via free UK sources (postcodes.io). Free key: getaddress.io</p>
                                 </div>
                                 <div style="grid-column:1 / -1;">
                                     <label style="font-size:0.8rem; font-weight:700;">UK FormFill Pro URL</label>
@@ -2321,8 +2524,8 @@
                         <div id="create-user-client-type-wrap" style="display:none;">
                             <label style="font-size:0.8rem; font-weight:700;">Client Account Type *</label>
                             <select id="create-user-client-type" class="select-filter" style="width:100%; margin-top:4px;" onchange="syncCreateUserDepartmentField()">
-                                <option value="b2b" selected>B2B Customer (Portal Account)</option>
-                                <option value="b2c">Normal Customer (Official Website Client Panel)</option>
+                                <option value="b2b" selected>B2B Customer (CRM portal login)</option>
+                                <option value="b2c">Normal Customer (website login only)</option>
                             </select>
                         </div>
                         <div id="create-user-b2b-notice" style="display:none; padding:10px 12px; border-radius:8px; background:#eff6ff; border:1px solid #bfdbfe; color:#1e40af; font-size:0.8rem; font-weight:600; grid-column:1 / -1;">
@@ -2385,7 +2588,7 @@
                                     <input type="radio" name="create_cust_type" value="Normal" checked onchange="onCustomerTypeCardChange('Normal')" style="accent-color:var(--color-primary);">
                                     <strong style="font-size:0.88rem; color:var(--color-text-primary);">Normal Customer</strong>
                                 </div>
-                                <span style="font-size:0.75rem; color:var(--color-text-muted); margin-left:22px;">Standard retail/individual client. No B2B Client ID generated.</span>
+                                <span style="font-size:0.75rem; color:var(--color-text-muted); margin-left:22px;">Retail/individual client. Signs in on the Brixen website only — not this CRM portal.</span>
                             </label>
 
                             <label style="background:var(--color-surface-soft); border:2px solid var(--color-border); border-radius:10px; padding:12px; cursor:pointer; display:flex; flex-direction:column; gap:4px;" id="cust-type-card-b2b">
@@ -2393,7 +2596,7 @@
                                     <input type="radio" name="create_cust_type" value="B2B" onchange="onCustomerTypeCardChange('B2B')" style="accent-color:var(--color-primary);">
                                     <strong style="font-size:0.88rem; color:var(--color-text-primary);">B2B Customer</strong>
                                 </div>
-                                <span style="font-size:0.75rem; color:var(--color-text-muted); margin-left:22px;">Corporate client. Generates unique B2B-XXXXXX ID.</span>
+                                <span style="font-size:0.75rem; color:var(--color-text-muted); margin-left:22px;">Corporate client. Signs in to this CRM portal with email and password. Unique B2B-XXXXXX ID.</span>
                             </label>
                         </div>
                     </div>
@@ -2452,131 +2655,140 @@
             </div>
             <div id="staff-order-error" style="display:none; padding:10px; border-radius:8px; background:#fef2f2; color:#dc2626; font-size:0.8rem; font-weight:600;" role="alert"></div>
             <div id="staff-order-success" style="display:none; padding:10px; border-radius:8px; background:#ecfdf5; color:#047857; font-size:0.8rem; font-weight:600;" role="status"></div>
-            <h4 class="staff-order-section-title">Order information</h4>
-            <div class="staff-order-book-grid">
-                <div><span class="staff-order-field-label">Date</span><strong id="staff-order-date">—</strong></div>
-                <div><span class="staff-order-field-label">Company</span><strong id="staff-order-company">—</strong></div>
-                <div class="full"><span class="staff-order-field-label">Category / Product</span><strong id="staff-order-product">—</strong></div>
-                <div data-order-finance>
-                    <span class="staff-order-field-label">Price</span>
-                    <div class="price-display-row">
-                        <strong id="staff-order-price">—</strong>
-                        <button type="button" id="staff-order-price-edit" class="icon-edit-btn" hidden title="Edit price" aria-label="Edit price"><i data-lucide="pencil"></i></button>
-                    </div>
-                    <div id="staff-order-price-editor" class="price-editor-row" hidden>
-                        <span>£</span>
-                        <input type="number" id="staff-order-price-input" class="select-filter table-price-input" min="0" max="100000" step="0.01" inputmode="decimal" aria-label="Order price">
-                        <button type="button" class="btn-primary btn-table" id="staff-order-price-save">Save</button>
-                    </div>
-                </div>
-                <div data-order-finance><span class="staff-order-field-label">Payment mode</span><select id="staff-order-payment-mode" class="select-filter staff-order-field-control" onchange="updateAdminOrderPaymentMode(staffOrderId, this.value)"></select></div>
-                <div><span class="staff-order-field-label">Status</span><select id="staff-order-status-select" class="select-filter staff-order-field-control" onchange="updateAdminOrderStatus(staffOrderId, this.value)"></select></div>
-            </div>
-            <div id="staff-order-pay-plan" class="staff-order-pay-plan" data-order-finance hidden>
-                <h4 class="staff-order-section-title">How they pay</h4>
-                <p class="staff-order-section-copy">Set this when you start the order. Pay first if they must send money before work. Deposit is usually 50%, or type any amount. Every invoice shows both the GBP Tide account and the PKR UBL account.</p>
-                <div class="staff-order-book-grid">
-                    <div class="full">
-                        <span class="staff-order-field-label">Payment plan</span>
-                        <select id="staff-order-pay-timing" class="select-filter staff-order-field-control" onchange="toggleStaffOrderDepositField()">
-                            <option value="After work">Pay after work</option>
-                            <option value="Advance">Pay first — full amount</option>
-                            <option value="Deposit">Pay first — deposit now</option>
-                        </select>
-                    </div>
-                    <div id="staff-order-deposit-wrap" hidden>
-                        <span class="staff-order-field-label">Deposit now</span>
-                        <input type="text" id="staff-order-deposit-amount" class="select-filter staff-order-field-control" inputmode="decimal" placeholder="50% of total">
-                        <div id="staff-order-deposit-hint" class="staff-order-field-sub"></div>
-                    </div>
-                    <div class="full"><span class="staff-order-field-label">Invoice</span><strong id="staff-order-pay-summary">—</strong></div>
-                </div>
-                <div class="staff-order-form-actions" style="margin-top:10px;">
-                    <button type="button" class="btn-secondary" onclick="saveStaffOrderPaymentPlan()">Save plan</button>
-                    <button type="button" class="btn-primary" id="staff-order-mark-deposit" onclick="markStaffOrderDepositReceived()">Mark deposit received</button>
-                    <button type="button" class="btn-primary" id="staff-order-mark-paid" onclick="markStaffOrderPaidInFull()">Mark paid in full</button>
-                    <button type="button" class="btn-secondary" id="staff-order-email-pay" onclick="emailStaffOrderPaymentDetails()">Email payment details</button>
-                    <button type="button" class="btn-secondary" id="staff-order-view-invoice" onclick="openStaffOrderInvoice()">View invoice</button>
-                </div>
-            </div>
-            <div id="staff-order-manage" style="display:none; gap:8px; margin:12px 0 16px; align-items:center; flex-wrap:wrap;">
-                <button type="button" class="btn-primary" id="staff-order-progress-btn" onclick="advanceStaffOrderProgress()"><i data-lucide="plus"></i> Advance Progress</button>
-                <button type="button" class="portfolio-delete-btn" id="staff-order-delete-btn" style="display:none;" onclick="openDeleteOrderModal(staffOrderId)" title="Delete order" aria-label="Delete order"><i data-lucide="trash-2"></i></button>
-            </div>
-            <div id="staff-order-owner" class="staff-order-owner-card">
-                <h4 class="staff-order-section-title">Company owner</h4>
-                <p class="staff-order-section-copy">The person named on the company form, with the form email — not the portal login or WooCommerce checkout account. This owner record is kept for company mail and future marketing.</p>
-                <div class="staff-order-book-grid" id="staff-order-owner-fields">
-                    <div><span class="staff-order-field-label">Owner name</span><strong id="staff-order-owner-name">—</strong></div>
-                    <div><span class="staff-order-field-label">Form email</span><strong id="staff-order-owner-email">—</strong></div>
-                    <div><span class="staff-order-field-label">UK contact</span><strong id="staff-order-owner-phone">—</strong></div>
-                    <div><span class="staff-order-field-label">Portal login</span><strong id="staff-order-portal-email">—</strong></div>
-                </div>
-            </div>
-            <!-- SERVICE ACCESS CREDENTIALS CARD -->
-            <div id="staff-order-credentials-card" style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:14px; padding:18px; margin:16px 0;">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                    <h4 class="staff-order-section-title" style="margin:0; display:flex; align-items:center; gap:6px;">
-                        <i data-lucide="key" style="width:16px; height:16px; color:var(--color-primary);"></i> Service Access Credentials
-                    </h4>
-                    <button type="button" class="btn-ghost" style="padding:2px 8px; font-size:0.75rem;" onclick="toggleStaffOrderCredentialsEdit()" id="btn-edit-credentials">Edit Credentials</button>
-                </div>
 
-                <!-- Display Mode -->
-                <div id="staff-order-credentials-display" style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
-                    <div>
-                        <span class="staff-order-field-label">Service Account Email</span>
-                        <div style="display:flex; align-items:center; gap:6px; margin-top:2px;">
-                            <strong id="disp-access-email" style="font-size:0.88rem; color:var(--color-text-primary);">None recorded</strong>
-                            <button type="button" class="icon-edit-btn" title="Copy Email" onclick="copyTextToClipboard(document.getElementById('disp-access-email').textContent)"><i data-lucide="copy" style="width:12px; height:12px;"></i></button>
-                        </div>
-                    </div>
-
-                    <div>
-                        <span class="staff-order-field-label">Email Password / Access Code</span>
-                        <div style="display:flex; align-items:center; gap:6px; margin-top:2px;">
-                            <span id="disp-access-password" style="font-family:monospace; font-size:0.9rem; font-weight:700; color:var(--color-text-primary);">••••••••</span>
-                            <button type="button" class="icon-edit-btn" title="Show / Hide Password" onclick="toggleDisplayPasswordVisibility('disp-access-password')"><i data-lucide="eye" id="eye-disp-access-password" style="width:12px; height:12px;"></i></button>
-                            <button type="button" class="icon-edit-btn" title="Copy Password" onclick="copyTextToClipboard(this.getAttribute('data-pass'))" id="btn-copy-pass"><i data-lucide="copy" style="width:12px; height:12px;"></i></button>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Edit Mode -->
-                <div id="staff-order-credentials-editor" style="display:none; margin-top:10px;">
-                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
-                        <div>
-                            <label style="font-size:0.78rem; font-weight:700; color:var(--color-text-muted);">Service Email</label>
-                            <input type="email" id="edit-access-email" class="select-filter" style="width:100%; margin-top:4px;" placeholder="e.g. info@clientcompany.co.uk">
-                        </div>
-                        <div>
-                            <label style="font-size:0.78rem; font-weight:700; color:var(--color-text-muted);">Email Password</label>
-                            <input type="text" id="edit-access-password" class="select-filter" style="width:100%; margin-top:4px;" placeholder="Enter password / access code">
-                        </div>
-                    </div>
-                    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:10px;">
-                        <button type="button" class="btn-secondary" style="font-size:0.8rem; padding:6px 12px;" onclick="toggleStaffOrderCredentialsEdit(false)">Cancel</button>
-                        <button type="button" class="btn-primary" style="font-size:0.8rem; padding:6px 12px;" onclick="saveStaffOrderCredentials()">Save Credentials</button>
-                    </div>
-                </div>
-            <div class="staff-order-section-head">
+            <div class="staff-order-section-head" style="margin-top:4px;">
                 <div>
-                    <h4 class="staff-order-section-title">Checkout form details</h4>
-                    <p class="staff-order-section-copy">Correct company name, form email, director, address, or any other form detail after the customer asks for a change.</p>
+                    <h4 class="staff-order-section-title">Order details</h4>
+                    <p class="staff-order-section-copy">Company formation and package fields from when this order was created (same as the wizard form).</p>
                 </div>
                 <div class="staff-order-form-actions" id="staff-order-form-actions">
+                    <button type="button" class="btn-primary" id="staff-order-add-product-btn" onclick="toggleStaffAddProductPicker()"><i data-lucide="plus"></i> Add product</button>
                     <button type="button" class="btn-secondary" id="staff-order-edit-form-btn" onclick="beginStaffCheckoutFormEdit()">Edit details</button>
                     <button type="button" class="btn-secondary" id="staff-order-add-form-btn" hidden onclick="addStaffCheckoutFormField()">Add field</button>
                     <button type="button" class="btn-primary" id="staff-order-save-form-btn" hidden onclick="saveStaffCheckoutFormEdit()">Save changes</button>
                     <button type="button" class="btn-secondary" id="staff-order-cancel-form-btn" hidden onclick="cancelStaffCheckoutFormEdit()">Cancel</button>
                 </div>
             </div>
-            <div id="staff-order-checkout-form" class="staff-order-book-grid" style="margin-bottom:16px;"></div>
-            <h4 class="staff-order-section-title">Products</h4>
-            <div id="staff-order-products" style="margin-bottom:16px;"></div>
-            <h4 class="staff-order-section-title">Documents</h4>
-            <p class="staff-order-section-copy">Files uploaded by the customer at website checkout.</p>
-            <div id="staff-order-documents" style="margin-bottom:16px;"></div>
+            <div id="staff-order-add-product" class="staff-add-product-panel" hidden>
+                <p class="staff-order-section-copy">Adds to this order. Company and director details stay as they are.</p>
+                <input type="search" id="staff-order-add-product-search" class="select-filter" placeholder="Search catalog" autocomplete="off" oninput="renderStaffAddProductList()">
+                <div id="staff-order-add-product-list" class="staff-add-product-list"></div>
+            </div>
+            <div id="staff-order-checkout-form" class="staff-order-book-grid staff-order-details-grid" style="margin-bottom:14px;"></div>
+
+            <div id="staff-order-credentials-card" class="staff-order-credentials-card">
+                <div class="staff-order-credentials-head">
+                    <h4 class="staff-order-section-title" style="margin:0;">Service Access Credentials</h4>
+                    <button type="button" class="btn-ghost staff-order-credentials-edit-btn" onclick="toggleStaffOrderCredentialsEdit()" id="btn-edit-credentials">Edit Credentials</button>
+                </div>
+                <div id="staff-order-credentials-display" class="staff-order-credentials-display">
+                    <div>
+                        <span class="staff-order-field-label">Service Account Email</span>
+                        <div class="staff-order-cred-value-row">
+                            <strong id="disp-access-email">None recorded</strong>
+                            <button type="button" class="icon-edit-btn" title="Copy Email" onclick="copyTextToClipboard(document.getElementById('disp-access-email').textContent)"><i data-lucide="copy" style="width:12px; height:12px;"></i></button>
+                        </div>
+                    </div>
+                    <div>
+                        <span class="staff-order-field-label">Email Password / Access Code</span>
+                        <div class="staff-order-cred-value-row">
+                            <span id="disp-access-password" class="staff-order-cred-mask">••••••••</span>
+                            <button type="button" class="icon-edit-btn" title="Show / Hide Password" onclick="toggleDisplayPasswordVisibility('disp-access-password')"><i data-lucide="eye" id="eye-disp-access-password" style="width:12px; height:12px;"></i></button>
+                            <button type="button" class="icon-edit-btn" title="Copy Password" onclick="copyTextToClipboard(this.getAttribute('data-pass'))" id="btn-copy-pass"><i data-lucide="copy" style="width:12px; height:12px;"></i></button>
+                        </div>
+                    </div>
+                </div>
+                <div id="staff-order-credentials-editor" style="display:none; margin-top:10px;">
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <div>
+                            <label class="staff-order-field-label">Service Email</label>
+                            <input type="email" id="edit-access-email" class="select-filter" style="width:100%; margin-top:4px;" placeholder="e.g. info@clientcompany.co.uk">
+                        </div>
+                        <div>
+                            <label class="staff-order-field-label">Email Password</label>
+                            <input type="text" id="edit-access-password" class="select-filter" style="width:100%; margin-top:4px;" placeholder="Enter password / access code">
+                        </div>
+                    </div>
+                    <div class="staff-order-form-actions" style="margin-top:10px; justify-content:flex-end;">
+                        <button type="button" class="btn-secondary" style="font-size:0.8rem; padding:6px 12px;" onclick="toggleStaffOrderCredentialsEdit(false)">Cancel</button>
+                        <button type="button" class="btn-primary" style="font-size:0.8rem; padding:6px 12px;" onclick="saveStaffOrderCredentials()">Save Credentials</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="staff-order-section-head">
+                <div>
+                    <h4 class="staff-order-section-title">Products</h4>
+                </div>
+                <div class="staff-order-form-actions">
+                    <button type="button" class="btn-primary" id="staff-order-add-product-btn-2" onclick="toggleStaffAddProductPicker()"><i data-lucide="plus"></i> Add product</button>
+                </div>
+            </div>
+            <div id="staff-order-products" class="staff-order-section-block"></div>
+
+            <div class="staff-order-book-grid" style="margin-bottom:14px;">
+                <div>
+                    <span class="staff-order-field-label">Order status (auto)</span>
+                    <div id="staff-order-status-display" class="staff-order-status-auto">—</div>
+                    <select id="staff-order-status-select" class="select-filter staff-order-field-control" hidden disabled aria-hidden="true"></select>
+                </div>
+                <div data-order-finance>
+                    <span class="staff-order-field-label">Payment mode</span>
+                    <select id="staff-order-payment-mode" class="select-filter staff-order-field-control" onchange="updateAdminOrderPaymentMode(staffOrderId, this.value)"></select>
+                </div>
+            </div>
+
+            <div class="staff-order-section-head">
+                <div>
+                    <h4 class="staff-order-section-title">Documents</h4>
+                </div>
+                <div class="staff-order-form-actions">
+                    <button type="button" class="btn-primary" id="staff-order-add-document-btn" onclick="uploadStaffOrderDocument()"><i data-lucide="plus"></i> Add document</button>
+                </div>
+            </div>
+            <div id="staff-order-documents" class="staff-order-section-block"></div>
+
+            <div id="staff-order-manage" style="display:none; gap:8px; margin:12px 0 16px; align-items:center; flex-wrap:wrap;">
+                <button type="button" class="portfolio-delete-btn" id="staff-order-delete-btn" style="display:none;" onclick="openDeleteOrderModal(staffOrderId)" title="Delete order" aria-label="Delete order"><i data-lucide="trash-2"></i></button>
+            </div>
+
+            <!-- Hidden pricing controls (staff collapsible) -->
+            <span id="staff-order-date" hidden></span>
+            <span id="staff-order-company" hidden></span>
+            <span id="staff-order-product" hidden></span>
+            <strong id="staff-order-pay-summary" hidden></strong>
+            <details class="staff-order-staff-only" data-order-finance>
+                <summary>Pricing &amp; cost (staff)</summary>
+                <div class="staff-order-book-grid" style="margin-top:10px;">
+                    <div>
+                        <span class="staff-order-field-label">Price</span>
+                        <div class="price-display-row">
+                            <strong id="staff-order-price">—</strong>
+                            <button type="button" id="staff-order-price-edit" class="icon-edit-btn" hidden title="Edit price" aria-label="Edit price"><i data-lucide="pencil"></i></button>
+                        </div>
+                        <div id="staff-order-price-editor" class="price-editor-row" hidden>
+                            <span>£</span>
+                            <input type="number" id="staff-order-price-input" class="select-filter table-price-input" min="0" max="100000" step="0.01" inputmode="decimal" aria-label="Order price">
+                            <button type="button" class="btn-primary btn-table" id="staff-order-price-save">Save</button>
+                        </div>
+                    </div>
+                    <div>
+                        <span class="staff-order-field-label">Order cost</span>
+                        <div class="price-display-row">
+                            <strong id="staff-order-cost">—</strong>
+                            <button type="button" id="staff-order-cost-edit" class="icon-edit-btn" hidden title="Edit order cost" aria-label="Edit order cost"><i data-lucide="pencil"></i></button>
+                        </div>
+                        <div id="staff-order-cost-hint" class="staff-order-field-sub"></div>
+                        <div id="staff-order-cost-editor" class="price-editor-row" hidden>
+                            <span>£</span>
+                            <input type="number" id="staff-order-cost-input" class="select-filter table-price-input" min="0" max="100000" step="0.01" inputmode="decimal" aria-label="Order cost">
+                            <button type="button" class="btn-primary btn-table" id="staff-order-cost-save">Save</button>
+                            <button type="button" class="btn-secondary btn-table" id="staff-order-cost-reset" title="Use catalog default">Auto</button>
+                        </div>
+                    </div>
+                    <div><span class="staff-order-field-label">Profit</span><strong id="staff-order-profit" data-money-value>—</strong></div>
+                </div>
+            </details>
             <details class="staff-order-staff-only">
                 <summary>Internal notes (staff only)</summary>
                 <div id="staff-order-notes-wrap" style="margin-top:10px;">
@@ -2585,7 +2797,6 @@
                 </div>
             </details>
         </div>
-    </div>
     </div>
 
     <div id="modal-delete-order" class="modal-overlay" style="z-index:1100;">
@@ -2627,7 +2838,7 @@
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
                         <div>
                             <label style="font-size:0.8rem; font-weight:700;">Status</label>
-                            <select id="edit-invoice-status" class="select-filter" style="width:100%; margin-top:4px;">
+                            <select id="edit-invoice-status" class="select-filter" style="width:100%; margin-top:4px;" onchange="syncEditInvoiceSendButton()">
                                 <option value="Pending">Pending</option>
                                 <option value="Partial Paid">Partial Paid</option>
                                 <option value="Paid">Paid</option>
@@ -2664,7 +2875,7 @@
                             <input type="text" id="edit-invoice-paid" class="select-filter" style="width:100%; margin-top:4px;" inputmode="decimal">
                         </div>
                     </div>
-                    <p style="font-size:0.75rem; color:#64748b; margin:0;">GBP uses Tide 32546658 / 04-06-05. PKR uses the UBL IBAN. Use Send invoice to email the company owner. Marking a new receipt also emails them.</p>
+                    <p style="font-size:0.75rem; color:#64748b; margin:0;">GBP uses Tide 32546658 / 04-06-05. PKR uses the UBL IBAN. Save invoice only updates the record. Send invoice emails payment details. When the invoice is paid in full, Send thank you emails a complete-payment notice.</p>
                     <div style="display:flex; justify-content:flex-end; gap:10px; flex-wrap:wrap;">
                         <button type="button" class="btn-secondary" onclick="closeEditInvoiceModal()">Cancel</button>
                         <button type="button" class="btn-secondary" id="edit-invoice-send" onclick="emailAdminInvoice()">Send invoice</button>
@@ -2868,30 +3079,30 @@
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <div>
                         <h3 style="font-size:1.3rem; font-weight:800; color:var(--color-text-primary); margin:0;" id="wizard-header-title">Create New Order</h3>
-                        <p style="font-size:0.82rem; color:var(--color-text-muted); margin:4px 0 0 0;" id="wizard-header-subtitle">Select customer, choose product, and configure order specifications.</p>
+                        <p style="font-size:0.82rem; color:var(--color-text-muted); margin:4px 0 0 0;" id="wizard-header-subtitle"></p>
                     </div>
-                    <button type="button" class="btn-close" onclick="closeUniversalOrderWizard()"><i data-lucide="x"></i></button>
+                    <button type="button" class="btn-close" onclick="requestCloseUniversalOrderWizard()"><i data-lucide="x"></i></button>
                 </div>
 
                 <!-- 5-STEP WIZARD PROGRESS BAR -->
                 <div class="order-wizard-stepper" style="display:grid; grid-template-columns:repeat(5, 1fr); gap:8px; margin-top:16px;">
-                    <div class="wizard-step-pill active" id="wizard-step-pill-1" onclick="jumpToWizardStep(1)">
+                    <div class="wizard-step-pill active" id="wizard-step-pill-1">
                         <span class="step-num">1</span>
                         <span class="step-text">Customer</span>
                     </div>
-                    <div class="wizard-step-pill" id="wizard-step-pill-2" onclick="jumpToWizardStep(2)">
+                    <div class="wizard-step-pill" id="wizard-step-pill-2">
                         <span class="step-num">2</span>
                         <span class="step-text">Service</span>
                     </div>
-                    <div class="wizard-step-pill" id="wizard-step-pill-3" onclick="jumpToWizardStep(3)">
+                    <div class="wizard-step-pill" id="wizard-step-pill-3">
                         <span class="step-num">3</span>
                         <span class="step-text">Details</span>
                     </div>
-                    <div class="wizard-step-pill" id="wizard-step-pill-4" onclick="jumpToWizardStep(4)">
+                    <div class="wizard-step-pill" id="wizard-step-pill-4">
                         <span class="step-num">4</span>
                         <span class="step-text">Documents</span>
                     </div>
-                    <div class="wizard-step-pill" id="wizard-step-pill-5" onclick="jumpToWizardStep(5)">
+                    <div class="wizard-step-pill" id="wizard-step-pill-5">
                         <span class="step-num">5</span>
                         <span class="step-text">Review</span>
                     </div>
@@ -2945,6 +3156,10 @@
 
                 <!-- STEP 2: SELECT PRODUCT / SERVICE FROM CATALOG -->
                 <div id="wizard-step-2" class="wizard-step-pane" style="display:none;">
+                    <div style="margin-bottom:12px;">
+                        <h4 style="font-size:1.05rem; font-weight:700; color:var(--color-text-primary); margin:0;">Select products</h4>
+                        <p style="font-size:0.82rem; color:var(--color-text-muted); margin:4px 0 0 0;">Tick as many as you need. Different requirements are merged into one details form and one document upload.</p>
+                    </div>
                     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
                         <div style="position:relative; flex:1; min-width:240px;">
                             <input type="text" id="wizard-product-search" class="select-filter" style="width:100%; padding-left:36px;" placeholder="Search products or services..." oninput="filterWizardCatalogProducts()">
@@ -2953,6 +3168,14 @@
                         <div id="wizard-category-pills" style="display:flex; gap:6px; flex-wrap:wrap;">
                             <!-- Category filter buttons injected via JS -->
                         </div>
+                    </div>
+
+                    <div id="wizard-selected-tray" class="wizard-selected-tray" hidden>
+                        <div>
+                            <strong id="wizard-selected-tray-count">0 selected</strong>
+                            <div id="wizard-selected-tray-list" class="wizard-selected-tray-list"></div>
+                        </div>
+                        <button type="button" class="btn-primary" onclick="confirmWizardProducts()">Continue with selected</button>
                     </div>
 
                     <div id="wizard-products-grid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:16px;">
@@ -2973,7 +3196,7 @@
                         <div style="text-align:right;">
                             <div style="font-size:1.35rem; font-weight:800; color:var(--color-primary);" id="wizard-selected-price">£45.00</div>
                             <div style="font-size:0.75rem; color:var(--color-text-muted);" id="wizard-selected-est">Est: 24-48 Hours</div>
-                            <button type="button" class="btn-ghost" style="padding:2px 8px; font-size:0.75rem; margin-top:4px;" onclick="jumpToWizardStep(2)">Change Product</button>
+                            <button type="button" class="btn-ghost" style="padding:2px 8px; font-size:0.75rem; margin-top:4px;" onclick="jumpToWizardStep(2)">Change products</button>
                         </div>
                     </div>
 
@@ -2987,8 +3210,8 @@
                         <!-- Repeatable section cards rendered here -->
                     </div>
 
-                    <!-- Service Access Credentials Section (Email & Password) -->
-                    <div style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:14px; padding:18px; margin-top:20px;">
+                    <!-- Service Access Credentials Section (Email & Password) — hidden for package formation (collected above) -->
+                    <div id="wizard-access-credentials" style="background:var(--color-surface-soft); border:1px solid var(--color-border); border-radius:14px; padding:18px; margin-top:20px;">
                         <h5 style="font-size:0.88rem; font-weight:700; color:var(--color-text-primary); margin:0 0 10px 0; display:flex; align-items:center; gap:6px;">
                             <i data-lucide="key" style="width:16px; height:16px; color:var(--color-primary);"></i> Service Access Credentials (Email &amp; Password)
                         </h5>
@@ -2996,12 +3219,12 @@
                         <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
                             <div>
                                 <label for="wizard-access-email" style="font-size:0.8rem; font-weight:700; color:var(--color-text-primary);">Service Account Email</label>
-                                <input type="email" id="wizard-access-email" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 14px;" placeholder="e.g. info@clientcompany.co.uk" oninput="universalOrderWizardState.formValues['access_email'] = this.value">
+                                <input type="email" id="wizard-access-email" class="select-filter wizard-field-input" style="width:100%; margin-top:8px;" placeholder="e.g. info@clientcompany.co.uk" oninput="universalOrderWizardState.formValues['access_email'] = this.value">
                             </div>
                             <div>
                                 <label for="wizard-access-email-password" style="font-size:0.8rem; font-weight:700; color:var(--color-text-primary);">Email Password / Access Code</label>
                                 <div style="position:relative;">
-                                    <input type="password" id="wizard-access-email-password" class="select-filter" style="width:100%; margin-top:4px; font-size:0.88rem; padding:10px 38px 10px 14px;" placeholder="Enter password / access code" autocomplete="new-password" oninput="universalOrderWizardState.formValues['access_email_password'] = this.value">
+                                    <input type="password" id="wizard-access-email-password" class="select-filter wizard-field-input" style="width:100%; margin-top:8px; padding-right:38px !important;" placeholder="Enter password / access code" autocomplete="new-password" oninput="universalOrderWizardState.formValues['access_email_password'] = this.value">
                                     <button type="button" class="btn-ghost" style="position:absolute; right:6px; top:50%; transform:translateY(-50%); padding:4px 6px;" onclick="toggleAccessPasswordVisibility('wizard-access-email-password')">
                                         <i data-lucide="eye" id="eye-wizard-access-email-password" style="width:14px; height:14px;"></i>
                                     </button>
@@ -3015,8 +3238,18 @@
                 <!-- STEP 4: DOCUMENT REQUIREMENTS & UPLOADS -->
                 <div id="wizard-step-4" class="wizard-step-pane" style="display:none;">
                     <div style="margin-bottom:16px;">
-                        <h4 style="font-size:1.05rem; font-weight:700; color:var(--color-text-primary); margin:0;">Upload Required &amp; Supporting Documents</h4>
-                        <p style="font-size:0.82rem; color:var(--color-text-muted); margin:4px 0 0 0;">Upload identity, address, or specification files required for this service.</p>
+                        <h4 id="wizard-docs-title" style="font-size:1.05rem; font-weight:700; color:var(--color-text-primary); margin:0;">Upload required documents once</h4>
+                        <p id="wizard-docs-lead" style="font-size:0.82rem; color:var(--color-text-muted); margin:4px 0 0 0;">If you selected several products, we merge the requirements and ask only once.</p>
+                    </div>
+
+                    <div id="wizard-upload-progress" style="display:none; margin-bottom:14px; padding:12px 16px; border-radius:12px; background:#ecfdf5; border:1px solid #a7f3d0;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:8px;">
+                            <strong id="wizard-upload-progress-label" style="font-size:0.85rem; color:#047857;">Uploading…</strong>
+                            <span id="wizard-upload-progress-pct" style="font-size:0.95rem; font-weight:800; color:#047857;">0%</span>
+                        </div>
+                        <div style="height:10px; background:#d1fae5; border-radius:999px; overflow:hidden;">
+                            <div id="wizard-upload-progress-bar" style="height:100%; width:0%; background:linear-gradient(90deg, #10b981, #059669); transition:width 0.12s ease;"></div>
+                        </div>
                     </div>
 
                     <div id="wizard-documents-checklist" style="display:flex; flex-direction:column; gap:14px;">
@@ -3035,8 +3268,8 @@
                             </div>
                             <div style="text-align:right;">
                                 <div style="font-size:0.8rem; color:var(--color-text-muted); font-weight:600;">AUTHORITATIVE TOTAL</div>
-                                <div style="font-size:1.6rem; font-weight:800; color:var(--color-text-primary);" id="review-total-price">£54.00</div>
-                                <div style="font-size:0.75rem; color:var(--color-text-muted);" id="review-vat-breakdown">Subtotal £45.00 + VAT (20%) £9.00</div>
+                                <div style="font-size:1.6rem; font-weight:800; color:var(--color-text-primary);" id="review-total-price">£45.00</div>
+                                <div style="font-size:0.75rem; color:var(--color-text-muted);" id="review-vat-breakdown">No VAT</div>
                             </div>
                         </div>
 
@@ -3053,15 +3286,18 @@
                                 <i data-lucide="check-circle" style="width:20px; height:20px; color:var(--color-success);" id="review-docs-check-icon"></i>
                                 <div>
                                     <strong style="font-size:0.85rem; color:var(--color-text-primary);" id="review-docs-check-title">Required Documents Uploaded</strong>
-                                    <div style="font-size:0.75rem; color:var(--color-text-muted);" id="review-docs-check-sub">2 of 2 required files attached</div>
+                                    <div style="font-size:0.75rem; color:var(--color-text-muted);" id="review-docs-check-sub">0 of 2 required files attached</div>
                                 </div>
                             </div>
                         </div>
 
-                        <!-- Form Field Summary List -->
-                        <div style="background:var(--color-surface); border:1px solid var(--color-border); border-radius:12px; padding:16px;">
-                            <h5 style="font-size:0.85rem; font-weight:700; color:var(--color-text-primary); margin:0 0 12px 0;">Order Specifications Summary</h5>
-                            <div id="review-form-values-summary" style="display:grid; grid-template-columns:1fr 1fr; gap:10px; font-size:0.84rem;">
+                        <!-- Form Field Summary Cage -->
+                        <div class="wizard-review-cage">
+                            <div class="wizard-review-cage-head">
+                                <h5>Order specifications</h5>
+                                <span>Checked once — duplicates removed</span>
+                            </div>
+                            <div id="review-form-values-summary" class="wizard-review-cage-grid">
                                 <!-- Form values rendered here -->
                             </div>
                         </div>
@@ -3229,7 +3465,7 @@
                         <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
                             <div>
                                 <label for="manual-order-director-nationality" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Director Nationality</label>
-                                <input type="text" id="manual-order-director-nationality" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;" placeholder="e.g. British" value="British" autocomplete="off">
+                                <input type="text" id="manual-order-director-nationality" class="select-filter" style="width:100%; margin-top:6px; font-size:0.88rem; padding:10px 14px;" placeholder="e.g. British / Pakistani" value="" autocomplete="off">
                             </div>
                             <div>
                                 <label for="manual-order-director-residence" style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary);">Country of Residence</label>
@@ -3276,7 +3512,7 @@
                                 </select>
                             </div>
                             <div style="text-align:right;">
-                                <div style="font-size:0.8rem; color:var(--color-text-muted); font-weight:600; text-transform:uppercase;">Total Amount Inc. VAT</div>
+                                <div style="font-size:0.8rem; color:var(--color-text-muted); font-weight:600; text-transform:uppercase;">Total Amount</div>
                                 <div style="font-size:1.4rem; font-weight:800; color:var(--color-text-primary); margin-top:2px;">
                                     £<span id="manual-order-total-price">0.00</span>
                                 </div>
@@ -3336,7 +3572,6 @@
                             </select>
                         </div>
                         <div id="create-company-new-client" hidden style="margin-top:8px; display:flex; flex-direction:column; gap:10px;">
-                            <p style="font-size:0.75rem; color:#64748b; margin:0;">We create the client record now. They can sign in later when you invite them or when they register on the website with the same email.</p>
                             <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
                                 <div>
                                     <label style="font-size:0.8rem; font-weight:700;">Full name *</label>
@@ -3401,7 +3636,7 @@
             <div class="modal-header">
                 <div>
                     <h3 id="service-modal-title">Add Service</h3>
-                    <p id="service-modal-subtitle" style="font-size:0.8rem; color:#64748b;">This adds a service to the CRM catalog. It does not create a website product.</p>
+                    <p id="service-modal-subtitle" style="font-size:0.8rem; color:#64748b;"></p>
                 </div>
                 <button type="button" class="btn-close" onclick="closeCreateServiceModal()"><i data-lucide="x"></i></button>
             </div>
@@ -3421,10 +3656,14 @@
                         <label style="font-size:0.8rem; font-weight:700;">Description</label>
                         <textarea id="create-service-description" class="select-filter" style="width:100%; height:70px; margin-top:4px; font-family:inherit; padding:10px;"></textarea>
                     </div>
-                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px;">
                         <div>
-                            <label style="font-size:0.8rem; font-weight:700;">Price (£) *</label>
+                            <label style="font-size:0.8rem; font-weight:700;">Sell price (£) *</label>
                             <input type="number" id="create-service-price" class="select-filter" style="width:100%; margin-top:4px;" min="0" step="0.01" required>
+                        </div>
+                        <div>
+                            <label style="font-size:0.8rem; font-weight:700;">Original / cost price (£)</label>
+                            <input type="number" id="create-service-cost-price" class="select-filter" style="width:100%; margin-top:4px;" min="0" step="0.01" value="0">
                         </div>
                         <div>
                             <label style="font-size:0.8rem; font-weight:700;">Duration</label>
@@ -3485,8 +3724,8 @@
                                     <div class="ch-search-results portfolio-rename-ch-results" id="portfolio-rename-ch-results" hidden></div>
                                 </div>
                                 <button type="submit" class="btn-primary btn-tiny" id="portfolio-rename-save">Save name</button>
-                                <span id="portfolio-rename-status" role="status"></span>
                             </form>
+                            <p id="portfolio-rename-status" class="portfolio-rename-status" role="status"></p>
                             <p id="portfolio-rename-hint" class="portfolio-rename-hint" hidden>Type a name to check Companies House. Save once the green tick appears.</p>
                         </div>
                         <div><span>Company number</span><strong id="portfolio-detail-number-field">—</strong></div>
@@ -3499,7 +3738,6 @@
                             <div id="portfolio-detail-email-wrap">
                                 <strong id="portfolio-detail-email">—</strong>
                             </div>
-                            <p class="portfolio-field-hint">Automated alerts send only when a real email is on file (company domain, Gmail, Outlook, Hotmail, etc.). Placeholders never send.</p>
                             <div id="portfolio-compliance-whatsapp-cta" class="portfolio-compliance-wa" hidden></div>
                             <div id="portfolio-notification-history" class="portfolio-notification-history" hidden></div>
                         </div>
@@ -3618,7 +3856,7 @@
             <div class="modal-header">
                 <div>
                     <h3 id="acct-books-title">Accounts workspace</h3>
-                    <p id="acct-books-subtitle" style="font-size:0.8rem; color:#64748b;">Bank statements → cash book → Companies House filing under UK rules.</p>
+                    <p id="acct-books-subtitle" style="font-size:0.8rem; color:#64748b;"></p>
                 </div>
                 <button type="button" class="btn-close" onclick="closeAccountancyBooks()"><i data-lucide="x"></i></button>
             </div>
@@ -3816,17 +4054,19 @@
                 </div>
             </form>
         </div>
+    </div>
+
     <!-- Forgot Password Modal -->
-    <div id="modal-forgot-password" class="crm-modal-backdrop" hidden style="display:none; position:fixed; inset:0; z-index:9999; background:rgba(15,23,42,0.6); backdrop-filter:blur(4px); align-items:center; justify-content:center; padding:16px;">
-        <div class="crm-modal-card" style="background:#ffffff; border-radius:16px; max-width:440px; width:100%; box-shadow:0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04); overflow:hidden;">
+    <div id="modal-forgot-password" class="modal-overlay" style="z-index:20000;" onclick="if(event.target===this) closeForgotPasswordModal()">
+        <div class="modal-card" style="max-width:440px; width:92%; padding:0; overflow:hidden;" role="dialog" aria-modal="true" aria-labelledby="forgot-password-title">
             <div class="crm-modal-head" style="display:flex; justify-content:space-between; align-items:center; padding:18px 24px; border-bottom:1px solid #e2e8f0; background:#f8fafc;">
-                <h3 style="margin:0; font-size:1.1rem; font-weight:700; color:#0f172a;">Reset Password</h3>
+                <h3 id="forgot-password-title" style="margin:0; font-size:1.1rem; font-weight:700; color:#0f172a;">Reset Password</h3>
                 <button type="button" class="modal-close" style="background:none; border:none; font-size:1.5rem; color:#64748b; cursor:pointer;" onclick="closeForgotPasswordModal()">&times;</button>
             </div>
             <form id="forgot-password-form" onsubmit="handleForgotPasswordSubmit(event)">
                 <div class="crm-modal-body" style="padding:24px;">
                     <p style="font-size:0.88rem; color:#64748b; margin:0 0 16px 0; line-height:1.5;">
-                        Enter your account email address below and we will send you instructions to reset your password.
+                        Enter your account email. B2B and staff accounts receive a portal reset link. Website customers should use the Brixen website login.
                     </p>
                     <div class="apple-field">
                         <label for="forgot-email" style="font-size:0.82rem; font-weight:700; color:#1e293b; margin-bottom:6px; display:block;">Email address</label>
@@ -3836,13 +4076,43 @@
                 </div>
                 <div class="crm-modal-foot" style="padding:16px 24px; display:flex; justify-content:flex-end; gap:10px; background:#f8fafc; border-top:1px solid #e2e8f0;">
                     <button type="button" class="btn-secondary" onclick="closeForgotPasswordModal()">Cancel</button>
-                    <button type="submit" class="btn-primary" id="btn-submit-forgot-password">Send Instructions</button>
+                    <button type="submit" class="btn-primary" id="btn-submit-forgot-password">Send reset link</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="modal-reset-password" class="modal-overlay" style="z-index:20000;" onclick="if(event.target===this) closeResetPasswordModal()">
+        <div class="modal-card" style="max-width:440px; width:92%; padding:0; overflow:hidden;" role="dialog" aria-modal="true" aria-labelledby="reset-password-title">
+            <div class="crm-modal-head" style="display:flex; justify-content:space-between; align-items:center; padding:18px 24px; border-bottom:1px solid #e2e8f0; background:#f8fafc;">
+                <h3 id="reset-password-title" style="margin:0; font-size:1.1rem; font-weight:700; color:#0f172a;">Choose a new password</h3>
+                <button type="button" class="modal-close" style="background:none; border:none; font-size:1.5rem; color:#64748b; cursor:pointer;" onclick="closeResetPasswordModal()">&times;</button>
+            </div>
+            <form id="reset-password-form" onsubmit="handleResetPasswordSubmit(event)">
+                <input type="hidden" id="reset-password-token" value="">
+                <div class="crm-modal-body" style="padding:24px;">
+                    <p style="font-size:0.88rem; color:#64748b; margin:0 0 16px 0; line-height:1.5;">Enter a new password for this portal account (minimum 10 characters).</p>
+                    <div class="apple-field" style="margin-bottom:12px;">
+                        <label for="reset-password-new" style="font-size:0.82rem; font-weight:700; color:#1e293b; margin-bottom:6px; display:block;">New password</label>
+                        <input type="password" id="reset-password-new" required minlength="10" autocomplete="new-password" style="width:100%; padding:10px 14px; border:1px solid #cbd5e1; border-radius:8px; font-size:0.95rem;">
+                    </div>
+                    <div class="apple-field">
+                        <label for="reset-password-confirm" style="font-size:0.82rem; font-weight:700; color:#1e293b; margin-bottom:6px; display:block;">Confirm password</label>
+                        <input type="password" id="reset-password-confirm" required minlength="10" autocomplete="new-password" style="width:100%; padding:10px 14px; border:1px solid #cbd5e1; border-radius:8px; font-size:0.95rem;">
+                    </div>
+                    <div id="reset-password-msg" class="apple-form-error" style="display:none; margin-top:14px; padding:10px; border-radius:8px; font-size:0.88rem;"></div>
+                </div>
+                <div class="crm-modal-foot" style="padding:16px 24px; display:flex; justify-content:flex-end; gap:10px; background:#f8fafc; border-top:1px solid #e2e8f0;">
+                    <button type="button" class="btn-secondary" onclick="closeResetPasswordModal()">Cancel</button>
+                    <button type="submit" class="btn-primary" id="btn-submit-reset-password">Update password</button>
                 </div>
             </form>
         </div>
     </div>
 
     <div id="global-search-results" class="global-search-results" hidden></div>
-    <script src="/static/js/app.js?v=3102.0" defer></script>
+    <div id="portal-toast-host" class="portal-toast-host" aria-live="polite" aria-atomic="true"></div>
+    <script src="/static/js/app.js?v=3254.14" defer></script>
+    <script src="/static/js/accounts-file.js?v=3254.0" defer></script>
 </body>
 </html>

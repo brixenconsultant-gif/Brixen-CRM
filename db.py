@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import secrets
 import re
+import threading
 from argon2 import PasswordHasher, Type
 from argon2.exceptions import VerifyMismatchError, VerificationError
 
@@ -101,23 +102,115 @@ def unusable_password_hash():
     return hash_password(secrets.token_urlsafe(32))
 
 
-def get_db():
-    conn = sqlite3.connect(DB_PATH, timeout=30.0)
+_thread_local = threading.local()
+
+PERFORMANCE_INDEXES_SQL = """
+CREATE INDEX IF NOT EXISTS idx_companies_user_id ON companies(user_id);
+CREATE INDEX IF NOT EXISTS idx_companies_user_created ON companies(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_companies_inc_date ON companies(inc_date);
+CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
+CREATE INDEX IF NOT EXISTS idx_orders_user_status ON orders(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_orders_user_created ON orders(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_orders_company_id ON orders(company_id);
+CREATE INDEX IF NOT EXISTS idx_orders_status_created ON orders(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_invoices_user_id ON invoices(user_id);
+CREATE INDEX IF NOT EXISTS idx_invoices_user_status ON invoices(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_invoices_order_id ON invoices(order_id);
+CREATE INDEX IF NOT EXISTS idx_addresses_user_id ON addresses(user_id);
+CREATE INDEX IF NOT EXISTS idx_addresses_user_expiry ON addresses(user_id, expiry_date);
+CREATE INDEX IF NOT EXISTS idx_order_line_items_order_id ON order_line_items(order_id, sort_order, id);
+CREATE INDEX IF NOT EXISTS idx_order_timeline_order_id ON order_timeline(order_id);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_documents_user_visible ON documents(user_id, client_visible, created_at);
+CREATE INDEX IF NOT EXISTS idx_documents_order_id ON documents(order_id);
+CREATE INDEX IF NOT EXISTS idx_company_directors_company ON company_directors(company_id);
+CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assigned_staff_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_client ON tasks(client_id);
+"""
+
+
+def _configure_connection(conn):
     conn.row_factory = sqlite3.Row
-    try:
-        conn.execute("PRAGMA foreign_keys = ON;")
-        conn.execute("PRAGMA journal_mode = WAL;")
-        conn.execute("PRAGMA busy_timeout = 15000;")
-    except sqlite3.OperationalError:
-        pass
+    pragmas = (
+        "PRAGMA foreign_keys = ON;",
+        "PRAGMA journal_mode = WAL;",
+        "PRAGMA busy_timeout = 15000;",
+        "PRAGMA synchronous = NORMAL;",
+        "PRAGMA cache_size = -65536;",
+        "PRAGMA temp_store = MEMORY;",
+        "PRAGMA mmap_size = 268435456;",
+        "PRAGMA wal_autocheckpoint = 1000;",
+    )
+    for pragma in pragmas:
+        try:
+            conn.execute(pragma)
+        except sqlite3.OperationalError:
+            pass
     return conn
+
+
+def _open_db():
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
+    return _configure_connection(conn)
+
+
+def get_db():
+    conn = getattr(_thread_local, 'conn', None)
+    if conn is not None:
+        return conn
+    conn = _open_db()
+    _thread_local.conn = conn
+    return conn
+
+
+def close_db():
+    conn = getattr(_thread_local, 'conn', None)
+    if conn is None:
+        return
+    try:
+        conn.close()
+    except Exception:
+        pass
+    _thread_local.conn = None
+
+
+def ensure_performance_indexes(conn=None):
+    conn = conn or get_db()
+    before = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()}
+    created = []
+    for stmt in PERFORMANCE_INDEXES_SQL.split(';'):
+        stmt = stmt.strip()
+        if not stmt:
+            continue
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError as exc:
+            print(f"[DB Speed] skipped {stmt.split()[-1] if stmt else 'index'}: {exc}")
+    after = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()}
+    created = after - before
+    try:
+        if created:
+            conn.execute("ANALYZE;")
+        conn.execute("PRAGMA optimize;")
+        conn.commit()
+    except sqlite3.OperationalError as exc:
+        print(f"[DB Speed] analyze skipped: {exc}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    return created
+
 
 def init_db():
     conn = get_db()
     with open(SCHEMA_PATH, 'r') as f:
         conn.executescript(f.read())
     conn.commit()
-    conn.close()
+    close_db()
     ensure_schema()
 
 
@@ -199,9 +292,15 @@ def ensure_schema():
             unit_price REAL NOT NULL DEFAULT 0,
             line_total REAL NOT NULL DEFAULT 0,
             sort_order INTEGER NOT NULL DEFAULT 0,
+            fulfillment_status TEXT NOT NULL DEFAULT 'Pending',
             FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
         );
     """)
+    line_cols = {row[1] for row in conn.execute("PRAGMA table_info(order_line_items)").fetchall()}
+    if 'fulfillment_status' not in line_cols:
+        conn.execute(
+            "ALTER TABLE order_line_items ADD COLUMN fulfillment_status TEXT NOT NULL DEFAULT 'Pending'"
+        )
     doc_cols = {row[1] for row in conn.execute("PRAGMA table_info(documents)").fetchall()}
     if 'client_visible' not in doc_cols:
         conn.execute("ALTER TABLE documents ADD COLUMN client_visible INTEGER NOT NULL DEFAULT 1")
@@ -214,6 +313,8 @@ def ensure_schema():
         conn.execute("ALTER TABLE orders ADD COLUMN payment_mode TEXT")
     if 'portfolio_hidden' not in order_cols:
         conn.execute("ALTER TABLE orders ADD COLUMN portfolio_hidden INTEGER NOT NULL DEFAULT 0")
+    if 'cost_price' not in order_cols:
+        conn.execute("ALTER TABLE orders ADD COLUMN cost_price REAL")
     service_cols = {row[1] for row in conn.execute("PRAGMA table_info(services)").fetchall()}
     if 'woocommerce_product_id' not in service_cols:
         conn.execute("ALTER TABLE services ADD COLUMN woocommerce_product_id TEXT")
@@ -223,6 +324,8 @@ def ensure_schema():
         conn.execute("ALTER TABLE services ADD COLUMN document_requirements_json TEXT")
     if 'estimated_delivery_time' not in service_cols:
         conn.execute("ALTER TABLE services ADD COLUMN estimated_delivery_time TEXT DEFAULT '24-48 Hours'")
+    if 'cost_price' not in service_cols:
+        conn.execute("ALTER TABLE services ADD COLUMN cost_price REAL NOT NULL DEFAULT 0")
 
     if 'checkout_form_json' not in order_cols:
         conn.execute("ALTER TABLE orders ADD COLUMN checkout_form_json TEXT")
@@ -258,6 +361,10 @@ def ensure_schema():
     """)
     if 'theme_preference' not in user_cols:
         conn.execute("ALTER TABLE users ADD COLUMN theme_preference TEXT DEFAULT 'system'")
+    if 'password_reset_token' not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN password_reset_token TEXT")
+    if 'password_reset_expires' not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN password_reset_expires TIMESTAMP")
     if 'checkout_phone' not in order_cols:
         conn.execute("ALTER TABLE orders ADD COLUMN checkout_phone TEXT")
     if 'access_email' not in order_cols:
@@ -361,6 +468,14 @@ def ensure_schema():
         conn.execute("ALTER TABLE companies ADD COLUMN accounts_next_due DATE")
     if 'accounts_overdue' not in company_cols:
         conn.execute("ALTER TABLE companies ADD COLUMN accounts_overdue INTEGER NOT NULL DEFAULT 0")
+    if 'accounts_made_up_to' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN accounts_made_up_to DATE")
+    if 'accounts_period_start' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN accounts_period_start DATE")
+    if 'accounts_last_made_up_to' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN accounts_last_made_up_to DATE")
+    if 'share_capital_gbp' not in company_cols:
+        conn.execute("ALTER TABLE companies ADD COLUMN share_capital_gbp REAL")
     if 'confirmation_next_due' not in company_cols:
         conn.execute("ALTER TABLE companies ADD COLUMN confirmation_next_due DATE")
     if 'confirmation_overdue' not in company_cols:
@@ -782,7 +897,15 @@ def ensure_rbac():
         print(f"[Schema Migration Note] {exc}")
         _should_lock = False
     finally:
-        conn.close()
+        close_db()
+    try:
+        created = ensure_performance_indexes()
+        if created:
+            print("[DB Speed] created indexes: " + ", ".join(sorted(created)))
+        else:
+            print("[DB Speed] lookup indexes ready")
+    except Exception as exc:
+        print(f"[DB Speed] {exc}")
     if locals().get('_should_lock'):
         try:
             import data_protection as _data_protection
@@ -797,20 +920,34 @@ def ensure_rbac():
 
 def query_db(query, args=(), one=False):
     conn = get_db()
-    cur = conn.cursor()
-    cur.execute(query, args)
-    rv = [dict(row) for row in cur.fetchall()]
-    conn.close()
+    try:
+        cur = conn.execute(query, args)
+        rv = [dict(row) for row in cur.fetchall()]
+    except sqlite3.ProgrammingError:
+        close_db()
+        conn = get_db()
+        cur = conn.execute(query, args)
+        rv = [dict(row) for row in cur.fetchall()]
     return (rv[0] if rv else None) if one else rv
 
 def execute_db(query, args=()):
     conn = get_db()
-    cur = conn.cursor()
-    cur.execute(query, args)
-    conn.commit()
-    last_id = cur.lastrowid
-    conn.close()
-    return last_id
+    try:
+        cur = conn.execute(query, args)
+        conn.commit()
+        return cur.lastrowid
+    except sqlite3.ProgrammingError:
+        close_db()
+        conn = get_db()
+        cur = conn.execute(query, args)
+        conn.commit()
+        return cur.lastrowid
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
 
 if __name__ == '__main__':
     init_db()
