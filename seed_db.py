@@ -164,11 +164,12 @@ def seed_demo():
         ('David Miller', 'david@nexusbiotech.co.uk', '+44 7700 900005', 'Nexus Biotech Ventures Ltd', '33 Cambridge Science Park, CB4 0FZ', 'wp_user_105')
     ]
     client_ids = []
-    for name, email, phone, cname, addr, wpid in client_data:
+    for idx, (name, email, phone, cname, addr, wpid) in enumerate(client_data, start=1):
+        b2b_code = f"B2B-10{idx:02d}"
         cid = execute_db("""
-            INSERT INTO users (wordpress_user_id, email, password_hash, full_name, phone, country, address, role, status, last_synced_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP);
-        """, (wpid, email, hash_password('ClientPass123!'), name, phone, 'United Kingdom', addr, 'CLIENT', 'Active'))
+            INSERT INTO users (wordpress_user_id, email, password_hash, full_name, phone, country, address, role, status, client_type, is_b2b, b2b_id, last_synced_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'B2B', 1, ?, CURRENT_TIMESTAMP);
+        """, (wpid, email, hash_password('ClientPass123!'), name, phone, 'United Kingdom', addr, 'CLIENT', 'Active', b2b_code))
         client_ids.append((cid, name, cname))
     primary_client_id = client_ids[0][0]
 

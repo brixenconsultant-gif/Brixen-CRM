@@ -45,7 +45,7 @@ class TestAuthentication(unittest.TestCase):
     def test_04_legacy_sha256_migration(self):
         import hashlib
         legacy_hash = hashlib.sha256('LegacyPass123!'.encode('utf-8')).hexdigest()
-        execute_db("INSERT OR REPLACE INTO users (id, email, full_name, password_hash, role, status) VALUES (999, 'legacy.user@example.com', 'Legacy User', ?, 'CLIENT', 'Active');", (legacy_hash,))
+        execute_db("INSERT OR REPLACE INTO users (id, email, full_name, password_hash, role, status, client_type, is_b2b) VALUES (999, 'legacy.user@example.com', 'Legacy User', ?, 'CLIENT', 'Active', 'B2B', 1);", (legacy_hash,))
         
         user_before = query_db("SELECT password_hash FROM users WHERE id = 999;", one=True)
         self.assertTrue(needs_rehash(user_before['password_hash']))
