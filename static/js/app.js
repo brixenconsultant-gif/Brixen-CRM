@@ -7851,9 +7851,8 @@ async function openAd01FormModal(formCode) {
     const modal = document.getElementById('modal-ad01-form');
     const frame = document.getElementById('ad01-form-frame');
     if (!modal || !frame) return;
-    const base = await resolveUkFormfillUrl();
     const form = encodeURIComponent(formCode || 'AD01');
-    frame.src = `${base}/?form=${form}&embed=1`;
+    frame.src = `/formfill?form=${form}&embed=1`;
     modal.classList.add('active');
     if (window.lucide) lucide.createIcons();
 }
