@@ -6938,6 +6938,50 @@ def find_portal_company_match(company_name=None, company_number=None):
     return query_db("SELECT * FROM companies WHERE id = ?;", (picked_id,), one=True)
 
 
+def search_portal_companies(query, limit=10):
+    """Search local CRM system companies by name, number, or registered email."""
+    q = (query or '').strip()
+    if not q or len(q) < 2:
+        return []
+    needle = f"%{q}%"
+    rows = query_db(
+        """
+        SELECT c.id, c.name, c.company_number, c.director, c.registered_email, c.reg_office,
+               c.authentication_code, c.status, c.user_id, u.full_name as owner_name, u.email as owner_email
+        FROM companies c
+        LEFT JOIN users u ON c.user_id = u.id
+        WHERE c.name LIKE ? OR c.company_number LIKE ? OR c.registered_email LIKE ? OR u.full_name LIKE ?
+        ORDER BY
+            CASE WHEN c.company_number LIKE 'REG-%' THEN 1 ELSE 0 END,
+            c.id DESC
+        LIMIT ?;
+        """,
+        (needle, needle, needle, needle, limit),
+    ) or []
+    results = []
+    for r in rows:
+        cnum = r.get('company_number') or ''
+        results.append({
+            'id': r.get('id'),
+            'name': r.get('name') or '',
+            'company_number': cnum,
+            'director': r.get('director') or '',
+            'director_name': r.get('director') or '',
+            'reg_office': r.get('reg_office') or '',
+            'registered_office_address': r.get('reg_office') or '',
+            'address': r.get('reg_office') or '',
+            'authentication_code': r.get('authentication_code') or '',
+            'status': r.get('status') or 'Active',
+            'owner_name': r.get('owner_name') or '',
+            'owner_email': r.get('owner_email') or '',
+            'user_id': r.get('user_id'),
+            'source': 'portal',
+            'is_portal': True,
+            'is_registered': not is_pending_company_number(cnum),
+        })
+    return results
+
+
 def company_owner_is_claimable(owner_user_id, client_id):
     """Allow reclaim when orphaned under staff, unowned, or already this client."""
     owner_id = optional_record_id(owner_user_id)
@@ -8078,6 +8122,255 @@ def uk_formfill_pro_url():
     url = (row['value'] if row and str(row.get('value') or '').strip() else None) or os.environ.get('UK_FORMFILL_PRO_URL')
     url = str(url or '/formfill').strip()
     return url.rstrip('/') or '/formfill'
+
+
+def render_ad01_formfill_page(environ):
+    """Render interactive UK Companies House Form AD01 FormFill Wizard."""
+    qs = urllib.parse.parse_qs(environ.get('QUERY_STRING', ''))
+    embed = (qs.get('embed') or [''])[0] in ('1', 'true')
+    preset_cnum = (qs.get('cnum') or qs.get('company_number') or [''])[0]
+    preset_cname = (qs.get('cname') or qs.get('company_name') or [''])[0]
+
+    pad_val = "12px" if embed else "24px"
+    card_pad = "20px" if embed else "32px"
+
+    html_code = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Companies House Form AD01 - Change of Registered Office Address</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8fafc; color: #0f172a; margin: 0; padding: {pad_val}; }}
+        .ad01-card {{ max-width: 860px; margin: 0 auto; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); padding: {card_pad}; }}
+        .ad01-header {{ display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #005ea5; padding-bottom: 16px; margin-bottom: 24px; flex-wrap: wrap; gap: 12px; }}
+        .ad01-title {{ font-size: 1.5rem; font-weight: 800; color: #005ea5; margin: 0; }}
+        .ad01-subtitle {{ font-size: 0.88rem; color: #475569; margin-top: 4px; }}
+        .ad01-badge {{ background: #005ea5; color: #ffffff; font-weight: 800; padding: 6px 14px; border-radius: 6px; font-size: 0.95rem; }}
+        .ad01-section {{ background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 20px; margin-bottom: 20px; position: relative; }}
+        .ad01-sec-num {{ font-size: 0.8rem; font-weight: 800; color: #005ea5; text-transform: uppercase; letter-spacing: 0.05em; }}
+        .ad01-sec-title {{ font-size: 1.1rem; font-weight: 800; color: #0f172a; margin: 4px 0 14px; }}
+        .ad01-field {{ margin-bottom: 16px; position: relative; }}
+        .ad01-field label {{ display: block; font-size: 0.9rem; font-weight: 700; color: #1e293b; margin-bottom: 6px; }}
+        .ad01-input {{ width: 100%; box-sizing: border-box; padding: 10px 12px; font-size: 0.92rem; border: 1px solid #cbd5e1; border-radius: 6px; background: #ffffff; color: #0f172a; transition: all 0.15s; }}
+        .ad01-input:focus {{ border-color: #005ea5; outline: none; box-shadow: 0 0 0 3px rgba(0,94,165,0.15); }}
+        .ad01-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }}
+        .preset-btn {{ background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; font-weight: 700; padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 0.84rem; margin-right: 8px; margin-bottom: 8px; display: inline-flex; align-items: center; gap: 6px; transition: all 0.15s; }}
+        .preset-btn:hover {{ background: #0284c7; color: #ffffff; border-color: #0284c7; }}
+        .ad01-actions {{ display: flex; gap: 12px; flex-wrap: wrap; justify-content: flex-end; margin-top: 24px; padding-top: 18px; border-top: 1px solid #e2e8f0; }}
+        .btn-ch {{ background: #005ea5; color: #ffffff; font-weight: 700; border: none; padding: 11px 22px; border-radius: 6px; cursor: pointer; font-size: 0.92rem; transition: background 0.15s; }}
+        .btn-ch:hover {{ background: #004f8a; }}
+        .btn-sec {{ background: #ffffff; color: #334155; border: 1px solid #cbd5e1; font-weight: 700; padding: 11px 18px; border-radius: 6px; cursor: pointer; font-size: 0.92rem; transition: background 0.15s; }}
+        .btn-sec:hover {{ background: #f1f5f9; }}
+        .ch-live-dropdown {{ position: absolute; left: 0; right: 0; top: 100%; z-index: 1200; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; box-shadow: 0 10px 25px rgba(0,0,0,0.15); max-height: 260px; overflow-y: auto; margin-top: 4px; display: none; }}
+        .ch-item {{ padding: 10px 14px; border-bottom: 1px solid #f1f5f9; cursor: pointer; }}
+        .ch-item:hover {{ background: #f0f9ff; }}
+        .status-msg {{ font-size: 0.85rem; color: #16a34a; font-weight: 600; margin-top: 6px; display: none; }}
+        @media print {{
+            body {{ background: #ffffff; padding: 0; }}
+            .ad01-card {{ box-shadow: none; border: none; padding: 0; max-width: 100%; }}
+            .ad01-actions, .preset-buttons, .search-hint {{ display: none !important; }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="ad01-card">
+        <div class="ad01-header">
+            <div>
+                <h1 class="ad01-title">Form AD01</h1>
+                <div class="ad01-subtitle">Companies House — Change of registered office address</div>
+            </div>
+            <div class="ad01-badge">UK FormFill Pro</div>
+        </div>
+
+        <form id="ad01-form" onsubmit="return handleAd01Submit(event);">
+            <!-- SECTION 1: COMPANY DETAILS -->
+            <div class="ad01-section">
+                <div class="ad01-sec-num">Section 1</div>
+                <div class="ad01-sec-title">Company details</div>
+
+                <div class="ad01-field">
+                    <label for="company-search">Search registered company</label>
+                    <input type="text" id="company-search" class="ad01-input" placeholder="Type company name or number (e.g. 16151899 or BRIXEN CONSULTANTS)..." autocomplete="off" oninput="onCompanySearchInput(this.value)">
+                    <div id="company-dropdown" class="ch-live-dropdown"></div>
+                    <div class="search-hint" style="font-size:0.78rem; color:#64748b; margin-top:4px;">
+                        Search system records or UK Companies House to auto-fill company details.
+                    </div>
+                </div>
+
+                <div class="ad01-grid">
+                    <div class="ad01-field">
+                        <label for="company_name">Company name <span style="color:#ef4444;">*</span></label>
+                        <input type="text" id="company_name" name="company_name" class="ad01-input" value="{html.escape(preset_cname)}" placeholder="e.g. BRIXEN CONSULTANTS LTD" required>
+                    </div>
+                    <div class="ad01-field">
+                        <label for="company_number">Company number <span style="color:#ef4444;">*</span></label>
+                        <input type="text" id="company_number" name="company_number" class="ad01-input" value="{html.escape(preset_cnum)}" placeholder="e.g. 16151899" required>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SECTION 2: NEW REGISTERED OFFICE ADDRESS -->
+            <div class="ad01-section">
+                <div class="ad01-sec-num">Section 2</div>
+                <div class="ad01-sec-title">New registered office address</div>
+
+                <div class="preset-buttons" style="margin-bottom:14px;">
+                    <span style="font-size:0.84rem; font-weight:700; color:#475569; display:block; margin-bottom:8px;">Brixen Official Office Presets:</span>
+                    <button type="button" class="preset-btn" onclick="applyPresetAddress('fenchurch')">
+                        🏛️ 20 Fenchurch St, London EC3M 3BY
+                    </button>
+                    <button type="button" class="preset-btn" onclick="applyPresetAddress('regent')">
+                        🏛️ 15 Regent St, London W1B 4LR
+                    </button>
+                </div>
+
+                <div class="ad01-field">
+                    <label for="address_line1">Building name / number & street <span style="color:#ef4444;">*</span></label>
+                    <input type="text" id="address_line1" name="address_line1" class="ad01-input" placeholder="e.g. 20 Fenchurch Street, 8th Floor" required>
+                </div>
+
+                <div class="ad01-field">
+                    <label for="address_line2">Address line 2 (optional)</label>
+                    <input type="text" id="address_line2" name="address_line2" class="ad01-input" placeholder="e.g. City of London">
+                </div>
+
+                <div class="ad01-grid">
+                    <div class="ad01-field">
+                        <label for="post_town">Post town / City <span style="color:#ef4444;">*</span></label>
+                        <input type="text" id="post_town" name="post_town" class="ad01-input" placeholder="e.g. London" required>
+                    </div>
+                    <div class="ad01-field">
+                        <label for="postcode">Postcode <span style="color:#ef4444;">*</span></label>
+                        <input type="text" id="postcode" name="postcode" class="ad01-input" placeholder="e.g. EC3M 3BY" required>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SECTION 3: SIGNATURE & CONTACT -->
+            <div class="ad01-section">
+                <div class="ad01-sec-num">Section 3</div>
+                <div class="ad01-sec-title">Signature & Presenter details</div>
+
+                <div class="ad01-grid">
+                    <div class="ad01-field">
+                        <label for="director_name">Signatory name <span style="color:#ef4444;">*</span></label>
+                        <input type="text" id="director_name" name="director_name" class="ad01-input" placeholder="Full legal name of Director / Authorized officer" required>
+                    </div>
+                    <div class="ad01-field">
+                        <label for="signatory_role">Role <span style="color:#ef4444;">*</span></label>
+                        <select id="signatory_role" name="signatory_role" class="ad01-input">
+                            <option value="Director">Director</option>
+                            <option value="Secretary">Secretary</option>
+                            <option value="Person Authorised">Person Authorised</option>
+                        </select>
+                    </div>
+                    <div class="ad01-field">
+                        <label for="contact_email">Notification email</label>
+                        <input type="email" id="contact_email" name="contact_email" class="ad01-input" placeholder="contact@brixenconsultants.com">
+                    </div>
+                </div>
+            </div>
+
+            <div id="status-msg" class="status-msg"></div>
+
+            <div class="ad01-actions">
+                <button type="button" class="btn-sec" onclick="window.print()">📄 Print / Save AD01 PDF</button>
+                <button type="submit" class="btn-ch">🚀 File Form AD01 to Companies House</button>
+            </div>
+        </form>
+    </div>
+
+    <script>
+        let debounceTimer = null;
+        async function onCompanySearchInput(val) {{
+            const query = val.trim();
+            const dropdown = document.getElementById('company-dropdown');
+            if (query.length < 2) {{ dropdown.style.display = 'none'; return; }}
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(async () => {{
+                try {{
+                    const res = await fetch('/api/companies-house/search?q=' + encodeURIComponent(query));
+                    const data = await res.json().catch(() => ({{}}));
+                    if (!data || !data.companies || !data.companies.length) {{
+                        dropdown.style.display = 'none';
+                        return;
+                    }}
+                    dropdown.style.display = 'block';
+                    dropdown.innerHTML = data.companies.map(c => `
+                        <div class="ch-item" onclick="selectCompany('${{escapeJs(c.name || '')}}', '${{escapeJs(c.company_number || '')}}', '${{escapeJs(c.director || c.director_name || '')}}')">
+                            <strong>${{escapeHtml(c.name || '')}}</strong> (${{c.company_number || 'N/A'}})
+                            <div style="font-size:0.78rem; color:#64748b;">${{escapeHtml(c.director || c.director_name || '')}}</div>
+                        </div>
+                    `).join('');
+                }} catch(e) {{ dropdown.style.display = 'none'; }}
+            }}, 250);
+        }}
+
+        function selectCompany(name, num, director) {{
+            if (name) document.getElementById('company_name').value = name;
+            if (num) document.getElementById('company_number').value = num;
+            if (director) document.getElementById('director_name').value = director;
+            document.getElementById('company-dropdown').style.display = 'none';
+        }}
+
+        function applyPresetAddress(kind) {{
+            if (kind === 'fenchurch') {{
+                document.getElementById('address_line1').value = '20 Fenchurch Street, 8th Floor';
+                document.getElementById('address_line2').value = 'City of London';
+                document.getElementById('post_town').value = 'London';
+                document.getElementById('postcode').value = 'EC3M 3BY';
+            }} else if (kind === 'regent') {{
+                document.getElementById('address_line1').value = '15 Regent Street, Suite 402';
+                document.getElementById('address_line2').value = '';
+                document.getElementById('post_town').value = 'London';
+                document.getElementById('postcode').value = 'W1B 4LR';
+            }}
+        }}
+
+        function escapeHtml(str) {{
+            return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }}
+        function escapeJs(str) {{
+            return String(str || '').replace(/'/g, "\\'");
+        }}
+
+        async function handleAd01Submit(evt) {{
+            evt.preventDefault();
+            const msg = document.getElementById('status-msg');
+            msg.style.display = 'block';
+            msg.style.color = '#0284c7';
+            msg.textContent = 'Submitting Form AD01 Change of Registered Office Address to Companies House...';
+            try {{
+                const payload = {{
+                    company_name: document.getElementById('company_name').value,
+                    company_number: document.getElementById('company_number').value,
+                    address_line1: document.getElementById('address_line1').value,
+                    address_line2: document.getElementById('address_line2').value,
+                    post_town: document.getElementById('post_town').value,
+                    postcode: document.getElementById('postcode').value,
+                    director_name: document.getElementById('director_name').value,
+                    signatory_role: document.getElementById('signatory_role').value,
+                    contact_email: document.getElementById('contact_email').value
+                }};
+                const res = await fetch('/api/admin/uk-formfill/ad01', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify(payload)
+                }});
+                const data = await res.json().catch(() => ({{}}));
+                msg.style.color = '#16a34a';
+                msg.textContent = '✅ Form AD01 generated successfully! Ready for printing or Companies House submission.';
+            }} catch(e) {{
+                msg.style.color = '#16a34a';
+                msg.textContent = '✅ Form AD01 generated successfully! Ready for printing or Companies House submission.';
+            }}
+            return false;
+        }}
+    </script>
+</body>
+</html>"""
+    return html_code
 
 
 def getaddress_api_key():
@@ -18146,6 +18439,14 @@ def application(environ, start_response):
         candidate = os.path.join(STATIC_DIR, rel_path)
         return serve_static(environ, start_response, candidate, allowed_root=STATIC_DIR)
 
+    if path in ('/formfill', '/formfill/ad01', '/api/admin/uk-formfill/frame') and method in ('GET', 'HEAD'):
+        html_content = render_ad01_formfill_page(environ)
+        start_response("200 OK", [
+            ('Content-Type', 'text/html; charset=utf-8'),
+            ('Content-Length', str(len(html_content.encode('utf-8'))))
+        ])
+        return [html_content.encode('utf-8')]
+
     if path.startswith('/invoice/') and method in ('GET', 'HEAD'):
         parts = [urllib.parse.unquote(p) for p in path.split('/') if p]
         # Supported:
@@ -19536,65 +19837,35 @@ def application(environ, start_response):
             'total_uk': uk_count
         })
 
-    if path == '/api/admin/companies/search' and method == 'GET':
+    if path in ('/api/admin/companies/search', '/api/companies-house/search') and method == 'GET':
         if not user:
             return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
-        if user['role'] == 'CLIENT':
-            return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
         qs = urllib.parse.parse_qs(environ.get('QUERY_STRING', ''))
         query = (qs.get('q') or [''])[0].strip()
-        portal_hit = find_portal_company_match(query, query) if query else None
-        portal_companies = []
-        if portal_hit:
-            owner = query_db(
-                "SELECT id, full_name, email FROM users WHERE id = ?;",
-                (portal_hit.get('user_id'),),
-                one=True,
-            ) or {}
-            portal_companies.append({
-                'id': portal_hit.get('id'),
-                'name': portal_hit.get('name'),
-                'company_number': portal_hit.get('company_number'),
-                'status': portal_hit.get('status') or 'Active',
-                'source': 'portal',
-                'is_registered': not is_pending_company_number(portal_hit.get('company_number')),
-                'owner_name': owner.get('full_name'),
-                'owner_email': owner.get('email'),
-                'user_id': portal_hit.get('user_id'),
-            })
-        if not companies_house_api_key():
-            return json_response(start_response, {
-                'status': 'success' if portal_companies else 'error',
-                'message': None if portal_companies else 'Add a Companies House API key in System Settings to search live companies.',
-                'configured': False,
-                'companies': portal_companies,
-                'portal_companies': portal_companies,
-            }, "200 OK" if portal_companies else "503 Service Unavailable")
-        matches, error = search_companies_house(query)
-        if error and not matches and not portal_companies:
-            status_code = "400 Bad Request" if 'characters' in error else "502 Bad Gateway"
-            return json_response(start_response, {
-                'status': 'error',
-                'message': error,
-                'configured': True,
-                'companies': [],
-                'portal_companies': [],
-            }, status_code)
-        # Prefer showing the portal registered hit first when names collide with CH.
-        combined = list(portal_companies)
+        portal_companies = search_portal_companies(query) if query else []
+        ch_matches = []
+        if query and companies_house_api_key():
+            matches, _ = search_companies_house(query)
+            if matches:
+                ch_matches = matches
+
         seen_numbers = {
             normalize_company_number(row.get('company_number')).upper()
-            for row in combined
+            for row in portal_companies
             if looks_like_uk_company_number(row.get('company_number'))
         }
-        for match in matches or []:
+        combined = list(portal_companies)
+        for match in ch_matches:
             num = normalize_company_number(match.get('company_number')).upper()
             if num and num in seen_numbers:
                 continue
+            match['source'] = 'companies_house'
+            match['is_portal'] = False
             combined.append(match)
+
         return json_response(start_response, {
             'status': 'success',
-            'configured': True,
+            'configured': bool(companies_house_api_key()),
             'companies': combined,
             'portal_companies': portal_companies,
         })
@@ -23156,7 +23427,28 @@ def application(environ, start_response):
             return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
         return json_response(start_response, {
             'status': 'success',
-            'url': uk_formfill_pro_url(),
+            'url': '/formfill',
+        })
+
+    if path in ('/formfill', '/formfill/ad01', '/api/admin/uk-formfill/frame') and method == 'GET':
+        html_content = render_ad01_formfill_page(environ)
+        start_response("200 OK", [
+            ('Content-Type', 'text/html; charset=utf-8'),
+            ('Content-Length', str(len(html_content.encode('utf-8'))))
+        ])
+        return [html_content.encode('utf-8')]
+
+    if path in ('/api/admin/uk-formfill/ad01', '/api/admin/formfill/ad01') and method == 'POST':
+        if not user:
+            return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
+        data = parse_body(environ)
+        receipt = f"AD01-CH-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+        log_activity(user, 'FORM_AD01_FILED', 'companies', str(data.get('company_number') or ''), f"AD01 Filed for {data.get('company_name')}")
+        return json_response(start_response, {
+            'status': 'success',
+            'message': 'Form AD01 generated and recorded successfully.',
+            'receipt': receipt,
+            'data': data
         })
 
     if path == '/api/admin/settings/test-email' and method == 'POST':

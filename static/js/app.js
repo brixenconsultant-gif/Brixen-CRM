@@ -7855,9 +7855,8 @@ async function openAd01FormModal(formCode) {
     const modal = document.getElementById('modal-ad01-form');
     const frame = document.getElementById('ad01-form-frame');
     if (!modal || !frame) return;
-    const base = await resolveUkFormfillUrl();
     const form = encodeURIComponent(formCode || 'AD01');
-    frame.src = `${base}/?form=${form}&embed=1`;
+    frame.src = `/formfill?form=${form}&embed=1`;
     modal.classList.add('active');
     if (window.lucide) lucide.createIcons();
 }
@@ -14817,7 +14816,10 @@ function renderSimpleProductStep3HTML(product) {
             <div style="display:grid; gap:18px;">
                 <div>
                     <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">Client company name <span style="color:#ef4444;">*</span></label>
-                    <input type="text" id="wfield-company_name" class="${inputCls}" style="${inputStyle}" value="${escapeHtml(companyVal)}" placeholder="Company or trading name" oninput="updateWizardFieldValue('company_name', this.value)">
+                    <input type="text" id="wfield-company_name" class="${inputCls}" style="${inputStyle}" value="${escapeHtml(companyVal)}" placeholder="Type to search system or Companies House (e.g. 16151899 or Company Name)..." data-ch-search="true" autocomplete="off" oninput="updateWizardFieldValue('company_name', this.value); updateWizardFieldValue('proposed_company_name', this.value);">
+                    <div style="font-size:0.8rem; color:#64748b; margin-top:6px; font-weight:500;">
+                        Type a company name or company number to search portal records and Companies House.
+                    </div>
                 </div>
                 <div>
                     <label style="font-size:1rem; font-weight:700; color:#1e293b; display:block;">Notes</label>
@@ -15069,17 +15071,7 @@ function isCompanySearchMandatoryField(f, product) {
 
     if (!isCompanyInput) return false;
 
-    const isMandatoryCategory = (
-        cat.includes('bank') ||
-        cat.includes('company') ||
-        cat.includes('formation') ||
-        pname.includes('bank') ||
-        pname.includes('company') ||
-        pname.includes('formation') ||
-        product.requires_company === true
-    );
-
-    return isMandatoryCategory;
+    return isCompanyInput;
 }
 
 function renderSingleWizardFieldHTML(f, product) {
@@ -16419,26 +16411,26 @@ function setupCompaniesHouseLiveSearch(inputEl, options = {}) {
             if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
 
             try {
-                const res = await fetch(`/api/admin/companies/search?q=${encodeURIComponent(query)}`);
+                const res = await fetch(`/api/companies-house/search?q=${encodeURIComponent(query)}`);
                 const data = await res.json().catch(() => ({}));
                 if (requestId !== searchRequestId || inputEl.dataset.chSuppressSearch === '1') return;
                 if (!res.ok || data.status !== 'success' || !data.companies || !data.companies.length) {
-                    dropdown.innerHTML = '<div style="padding:14px; font-size:0.88rem; color:#94a3b8; text-align:center;">No companies found on Companies House.</div>';
+                    dropdown.innerHTML = '<div style="padding:14px; font-size:0.88rem; color:#94a3b8; text-align:center;">No matching companies found in system or Companies House.</div>';
                     if (inputEl.getAttribute('data-ch-existing-company') === 'true') {
                         renderWizardExistingCompanyHint({
                             status: 'not_found',
-                            message: 'Not on Companies House — keep the name you typed and fill company number, director, and address manually below.',
+                            message: 'Not found — keep the name you typed and fill company number, director, and address manually below.',
                         });
                     }
                     setTimeout(() => {
                         if (requestId === searchRequestId) hideDropdown();
-                    }, 2000);
+                    }, 2500);
                     return;
                 }
                 if (inputEl.getAttribute('data-ch-existing-company') === 'true') {
                     renderWizardExistingCompanyHint({
                         status: 'checking',
-                        message: `${data.companies.length} match${data.companies.length === 1 ? '' : 'es'} — select one or enter details manually.`,
+                        message: `${data.companies.length} match${data.companies.length === 1 ? '' : 'es'} found in system and Companies House — select one or enter details manually.`,
                     });
                 }
 
@@ -16447,17 +16439,27 @@ function setupCompaniesHouseLiveSearch(inputEl, options = {}) {
                     const cnum = escapeHtml(c.company_number || '');
                     const status = escapeHtml(c.status || 'Active');
                     const director = escapeHtml(c.director || c.director_name || '');
-                    const regOffice = escapeHtml(c.reg_office || c.address || '');
+                    const regOffice = escapeHtml(c.reg_office || c.registered_office_address || c.address || '');
+                    const authCode = escapeHtml(c.authentication_code || c.auth_code || '');
+                    const isPortal = !!c.is_portal || c.source === 'portal';
+
+                    const badgeHtml = isPortal
+                        ? `<span style="font-size:0.75rem; font-weight:700; color:#15803d; background:#dcfce7; border:1px solid #bbf7d0; padding:2px 8px; border-radius:4px; display:inline-flex; align-items:center; gap:4px;">Saved in System</span>`
+                        : `<span style="font-size:0.75rem; font-weight:700; color:#0369a1; background:#e0f2fe; border:1px solid #bae6fd; padding:2px 8px; border-radius:4px; display:inline-flex; align-items:center; gap:4px;">Companies House</span>`;
 
                     return `
-                        <div class="ch-search-item" data-cnum="${cnum}" data-cname="${cname}" data-director="${director}" data-office="${regOffice}" style="padding:12px 16px; border-bottom:1px solid #f1f5f9; cursor:pointer; transition:background 0.15s ease;">
-                            <div style="font-weight:700; font-size:0.92rem; color:#0f172a; display:flex; justify-content:space-between; align-items:center;">
-                                <span>${cname}</span>
-                                <span style="font-size:0.78rem; font-weight:600; color:#0284c7; background:#e0f2fe; padding:3px 8px; border-radius:4px;">#${cnum}</span>
+                        <div class="ch-search-item" data-cnum="${cnum}" data-cname="${cname}" data-director="${director}" data-office="${regOffice}" data-auth="${authCode}" style="padding:12px 16px; border-bottom:1px solid #f1f5f9; cursor:pointer; transition:background 0.15s ease;">
+                            <div style="font-weight:700; font-size:0.92rem; color:#0f172a; display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                                <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${cname}</span>
+                                <div style="display:flex; align-items:center; gap:6px; flex-shrink:0;">
+                                    ${cnum ? `<span style="font-size:0.78rem; font-weight:700; color:#0284c7; background:#e0f2fe; padding:2px 6px; border-radius:4px;">#${cnum}</span>` : ''}
+                                    ${badgeHtml}
+                                </div>
                             </div>
                             <div style="font-size:0.82rem; color:#475569; margin-top:4px;">
                                 ${director ? `<strong>Director:</strong> ${director}` : 'Status: ' + status}
-                                ${regOffice ? ` · <span style="color:#64748b;">${regOffice.substring(0, 50)}...</span>` : ''}
+                                ${regOffice ? ` · <span style="color:#64748b;">${regOffice.substring(0, 45)}...</span>` : ''}
+                                ${authCode ? ` · <span style="color:#16a34a; font-weight:600;">Auth: ${authCode}</span>` : ''}
                             </div>
                         </div>
                     `;
@@ -16473,6 +16475,7 @@ function setupCompaniesHouseLiveSearch(inputEl, options = {}) {
                         const selectedNum = item.getAttribute('data-cnum') || '';
                         const selectedDirector = item.getAttribute('data-director') || '';
                         const selectedOffice = item.getAttribute('data-office') || '';
+                        const selectedAuth = item.getAttribute('data-auth') || '';
 
                         // Cancel in-flight / pending searches and suppress re-entry while we fill fields.
                         clearTimeout(chSearchDebounceTimer);
@@ -16487,12 +16490,15 @@ function setupCompaniesHouseLiveSearch(inputEl, options = {}) {
                                 number: selectedNum,
                                 director: selectedDirector,
                                 office: selectedOffice,
+                                authentication_code: selectedAuth,
                             });
                             renderWizardExistingCompanyHint({
                                 status: 'checking',
-                                message: 'Refreshing live Companies House record…',
+                                message: 'Loaded company record — details auto-filled.',
                             });
-                            refreshWizardExistingCompanyFromLiveCh(selectedNum);
+                            if (selectedNum && !selectedNum.startsWith('REG-')) {
+                                refreshWizardExistingCompanyFromLiveCh(selectedNum);
+                            }
                         } else if (typeof updateWizardFieldValue === 'function') {
                             updateWizardFieldValue('company_name', selectedName);
                             updateWizardFieldValue('proposed_company_name', selectedName);
@@ -16505,6 +16511,11 @@ function setupCompaniesHouseLiveSearch(inputEl, options = {}) {
                             if (selectedOffice) {
                                 updateWizardFieldValue('registered_office_address', selectedOffice);
                                 updateWizardFieldValue('address', selectedOffice);
+                            }
+                            if (selectedAuth) {
+                                updateWizardFieldValue('authentication_code', selectedAuth);
+                                const authEl = document.getElementById('wfield-authentication_code');
+                                if (authEl) authEl.value = selectedAuth;
                             }
                         }
 

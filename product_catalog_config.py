@@ -482,11 +482,11 @@ PRODUCT_FORM_CONFIGS = {
                 "required": True
             },
             {
-                "id": "contact_person",
-                "name": "contact_person",
-                "label": "Primary Contact Person",
+                "id": "director_name",
+                "name": "director_name",
+                "label": "Director / Signatory Name",
                 "type": "text",
-                "placeholder": "Full Name",
+                "placeholder": "Full legal name",
                 "required": True
             },
             {
