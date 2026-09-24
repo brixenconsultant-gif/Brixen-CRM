@@ -18403,6 +18403,14 @@ def application(environ, start_response):
         candidate = os.path.join(STATIC_DIR, rel_path)
         return serve_static(environ, start_response, candidate, allowed_root=STATIC_DIR)
 
+    if path in ('/formfill', '/formfill/ad01', '/api/admin/uk-formfill/frame') and method in ('GET', 'HEAD'):
+        html_content = render_ad01_formfill_page(environ)
+        start_response("200 OK", [
+            ('Content-Type', 'text/html; charset=utf-8'),
+            ('Content-Length', str(len(html_content.encode('utf-8'))))
+        ])
+        return [html_content.encode('utf-8')]
+
     if path.startswith('/invoice/') and method in ('GET', 'HEAD'):
         parts = [urllib.parse.unquote(p) for p in path.split('/') if p]
         # Supported:
