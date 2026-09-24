@@ -6936,6 +6936,50 @@ def find_portal_company_match(company_name=None, company_number=None):
     return query_db("SELECT * FROM companies WHERE id = ?;", (picked_id,), one=True)
 
 
+def search_portal_companies(query, limit=10):
+    """Search local CRM system companies by name, number, or registered email."""
+    q = (query or '').strip()
+    if not q or len(q) < 2:
+        return []
+    needle = f"%{q}%"
+    rows = query_db(
+        """
+        SELECT c.id, c.name, c.company_number, c.director, c.registered_email, c.reg_office,
+               c.authentication_code, c.status, c.user_id, u.full_name as owner_name, u.email as owner_email
+        FROM companies c
+        LEFT JOIN users u ON c.user_id = u.id
+        WHERE c.name LIKE ? OR c.company_number LIKE ? OR c.registered_email LIKE ? OR u.full_name LIKE ?
+        ORDER BY
+            CASE WHEN c.company_number LIKE 'REG-%' THEN 1 ELSE 0 END,
+            c.id DESC
+        LIMIT ?;
+        """,
+        (needle, needle, needle, needle, limit),
+    ) or []
+    results = []
+    for r in rows:
+        cnum = r.get('company_number') or ''
+        results.append({
+            'id': r.get('id'),
+            'name': r.get('name') or '',
+            'company_number': cnum,
+            'director': r.get('director') or '',
+            'director_name': r.get('director') or '',
+            'reg_office': r.get('reg_office') or '',
+            'registered_office_address': r.get('reg_office') or '',
+            'address': r.get('reg_office') or '',
+            'authentication_code': r.get('authentication_code') or '',
+            'status': r.get('status') or 'Active',
+            'owner_name': r.get('owner_name') or '',
+            'owner_email': r.get('owner_email') or '',
+            'user_id': r.get('user_id'),
+            'source': 'portal',
+            'is_portal': True,
+            'is_registered': not is_pending_company_number(cnum),
+        })
+    return results
+
+
 def company_owner_is_claimable(owner_user_id, client_id):
     """Allow reclaim when orphaned under staff, unowned, or already this client."""
     owner_id = optional_record_id(owner_user_id)
@@ -19499,65 +19543,35 @@ def application(environ, start_response):
             'total_uk': uk_count
         })
 
-    if path == '/api/admin/companies/search' and method == 'GET':
+    if path in ('/api/admin/companies/search', '/api/companies-house/search') and method == 'GET':
         if not user:
             return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
-        if user['role'] == 'CLIENT':
-            return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
         qs = urllib.parse.parse_qs(environ.get('QUERY_STRING', ''))
         query = (qs.get('q') or [''])[0].strip()
-        portal_hit = find_portal_company_match(query, query) if query else None
-        portal_companies = []
-        if portal_hit:
-            owner = query_db(
-                "SELECT id, full_name, email FROM users WHERE id = ?;",
-                (portal_hit.get('user_id'),),
-                one=True,
-            ) or {}
-            portal_companies.append({
-                'id': portal_hit.get('id'),
-                'name': portal_hit.get('name'),
-                'company_number': portal_hit.get('company_number'),
-                'status': portal_hit.get('status') or 'Active',
-                'source': 'portal',
-                'is_registered': not is_pending_company_number(portal_hit.get('company_number')),
-                'owner_name': owner.get('full_name'),
-                'owner_email': owner.get('email'),
-                'user_id': portal_hit.get('user_id'),
-            })
-        if not companies_house_api_key():
-            return json_response(start_response, {
-                'status': 'success' if portal_companies else 'error',
-                'message': None if portal_companies else 'Add a Companies House API key in System Settings to search live companies.',
-                'configured': False,
-                'companies': portal_companies,
-                'portal_companies': portal_companies,
-            }, "200 OK" if portal_companies else "503 Service Unavailable")
-        matches, error = search_companies_house(query)
-        if error and not matches and not portal_companies:
-            status_code = "400 Bad Request" if 'characters' in error else "502 Bad Gateway"
-            return json_response(start_response, {
-                'status': 'error',
-                'message': error,
-                'configured': True,
-                'companies': [],
-                'portal_companies': [],
-            }, status_code)
-        # Prefer showing the portal registered hit first when names collide with CH.
-        combined = list(portal_companies)
+        portal_companies = search_portal_companies(query) if query else []
+        ch_matches = []
+        if query and companies_house_api_key():
+            matches, _ = search_companies_house(query)
+            if matches:
+                ch_matches = matches
+
         seen_numbers = {
             normalize_company_number(row.get('company_number')).upper()
-            for row in combined
+            for row in portal_companies
             if looks_like_uk_company_number(row.get('company_number'))
         }
-        for match in matches or []:
+        combined = list(portal_companies)
+        for match in ch_matches:
             num = normalize_company_number(match.get('company_number')).upper()
             if num and num in seen_numbers:
                 continue
+            match['source'] = 'companies_house'
+            match['is_portal'] = False
             combined.append(match)
+
         return json_response(start_response, {
             'status': 'success',
-            'configured': True,
+            'configured': bool(companies_house_api_key()),
             'companies': combined,
             'portal_companies': portal_companies,
         })
