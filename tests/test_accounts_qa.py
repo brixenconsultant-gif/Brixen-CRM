@@ -4,10 +4,10 @@ import os
 import sys
 from pathlib import Path
 
-ROOT = Path("/Users/simple/.gemini/antigravity/scratch/hypetex-portal")
-JS = (ROOT / "static/js/accounts-file.js").read_text()
-CSS = (ROOT / "static/css/styles.css").read_text()
-HTML = (ROOT / "templates/index.html").read_text()
+ROOT = Path(__file__).resolve().parent.parent
+JS = (ROOT / "static/js/accounts-file.js").read_text(encoding="utf-8")
+CSS = (ROOT / "static/css/styles.css").read_text(encoding="utf-8")
+HTML = (ROOT / "templates/index.html").read_text(encoding="utf-8")
 
 failures = []
 

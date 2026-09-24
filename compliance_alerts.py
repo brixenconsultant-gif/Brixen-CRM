@@ -110,9 +110,12 @@ def compliance_alert_settings():
 
 
 def karachi_now():
-    if ZoneInfo is None:
-        return datetime.datetime.utcnow() + datetime.timedelta(hours=5)
-    return datetime.datetime.now(ZoneInfo(KARACHI_TZ_NAME))
+    try:
+        if ZoneInfo is not None:
+            return datetime.datetime.now(ZoneInfo(KARACHI_TZ_NAME))
+    except Exception:
+        pass
+    return datetime.datetime.utcnow() + datetime.timedelta(hours=5)
 
 
 def parse_utc_naive(value):
@@ -833,6 +836,19 @@ def is_valid_client_notify_email(value):
 
 def resolve_compliance_recipient(company, settings=None):
     settings = settings or compliance_alert_settings()
+    
+    # STRICT B2B rule: If the company is owned by a B2B client, send only to the B2B account owner
+    user_id = (company or {}).get('user_id')
+    if user_id:
+        user_row = query_db("SELECT id, email, notification_email, is_b2b, client_type, role FROM users WHERE id = ?;", (user_id,), one=True)
+        if user_row:
+            is_b2b = int(user_row.get('is_b2b') or 0) == 1 or str(user_row.get('client_type') or '').upper() == 'B2B'
+            if is_b2b:
+                b2b_email = str(user_row.get('notification_email') or user_row.get('email') or '').strip().lower()
+                if is_valid_client_notify_email(b2b_email):
+                    return b2b_email, None
+                return None, 'NO_VALID_EMAIL'
+
     rec = business_email_record(company)
     email = rec.get('email') or ''
     if settings.get('test_mode'):

@@ -1566,7 +1566,8 @@ def resolve_work_notification_email(*, client=None, company=None, order=None, em
     Never email end-company directors or form contacts on B2B portal orders.
     """
     order_rec = dict(order) if isinstance(order, dict) else (query_db("SELECT * FROM orders WHERE id = ?;", (order,), one=True) if order else None)
-    client_rec = resolve_client_user(client or (order_rec or {}).get('user_id'))
+    company_rec = load_company_for_notify(company, order_rec)
+    client_rec = resolve_client_user(client or (order_rec or {}).get('user_id') or (company_rec or {}).get('user_id'))
     if not client_rec and isinstance(client, dict) and (client.get('email') or client.get('is_b2b') or client.get('client_type')):
         client_rec = dict(client)
         client_rec.setdefault('role', 'CLIENT')
@@ -8075,8 +8076,8 @@ def companies_house_api_key():
 def uk_formfill_pro_url():
     row = query_db("SELECT value FROM settings WHERE key = 'uk_formfill_pro_url';", one=True)
     url = (row['value'] if row and str(row.get('value') or '').strip() else None) or os.environ.get('UK_FORMFILL_PRO_URL')
-    url = str(url or 'https://portal.brixenconsultants.com/formfill').strip()
-    return url.rstrip('/') or 'https://portal.brixenconsultants.com/formfill'
+    url = str(url or '/formfill').strip()
+    return url.rstrip('/') or '/formfill'
 
 
 def getaddress_api_key():
@@ -13260,7 +13261,7 @@ def ensure_client_for_manual_company(data, actor=None):
         return client_id, client, None
     client_id = optional_record_id(extras.get('client_id') or extras.get('user_id'))
     if client_id:
-        client = query_db("SELECT id, full_name, email, role FROM users WHERE id = ?;", (client_id,), one=True)
+        client = query_db("SELECT id, full_name, email, role, is_b2b, client_type FROM users WHERE id = ?;", (client_id,), one=True)
         if not client or client.get('role') != 'CLIENT':
             return None, None, 'Select a client account'
         return client_id, client, None
@@ -13284,7 +13285,7 @@ def ensure_client_for_manual_company(data, actor=None):
     except Exception:
         pass
 
-    existing = query_db("SELECT id, full_name, email, role FROM users WHERE LOWER(email) = ?;", (new_email,), one=True)
+    existing = query_db("SELECT id, full_name, email, role, is_b2b, client_type FROM users WHERE LOWER(email) = ?;", (new_email,), one=True)
     if existing:
         if existing.get('role') != 'CLIENT':
             return None, None, 'That email belongs to a staff account'
@@ -13292,10 +13293,10 @@ def ensure_client_for_manual_company(data, actor=None):
 
     local_id = f"local_client_{uuid.uuid4().hex[:16]}"
     client_id = execute_db("""
-        INSERT INTO users (wordpress_user_id, email, password_hash, full_name, phone, country, role, status, last_synced_at)
-        VALUES (?, ?, ?, ?, ?, 'United Kingdom', 'CLIENT', 'Active', CURRENT_TIMESTAMP);
+        INSERT INTO users (wordpress_user_id, email, password_hash, full_name, phone, country, role, status, client_type, is_b2b, last_synced_at)
+        VALUES (?, ?, ?, ?, ?, 'United Kingdom', 'CLIENT', 'Active', 'Individual', 0, CURRENT_TIMESTAMP);
     """, (local_id, new_email, unusable_password_hash(), new_name, new_phone))
-    client = query_db("SELECT id, full_name, email, role FROM users WHERE id = ?;", (client_id,), one=True)
+    client = query_db("SELECT id, full_name, email, role, is_b2b, client_type FROM users WHERE id = ?;", (client_id,), one=True)
     if actor:
         log_activity(actor, 'USER_CREATED', 'users', str(client_id), f"Created client {new_email} while adding company")
     return client_id, client, None
@@ -13329,6 +13330,20 @@ def create_manual_company(data, actor=None):
     if len(name) < 2 or name.lower() in ('united kingdom', 'uk', 'none', 'n/a'):
         return None, 'Enter the registered company name'
     requested_number = normalize_company_number(extras.get('company_number') or '')
+
+    # Enforce company limits: Individual accounts can only hold 1 company
+    ctype = str((client or {}).get('client_type') or '').strip().lower()
+    is_b2b_flag = int((client or {}).get('is_b2b') or 0) == 1
+    if (ctype in ('individual', 'normal') or not ctype) and not is_b2b_flag:
+        existing_companies = query_db("SELECT id, name, company_number FROM companies WHERE user_id = ?;", (client_id,)) or []
+        if len(existing_companies) >= 1:
+            is_same = any(
+                str(c.get('name') or '').strip().lower() == name.lower() or
+                (requested_number and normalize_company_number(c.get('company_number') or '') == requested_number)
+                for c in existing_companies
+            )
+            if not is_same and not match_company_for_client(client_id, name) and not find_portal_company_match(name, requested_number):
+                return None, "Individual client accounts are limited to 1 company only. Please upgrade the client account to 'Business' to add multiple companies."
 
     # Reuse an existing portal card (registered number/name) instead of a REG-* twin.
     portal = find_portal_company_match(name, requested_number)
@@ -15902,12 +15917,17 @@ def notify_company_registered(company_id):
     client = resolve_client_user(company.get('user_id'))
     if not client:
         return {'notification_created': False, 'email_sent': False, 'email_status': 'Client not found'}
-    form_email = company_form_email(company['id'], fallback=client.get('email'))
-    if not form_email:
-        return {'notification_created': False, 'email_sent': False, 'email_status': 'No form email'}
+    if client_is_b2b(client):
+        target_email = client_notification_recipient(client)
+        greeting = client.get('full_name') or 'Valued Partner'
+    else:
+        target_email = company_form_email(company['id'], fallback=client.get('email'))
+        greeting = resolve_companies_house_director(company)
+
+    if not target_email:
+        return {'notification_created': False, 'email_sent': False, 'email_status': 'No target email'}
     name = str(company.get('name') or 'Your company').strip()
     number = str(company.get('company_number') or '').strip()
-    director_name = resolve_companies_house_director(company)
     ensure_incorporation_certificate(company)
     download_url = companies_house_filing_history_url(number)
     result = notify_client(
@@ -15916,10 +15936,10 @@ def notify_company_registered(company_id):
         f"We've got great news, {name} is now officially registered with Companies House.",
         'success',
         '/companies',
-        email_to=form_email,
+        email_to=target_email,
         email_subject=f"Congratulations {name} is now registered with Companies House",
         email_headline=name,
-        greeting_name=director_name,
+        greeting_name=greeting,
         badge='Company registered',
         alert_label='Great news',
         layout='celebration',
@@ -16010,6 +16030,13 @@ def run_automatic_registration_notices():
         sync_pending_companies_from_companies_house()
     except Exception as err:
         print(f"[RegistrationNotice] Companies House sync failed: {err}")
+    
+    # Automated background notice emails disabled by default — manual/staff controlled for accuracy.
+    row = query_db("SELECT value FROM settings WHERE key = 'auto_registration_notices_enabled';", one=True)
+    is_auto = str((row or {}).get('value') or '0').strip().lower() in ('1', 'true', 'yes')
+    if not is_auto:
+        return 0
+
     try:
         return notify_recent_company_registrations()
     except Exception as err:
@@ -18102,7 +18129,16 @@ def application(environ, start_response):
         return serve_static(environ, start_response, icon_path, allowed_root=STATIC_DIR)
     if path == '/' or path == '/index.html':
         return serve_static(environ, start_response, os.path.join(TEMPLATES_DIR, 'index.html'), allowed_root=TEMPLATES_DIR)
-    elif path.startswith('/static/'):
+    
+    try:
+        import formfill_ad01
+        formfill_response = formfill_ad01.dispatch_formfill_route(environ, start_response, path, method, user)
+        if formfill_response is not None:
+            return formfill_response
+    except Exception as _formfill_err:
+        print(f"[FormFill Error] {_formfill_err}")
+
+    if path.startswith('/static/'):
         rel_path = urllib.parse.unquote(path[len('/static/'):]).replace('\\', '/')
         if not rel_path or '\x00' in rel_path:
             start_response("404 Not Found", [('Content-Type', 'text/plain; charset=utf-8')])
@@ -22468,27 +22504,34 @@ def application(environ, start_response):
         local_id = f"local_user_{uuid.uuid4().hex[:16]}"
         client_type = (data.get('client_type') or '').strip().lower()
         if role == 'CLIENT':
-            if client_type in ('b2b', 'b2b customer') or data.get('is_b2b') in (1, '1', True):
+            if client_type in ('b2b', 'b2b customer', 'b2b client') or data.get('is_b2b') in (1, '1', True):
                 is_b2b_val = 1
                 client_type_val = 'B2B'
-                acct_type_val = 'B2B Client (CRM Portal Account)'
+                acct_type_val = 'B2B Client (Deals on behalf of others)'
                 b2b_id_val = (existing or {}).get('b2b_id') or generate_next_b2b_id()
                 success_msg = (
-                    f'B2B client account created ({b2b_id_val}). '
-                    'They can sign in to the CRM portal with this email and password.'
+                    f'B2B partner account created ({b2b_id_val}). '
+                    'They can deal on behalf of others and sign in to the CRM portal.'
+                )
+            elif client_type in ('business', 'business customer', 'corporate'):
+                is_b2b_val = 0
+                client_type_val = 'Business'
+                acct_type_val = 'Business Client (Multiple Companies)'
+                b2b_id_val = None
+                success_msg = (
+                    'Business customer created (Multiple companies account).'
                 )
             else:
                 is_b2b_val = 0
-                client_type_val = 'Normal'
-                acct_type_val = 'Normal Client (Website Account)'
+                client_type_val = 'Individual'
+                acct_type_val = 'Individual Client (Single Company)'
                 b2b_id_val = None
                 success_msg = (
-                    'Normal customer created. They sign in on the Brixen website only '
-                    f'({website_customer_login_url()}), not this CRM portal.'
+                    'Individual customer created (Single company account).'
                 )
         else:
             is_b2b_val = 0
-            client_type_val = 'Normal'
+            client_type_val = 'Individual'
             acct_type_val = 'Internal Staff'
             b2b_id_val = None
             success_msg = 'User created. They can sign in with this email and password.'
@@ -22496,7 +22539,7 @@ def application(environ, start_response):
         if existing and role == 'CLIENT' and client_is_b2b(existing) and not is_b2b_val:
             return json_response(start_response, {
                 'status': 'error',
-                'message': 'This email is already a B2B portal customer. Open them from Customers instead of creating a Normal account.',
+                'message': 'This email is already a B2B portal customer. Open them from Customers to manage their account.',
             }, "409 Conflict")
 
         if existing and existing.get('role') == 'CLIENT':

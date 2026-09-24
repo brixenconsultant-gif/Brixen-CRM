@@ -353,11 +353,11 @@ def ensure_schema():
     if 'client_type' not in user_cols:
         conn.execute("ALTER TABLE users ADD COLUMN client_type TEXT DEFAULT 'Normal'")
 
-    # Safe Audit: Ensure standard retail/individual clients default to Normal Customer (is_b2b = 0, b2b_id = NULL)
+    # Safe Audit: Normalize client types for non-B2B accounts if unset
     conn.execute("""
         UPDATE users 
-        SET b2b_id = NULL, client_type = 'Normal', is_b2b = 0 
-        WHERE role = 'CLIENT' AND (is_b2b = 0 OR client_type = 'Normal' OR (account_type IS NOT NULL AND account_type NOT LIKE '%B2B%'));
+        SET b2b_id = NULL, is_b2b = 0, client_type = 'Individual'
+        WHERE role = 'CLIENT' AND (is_b2b = 0 OR is_b2b IS NULL) AND (client_type IS NULL OR client_type = 'Normal');
     """)
     if 'theme_preference' not in user_cols:
         conn.execute("ALTER TABLE users ADD COLUMN theme_preference TEXT DEFAULT 'system'")

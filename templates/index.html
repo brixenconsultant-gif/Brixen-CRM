@@ -1390,8 +1390,9 @@
                     </div>
                     <div style="display:flex; gap:8px; margin:0 0 12px 0;" id="admin-customers-type-tabs">
                         <button type="button" class="badge active" id="tab-customers-all" onclick="setAdminCustomerTypeFilter('All')" style="cursor:pointer; border:1px solid var(--color-border); padding:8px 16px; font-size:0.82rem; font-weight:700; background:var(--color-primary); color:#FFFFFF;">All</button>
-                        <button type="button" class="badge" id="tab-customers-normal" onclick="setAdminCustomerTypeFilter('Normal')" style="cursor:pointer; border:1px solid var(--color-border); padding:8px 16px; font-size:0.82rem; font-weight:700; background:var(--color-surface); color:var(--color-text-primary);">Normal</button>
-                        <button type="button" class="badge" id="tab-customers-b2b" onclick="setAdminCustomerTypeFilter('B2B')" style="cursor:pointer; border:1px solid var(--color-border); padding:8px 16px; font-size:0.82rem; font-weight:700; background:var(--color-surface); color:var(--color-text-primary);">B2B Clients</button>
+                        <button type="button" class="badge" id="tab-customers-individual" onclick="setAdminCustomerTypeFilter('Individual')" style="cursor:pointer; border:1px solid var(--color-border); padding:8px 16px; font-size:0.82rem; font-weight:700; background:var(--color-surface); color:var(--color-text-primary);">Individual (1 Company)</button>
+                        <button type="button" class="badge" id="tab-customers-business" onclick="setAdminCustomerTypeFilter('Business')" style="cursor:pointer; border:1px solid var(--color-border); padding:8px 16px; font-size:0.82rem; font-weight:700; background:var(--color-surface); color:var(--color-text-primary);">Business (Multi Companies)</button>
+                        <button type="button" class="badge" id="tab-customers-b2b" onclick="setAdminCustomerTypeFilter('B2B')" style="cursor:pointer; border:1px solid var(--color-border); padding:8px 16px; font-size:0.82rem; font-weight:700; background:var(--color-surface); color:var(--color-text-primary);">B2B (Agent / Intermediary)</button>
                     </div>
                     <div class="orders-filter-row orders-filter-toolbar">
                         <div class="filter-group" style="flex-wrap:wrap; width:100%;">
@@ -2569,7 +2570,7 @@
             <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--color-border); padding-bottom:14px; margin-bottom:18px;">
                 <div>
                     <h3 style="font-size:1.25rem; font-weight:800; color:var(--color-text-primary); margin:0;">Create Customer</h3>
-                    <p style="font-size:0.82rem; color:var(--color-text-muted); margin:4px 0 0 0;">Create a new customer account (Normal Customer or B2B Account).</p>
+                    <p style="font-size:0.82rem; color:var(--color-text-muted); margin:4px 0 0 0;">Create a new customer account (Individual, Business, or B2B Partner).</p>
                 </div>
                 <button type="button" class="btn-close" onclick="closeCreateCustomerModal()"><i data-lucide="x"></i></button>
             </div>
@@ -2582,21 +2583,29 @@
                     <!-- Customer Type Selection -->
                     <div>
                         <label style="font-size:0.82rem; font-weight:700; color:var(--color-text-primary); display:block; margin-bottom:8px;">Customer Type *</label>
-                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
-                            <label style="background:var(--color-surface-soft); border:2px solid var(--color-primary); border-radius:10px; padding:12px; cursor:pointer; display:flex; flex-direction:column; gap:4px;" id="cust-type-card-normal">
+                        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;">
+                            <label style="background:var(--color-surface-soft); border:2px solid var(--color-primary); border-radius:10px; padding:12px; cursor:pointer; display:flex; flex-direction:column; gap:4px;" id="cust-type-card-individual">
                                 <div style="display:flex; align-items:center; gap:8px;">
-                                    <input type="radio" name="create_cust_type" value="Normal" checked onchange="onCustomerTypeCardChange('Normal')" style="accent-color:var(--color-primary);">
-                                    <strong style="font-size:0.88rem; color:var(--color-text-primary);">Normal Customer</strong>
+                                    <input type="radio" name="create_cust_type" value="Individual" checked onchange="onCustomerTypeCardChange('Individual')" style="accent-color:var(--color-primary);">
+                                    <strong style="font-size:0.88rem; color:var(--color-text-primary);">Individual</strong>
                                 </div>
-                                <span style="font-size:0.75rem; color:var(--color-text-muted); margin-left:22px;">Retail/individual client. Signs in on the Brixen website only — not this CRM portal.</span>
+                                <span style="font-size:0.75rem; color:var(--color-text-muted); margin-left:22px;">Has only one company. Single/personal owner.</span>
+                            </label>
+
+                            <label style="background:var(--color-surface-soft); border:2px solid var(--color-border); border-radius:10px; padding:12px; cursor:pointer; display:flex; flex-direction:column; gap:4px;" id="cust-type-card-business">
+                                <div style="display:flex; align-items:center; gap:8px;">
+                                    <input type="radio" name="create_cust_type" value="Business" onchange="onCustomerTypeCardChange('Business')" style="accent-color:var(--color-primary);">
+                                    <strong style="font-size:0.88rem; color:var(--color-text-primary);">Business</strong>
+                                </div>
+                                <span style="font-size:0.75rem; color:var(--color-text-muted); margin-left:22px;">Multiple companies. Direct multi-company group.</span>
                             </label>
 
                             <label style="background:var(--color-surface-soft); border:2px solid var(--color-border); border-radius:10px; padding:12px; cursor:pointer; display:flex; flex-direction:column; gap:4px;" id="cust-type-card-b2b">
                                 <div style="display:flex; align-items:center; gap:8px;">
                                     <input type="radio" name="create_cust_type" value="B2B" onchange="onCustomerTypeCardChange('B2B')" style="accent-color:var(--color-primary);">
-                                    <strong style="font-size:0.88rem; color:var(--color-text-primary);">B2B Customer</strong>
+                                    <strong style="font-size:0.88rem; color:var(--color-text-primary);">B2B Client</strong>
                                 </div>
-                                <span style="font-size:0.75rem; color:var(--color-text-muted); margin-left:22px;">Corporate client. Signs in to this CRM portal with email and password. Unique B2B-XXXXXX ID.</span>
+                                <span style="font-size:0.75rem; color:var(--color-text-muted); margin-left:22px;">Deals on behalf of others. Agent / intermediary.</span>
                             </label>
                         </div>
                     </div>

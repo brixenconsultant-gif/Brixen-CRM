@@ -7804,7 +7804,7 @@ const QUICK_TASK_TEMPLATES = {
     },
 };
 
-const DEFAULT_UK_FORMFILL_URL = 'https://portal.brixenconsultants.com/formfill';
+const DEFAULT_UK_FORMFILL_URL = '/formfill';
 let ukFormfillUrlCache = '';
 
 async function resolveUkFormfillUrl() {
@@ -7813,7 +7813,11 @@ async function resolveUkFormfillUrl() {
         const res = await fetch('/api/admin/formfill', { credentials: 'same-origin' });
         const data = await res.json().catch(() => ({}));
         if (res.ok && data.status === 'success' && data.url) {
-            ukFormfillUrlCache = String(data.url).replace(/\/$/, '');
+            let u = String(data.url).replace(/\/$/, '');
+            if (u.includes('portal.brixenconsultants.com/formfill') && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+                u = '/formfill';
+            }
+            ukFormfillUrlCache = u;
             return ukFormfillUrlCache;
         }
     } catch (err) {
@@ -8561,12 +8565,19 @@ function isB2BCustomerRow(c) {
     return Number(c?.is_b2b) === 1 || String(c?.client_type || '').toUpperCase() === 'B2B';
 }
 
+function customerTypeCategory(c) {
+    if (isB2BCustomerRow(c)) return 'B2B';
+    const ct = String(c?.client_type || '').trim().toLowerCase();
+    if (ct === 'business') return 'Business';
+    return 'Individual';
+}
+
 function setAdminCustomerTypeFilter(type) {
     adminCustomerTypeFilter = type || 'All';
-    ['All', 'Normal', 'B2B'].forEach((t) => {
+    ['All', 'Individual', 'Business', 'B2B'].forEach((t) => {
         const btn = document.getElementById(`tab-customers-${t.toLowerCase()}`);
         if (!btn) return;
-        const active = t === adminCustomerTypeFilter;
+        const active = t.toLowerCase() === String(adminCustomerTypeFilter).toLowerCase();
         btn.classList.toggle('active', active);
         btn.style.background = active ? 'var(--color-primary)' : 'var(--color-surface)';
         btn.style.color = active ? '#FFFFFF' : 'var(--color-text-primary)';
@@ -8582,9 +8593,10 @@ function renderAdminCustomers() {
     const source = document.getElementById('filter-admin-customer-source')?.value || '';
     const ageDays = parseInt(document.getElementById('filter-admin-customer-age')?.value || '', 10);
     const rows = adminCustomersCache.filter((c) => {
-        const isB2B = isB2BCustomerRow(c);
-        if (adminCustomerTypeFilter === 'B2B' && !isB2B) return false;
-        if (adminCustomerTypeFilter === 'Normal' && isB2B) return false;
+        const cat = customerTypeCategory(c);
+        if (adminCustomerTypeFilter === 'B2B' && cat !== 'B2B') return false;
+        if (adminCustomerTypeFilter === 'Business' && cat !== 'Business') return false;
+        if (adminCustomerTypeFilter === 'Individual' && cat !== 'Individual') return false;
         if (search) {
             const hay = `${c.full_name || ''} ${c.email || ''} ${c.b2b_id || ''}`.toLowerCase();
             if (!hay.includes(search)) return false;
@@ -8609,16 +8621,26 @@ function renderAdminCustomers() {
         const age = customerSignupAgeDays(c);
         const isNew = age != null && age <= 7;
         const sourceLabel = sourceKey === 'website' ? 'Website signup' : 'Created in CRM';
-        const isB2B = isB2BCustomerRow(c);
+        const cat = customerTypeCategory(c);
+        const isB2B = cat === 'B2B';
         const portalReady = isB2B && c.portal_login_ready !== false;
-        const portalLabel = isB2B ? (portalReady ? 'Portal login' : 'Needs portal password') : 'Website only';
-        const typeLabel = isB2B ? (c.b2b_id || 'B2B') : 'Normal';
+        const portalLabel = isB2B ? (portalReady ? 'Portal login' : 'Needs portal password') : 'Website account';
+        
+        let typeBadgeHtml = '';
+        if (isB2B) {
+            typeBadgeHtml = `<span class="b2b-badge" title="Deals on behalf of others">${escapeHtml(c.b2b_id || 'B2B Partner')}</span>`;
+        } else if (cat === 'Business') {
+            typeBadgeHtml = `<span class="badge" style="background:#e0e7ff; color:#3730a3; font-weight:700; border-radius:6px; padding:2px 8px; font-size:0.75rem;" title="Multiple companies">Business (Multi)</span>`;
+        } else {
+            typeBadgeHtml = `<span class="badge" style="background:#f1f5f9; color:#475569; font-weight:700; border-radius:6px; padding:2px 8px; font-size:0.75rem;" title="1 company only">Individual (1 Co)</span>`;
+        }
+
         return `
             <tr>
                 <td style="text-align:center;"><input type="checkbox" class="chk-customer-item" value="${c.id}" onchange="updateCustomerSelectionState()"></td>
                 <td style="font-weight:700;">${escapeHtml(c.full_name || '')}${isNew ? ' <span class="signup-new-badge">New</span>' : ''}</td>
                 <td>${escapeHtml(c.email || '')}</td>
-                <td>${isB2B ? `<span class="b2b-badge">${escapeHtml(typeLabel)}</span>` : escapeHtml(typeLabel)}</td>
+                <td>${typeBadgeHtml}</td>
                 <td>${escapeHtml(formatDateTime(c.created_at) || formatDate(c.created_at) || '—')}</td>
                 <td>${escapeHtml(sourceLabel)}</td>
                 <td>${c.companies_count ?? 0}</td>
@@ -15979,10 +16001,15 @@ function openCreateCustomerModal(preferredType) {
 
     const form = document.getElementById('form-create-customer');
     if (form) form.reset();
-    const type = String(preferredType || '').toLowerCase() === 'b2b' ? 'B2B' : 'Normal';
+    let type = 'Individual';
+    const pref = String(preferredType || '').toLowerCase();
+    if (pref === 'b2b') type = 'B2B';
+    else if (pref === 'business') type = 'Business';
+    else if (pref === 'individual' || pref === 'normal') type = 'Individual';
+
     const radios = document.getElementsByName('create_cust_type');
     for (const r of radios) {
-        r.checked = (r.value === type);
+        r.checked = (r.value.toLowerCase() === type.toLowerCase());
     }
     onCustomerTypeCardChange(type);
     
@@ -16003,16 +16030,14 @@ function closeCreateCustomerModal() {
 }
 
 function onCustomerTypeCardChange(type) {
-    const cardNormal = document.getElementById('cust-type-card-normal');
+    const cardInd = document.getElementById('cust-type-card-individual') || document.getElementById('cust-type-card-normal');
+    const cardBiz = document.getElementById('cust-type-card-business');
     const cardB2B = document.getElementById('cust-type-card-b2b');
 
-    if (type === 'B2B') {
-        if (cardNormal) { cardNormal.style.borderColor = 'var(--color-border)'; }
-        if (cardB2B) { cardB2B.style.borderColor = 'var(--color-primary)'; }
-    } else {
-        if (cardNormal) { cardNormal.style.borderColor = 'var(--color-primary)'; }
-        if (cardB2B) { cardB2B.style.borderColor = 'var(--color-border)'; }
-    }
+    const normType = String(type || '').toLowerCase();
+    if (cardInd) cardInd.style.borderColor = (normType === 'individual' || normType === 'normal') ? 'var(--color-primary)' : 'var(--color-border)';
+    if (cardBiz) cardBiz.style.borderColor = (normType === 'business') ? 'var(--color-primary)' : 'var(--color-border)';
+    if (cardB2B) cardB2B.style.borderColor = (normType === 'b2b') ? 'var(--color-primary)' : 'var(--color-border)';
 }
 
 async function submitCreateCustomerForm(event) {
@@ -16026,7 +16051,7 @@ async function submitCreateCustomerForm(event) {
     const confirmPassword = document.getElementById('create-cust-password-confirm').value;
 
     const custTypeRadios = document.getElementsByName('create_cust_type');
-    let custType = 'Normal';
+    let custType = 'Individual';
     for (let r of custTypeRadios) {
         if (r.checked) { custType = r.value; break; }
     }
@@ -16068,12 +16093,17 @@ async function submitCreateCustomerForm(event) {
 
         if (ok) {
             closeCreateCustomerModal();
-            alert(data.message || (custType === 'B2B'
-                ? `B2B customer created. They can sign in to the CRM portal with this email and password${data.user?.b2b_id ? ' (' + data.user.b2b_id + ')' : ''}.`
-                : 'Normal customer created. They can sign in on the Brixen website with this email and password.'));
+            let defaultSuccess = 'Customer created successfully.';
+            if (custType === 'B2B') {
+                defaultSuccess = `B2B customer created (Deals on behalf of others). They can sign in to the CRM portal${data.user?.b2b_id ? ' (' + data.user.b2b_id + ')' : ''}.`;
+            } else if (custType === 'Business') {
+                defaultSuccess = 'Business customer created (Multiple companies account).';
+            } else {
+                defaultSuccess = 'Individual customer created (Single company account).';
+            }
+            alert(data.message || defaultSuccess);
             if (typeof loadAdminCustomers === 'function') {
-                if (custType === 'B2B') adminCustomerTypeFilter = 'B2B';
-                else adminCustomerTypeFilter = 'Normal';
+                adminCustomerTypeFilter = custType;
                 loadAdminCustomers();
                 setAdminCustomerTypeFilter(adminCustomerTypeFilter);
             }
