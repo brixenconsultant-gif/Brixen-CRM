@@ -3,7 +3,7 @@ Contributors: Brixen Consultants Engineering Team
 Tags: woocommerce, crm, sync, webhooks, sso, client portal
 Requires at least: 5.8
 Tested up to: 6.7
-Stable tag: 1.6.0
+Stable tag: 1.7.5
 License: Proprietary
 
 Official integration plugin for Brixen Consultants connecting WordPress User Registration and WooCommerce Checkout to the Brixen CRM & Client Portal.
@@ -39,8 +39,26 @@ This plugin provides automated real-time synchronization between the official Br
 
 == Changelog ==
 
+= 1.7.5 =
+* Hard-block: storefront Log in / login_url can never target portal.brixenconsultants.com — website /client-panel/ only.
+
+= 1.7.4 =
+* Frontend “Log in” goes to the website client panel (/client-panel/), not wp-login.php and not portal.brixenconsultants.com.
+
+= 1.7.3 =
+* Frontend “Log in” / My Account login links go to the client portal (portal.brixenconsultants.com), not wp-login.php. Staff WordPress admin login is unchanged.
+
+= 1.7.2 =
+* Provisioning B2B/Normal customer logins from the CRM never sends WordPress or WooCommerce account emails.
+
+= 1.7.1 =
+* Ensure `/wp-json/brixen-crm/v1/provision-customer` is live so CRM “Create Customer” (Normal / website) can create WordPress logins.
+
 = 1.6.0 =
 * Production release alignment for client portal document delivery, signed SSO redirect flow, and WooCommerce checkout sync.
+
+= 1.5.1 =
+* CRM can create WordPress website logins for Normal customers via `/wp-json/brixen-crm/v1/provision-customer` (required for “Create Customer” on the CRM).
 
 = 1.5.0 =
 * After login and on `/client-panel/`, customers are redirected via signed SSO to the custom Brixen client portal at portal.brixenconsultants.com (not the WooCommerce account dashboard).

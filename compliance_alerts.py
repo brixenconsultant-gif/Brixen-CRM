@@ -194,11 +194,16 @@ def set_company_business_email(company_id, email, *, actor=None, source='staff',
     email = str(email or '').strip().lower()
     if not email or '@' not in email or email.endswith('@brixen-pending.local'):
         return None, 'Enter a valid business email'
-    current = query_db('SELECT registered_email, business_email_verified FROM companies WHERE id = ?;', (company_id,), one=True)
+    current = query_db(
+        'SELECT registered_email, business_email_verified FROM companies WHERE id = ?;',
+        (company_id,),
+        one=True,
+    )
     if not current:
         return None, 'Company not found'
+    if int(current.get('business_email_verified') or 0) == 1:
+        return None, 'Verified business email is locked and cannot be changed'
     prev = str(current.get('registered_email') or '').strip().lower()
-    verified_flag = 1 if verify else 0
     verified_by = (actor or {}).get('id') if verify else None
     if verify:
         execute_db(
@@ -237,9 +242,15 @@ def set_company_business_email(company_id, email, *, actor=None, source='staff',
 
 
 def verify_company_business_email(company_id, *, actor=None, source='staff_verify'):
-    row = query_db('SELECT registered_email FROM companies WHERE id = ?;', (company_id,), one=True)
+    row = query_db(
+        'SELECT registered_email, business_email_verified FROM companies WHERE id = ?;',
+        (company_id,),
+        one=True,
+    )
     if not row:
         return None, 'Company not found'
+    if int(row.get('business_email_verified') or 0) == 1:
+        return None, 'Business email is already verified and locked'
     email = str(row.get('registered_email') or '').strip().lower()
     if not email or email.endswith('@brixen-pending.local'):
         return None, 'Add a business email before verifying'
@@ -261,9 +272,15 @@ def verify_company_business_email(company_id, *, actor=None, source='staff_verif
 
 
 def unverify_company_business_email(company_id, *, actor=None, source='staff_unverify'):
-    row = query_db('SELECT registered_email FROM companies WHERE id = ?;', (company_id,), one=True)
+    row = query_db(
+        'SELECT registered_email, business_email_verified FROM companies WHERE id = ?;',
+        (company_id,),
+        one=True,
+    )
     if not row:
         return None, 'Company not found'
+    if int(row.get('business_email_verified') or 0) == 1:
+        return None, 'Verified business email is locked and cannot be changed'
     email = str(row.get('registered_email') or '').strip().lower()
     execute_db(
         """

@@ -3,7 +3,7 @@
  * Plugin Name: Brixen Consultants CRM & WooCommerce Sync
  * Plugin URI: https://brixenconsultants.com
  * Description: Official integration plugin for Brixen Consultants connecting WordPress User Registration and WooCommerce Checkout to the Brixen CRM & Client Portal.
- * Version: 1.6.0
+ * Version: 1.7.5
  * Author: Brixen Consultants Engineering Team
  * Author URI: https://brixenconsultants.com
  * License: Proprietary
@@ -215,6 +215,11 @@ class Brixen_CRM_Sync_Plugin {
                 ),
             ),
         ));
+        register_rest_route('brixen-crm/v1', '/provision-customer', array(
+            'methods'             => 'POST',
+            'callback'            => array($this, 'rest_provision_customer'),
+            'permission_callback' => '__return_true',
+        ));
     }
 
     public function rest_verify_order_pull_request($request) {
@@ -234,6 +239,117 @@ class Brixen_CRM_Sync_Plugin {
             'status' => 'success',
             'data'   => $payload,
         ));
+    }
+
+    public function rest_provision_customer($request) {
+        $secret = Brixen_CRM_Webhook_Sender::get_webhook_secret();
+        $email = strtolower(trim((string) $request->get_param('email')));
+        $timestamp = trim((string) $request->get_param('timestamp'));
+        $signature = trim(str_replace('sha256=', '', (string) $request->get_param('signature')));
+        $password = (string) $request->get_param('password');
+        $full_name = sanitize_text_field((string) $request->get_param('full_name'));
+        $phone = sanitize_text_field((string) $request->get_param('phone'));
+        $client_type = strtoupper(sanitize_text_field((string) $request->get_param('client_type')));
+        if ($client_type !== 'B2B') {
+            $client_type = 'NORMAL';
+        }
+
+        if ($secret === '' || $email === '' || $timestamp === '' || $signature === '') {
+            return new WP_Error('unauthorized', 'Unauthorized', array('status' => 401));
+        }
+        if (!ctype_digit($timestamp) || abs(time() - (int) $timestamp) > 300) {
+            return new WP_Error('unauthorized', 'Expired signature', array('status' => 401));
+        }
+        $expected = hash_hmac('sha256', $email . '|' . $timestamp, $secret);
+        if (!hash_equals($expected, $signature)) {
+            return new WP_Error('unauthorized', 'Invalid signature', array('status' => 401));
+        }
+        if (strlen($password) < 8 || !is_email($email)) {
+            return new WP_Error('invalid', 'Valid email and password are required', array('status' => 400));
+        }
+
+        // CRM-provisioned B2B/Normal logins must never trigger WordPress/WooCommerce emails.
+        $restore_mail = $this->suppress_customer_account_emails();
+
+        $existing = get_user_by('email', $email);
+        if ($existing) {
+            wp_set_password($password, $existing->ID);
+            $user_id = (int) $existing->ID;
+        } else {
+            $user_id = wp_insert_user(array(
+                'user_login'   => $email,
+                'user_email'   => $email,
+                'user_pass'    => $password,
+                'display_name' => $full_name !== '' ? $full_name : $email,
+                'nickname'     => $full_name !== '' ? $full_name : $email,
+                'role'         => 'customer',
+            ));
+            if (is_wp_error($user_id)) {
+                $restore_mail();
+                return new WP_Error('create_failed', $user_id->get_error_message(), array('status' => 400));
+            }
+        }
+
+        update_user_meta($user_id, '_brixen_client_type', $client_type);
+        if ($phone !== '') {
+            update_user_meta($user_id, 'billing_phone', $phone);
+        }
+        if ($full_name !== '') {
+            $parts = preg_split('/\s+/', $full_name, 2);
+            update_user_meta($user_id, 'first_name', $parts[0]);
+            if (!empty($parts[1])) {
+                update_user_meta($user_id, 'last_name', $parts[1]);
+            }
+        }
+
+        $restore_mail();
+        return rest_ensure_response(array(
+            'status'            => 'success',
+            'wordpress_user_id' => (string) $user_id,
+        ));
+    }
+
+    /**
+     * Temporarily block WP/Woo account emails while CRM provisions a customer login.
+     *
+     * @return callable Restore previous filters/actions.
+     */
+    private function suppress_customer_account_emails() {
+        $filters = array(
+            'wp_send_new_user_notification_to_user' => '__return_false',
+            'wp_send_new_user_notification_to_admin' => '__return_false',
+            'send_password_change_email' => '__return_false',
+            'send_email_change_email' => '__return_false',
+            'woocommerce_email_enabled_customer_new_account' => '__return_false',
+            'woocommerce_email_enabled_customer_reset_password' => '__return_false',
+            'woocommerce_email_enabled_customer_on_hold_order' => null,
+        );
+
+        foreach ($filters as $hook => $callback) {
+            if ($callback) {
+                add_filter($hook, $callback, 999);
+            }
+        }
+
+        // Hard stop any mail fired during this request (theme/plugins).
+        $block_mail = static function ($null, $atts) {
+            return true;
+        };
+        add_filter('pre_wp_mail', $block_mail, 999, 2);
+
+        remove_action('register_new_user', 'wp_send_new_user_notifications');
+        remove_action('edit_user_created_user', 'wp_send_new_user_notifications', 10);
+
+        return static function () use ($filters, $block_mail) {
+            foreach ($filters as $hook => $callback) {
+                if ($callback) {
+                    remove_filter($hook, $callback, 999);
+                }
+            }
+            remove_filter('pre_wp_mail', $block_mail, 999);
+            add_action('register_new_user', 'wp_send_new_user_notifications');
+            add_action('edit_user_created_user', 'wp_send_new_user_notifications', 10, 2);
+        };
     }
 
     public function handle_pull_order() {
@@ -847,7 +963,9 @@ class Brixen_CRM_Sync_Plugin {
      */
     public function render_portal_sso_button() {
         if (!is_user_logged_in()) {
-            $login = wp_login_url(function_exists('wc_get_page_permalink') ? wc_get_page_permalink('myaccount') : home_url('/client-panel/'));
+            $login = function_exists('brixen_crm_portal_login_url')
+                ? brixen_crm_portal_login_url()
+                : (function_exists('wc_get_page_permalink') ? wc_get_page_permalink('myaccount') : home_url('/client-panel/'));
             return '<a href="' . esc_url($login) . '" class="button button-primary">Log In to Access Portal</a>';
         }
 

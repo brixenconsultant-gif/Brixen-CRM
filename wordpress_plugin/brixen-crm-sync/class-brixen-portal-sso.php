@@ -16,6 +16,89 @@ class Brixen_CRM_Portal_SSO {
         add_filter('woocommerce_login_redirect', array(__CLASS__, 'filter_wc_login_redirect'), 20, 2);
         add_filter('allowed_redirect_hosts', array(__CLASS__, 'allow_portal_redirect_host'), 10, 2);
         add_action('template_redirect', array(__CLASS__, 'maybe_redirect_my_account'), 5);
+        // Frontend guest “Log in” → website client panel only (never CRM host, never wp-login.php).
+        add_filter('login_url', array(__CLASS__, 'filter_frontend_login_url'), 50, 3);
+        add_filter('login_url', array(__CLASS__, 'block_crm_host_login_url'), 1000, 3);
+    }
+
+    /**
+     * Website client panel login URL (brixenconsultants.com/client-panel/).
+     * Hard-rejects portal.brixenconsultants.com and wp-login.php.
+     */
+    public static function website_client_panel_url() {
+        $fallback = home_url('/client-panel/');
+        $url = $fallback;
+        if (function_exists('wc_get_page_permalink')) {
+            $wc = wc_get_page_permalink('myaccount');
+            if ($wc) {
+                $url = $wc;
+            }
+        }
+        return self::reject_crm_login_target($url, $fallback);
+    }
+
+    /**
+     * Absolute ban: guest login links must never point at the CRM portal host.
+     */
+    public static function reject_crm_login_target($url, $fallback = '') {
+        $fallback = $fallback !== '' ? $fallback : home_url('/client-panel/');
+        $url = is_string($url) ? trim($url) : '';
+        if ($url === '') {
+            return $fallback;
+        }
+        $host = strtolower((string) wp_parse_url($url, PHP_URL_HOST));
+        $path = strtolower((string) (wp_parse_url($url, PHP_URL_PATH) ?: ''));
+        if ($host !== '' && strpos($host, 'portal.brixenconsultants.com') !== false) {
+            return $fallback;
+        }
+        if (strpos($path, 'wp-login.php') !== false) {
+            return $fallback;
+        }
+        return $url;
+    }
+
+    /**
+     * @deprecated Use website_client_panel_url() for guest login links.
+     */
+    public static function portal_login_url() {
+        return self::website_client_panel_url();
+    }
+
+    /**
+     * Send guest login links to the website client panel, not WordPress wp-login.php
+     * and not portal.brixenconsultants.com.
+     */
+    public static function filter_frontend_login_url($login_url, $redirect = '', $force_reauth = false) {
+        $redirect_to = is_string($redirect) ? $redirect : '';
+        if ($redirect_to !== '' && (strpos($redirect_to, 'wp-admin') !== false || preg_match('#/(wp-)?admin(/|$)#', $redirect_to))) {
+            return $login_url;
+        }
+        if (is_admin() || (defined('WP_ADMIN') && WP_ADMIN)) {
+            return $login_url;
+        }
+        $uri = isset($_SERVER['REQUEST_URI']) ? (string) $_SERVER['REQUEST_URI'] : '';
+        if (strpos($uri, 'wp-login.php') !== false || strpos($uri, '/wp-admin') !== false) {
+            return $login_url;
+        }
+        return self::website_client_panel_url();
+    }
+
+    /**
+     * Final guard: whatever earlier filters returned, never allow CRM host as login_url on the storefront.
+     */
+    public static function block_crm_host_login_url($login_url, $redirect = '', $force_reauth = false) {
+        if (is_admin() || (defined('WP_ADMIN') && WP_ADMIN)) {
+            return $login_url;
+        }
+        $uri = isset($_SERVER['REQUEST_URI']) ? (string) $_SERVER['REQUEST_URI'] : '';
+        if (strpos($uri, 'wp-login.php') !== false || strpos($uri, '/wp-admin') !== false) {
+            return $login_url;
+        }
+        $redirect_to = is_string($redirect) ? $redirect : '';
+        if ($redirect_to !== '' && (strpos($redirect_to, 'wp-admin') !== false || preg_match('#/(wp-)?admin(/|$)#', $redirect_to))) {
+            return $login_url;
+        }
+        return self::reject_crm_login_target($login_url, self::website_client_panel_url());
     }
 
     public static function allow_portal_redirect_host($hosts, $host = '') {
@@ -91,7 +174,8 @@ class Brixen_CRM_Portal_SSO {
     }
 
     /**
-     * WordPress administrators and shop managers stay on the website admin flow.
+     * WordPress administrators, shop managers, and website-only (Normal)
+     * customers stay on the website. B2B clients SSO into the CRM portal.
      */
     private static function should_skip_portal_redirect($user) {
         if (!$user instanceof WP_User) {
@@ -101,6 +185,19 @@ class Brixen_CRM_Portal_SSO {
             return true;
         }
         if (user_can($user, 'manage_woocommerce')) {
+            return true;
+        }
+        if (!empty($_GET['brixen_stay'])) {
+            if (!headers_sent()) {
+                setcookie('brixen_website_only', '1', time() + (30 * DAY_IN_SECONDS), COOKIEPATH ? COOKIEPATH : '/', COOKIE_DOMAIN, is_ssl(), true);
+            }
+            return true;
+        }
+        if (!empty($_COOKIE['brixen_website_only'])) {
+            return true;
+        }
+        $client_type = strtoupper((string) get_user_meta($user->ID, '_brixen_client_type', true));
+        if ($client_type === 'NORMAL' || $client_type === 'WEBSITE') {
             return true;
         }
         return false;
@@ -155,4 +252,11 @@ class Brixen_CRM_Portal_SSO {
  */
 function brixen_crm_portal_sso_url($user = null) {
     return Brixen_CRM_Portal_SSO::build_url($user);
+}
+
+/**
+ * Guest login URL for header menus → website client panel.
+ */
+function brixen_crm_portal_login_url() {
+    return Brixen_CRM_Portal_SSO::website_client_panel_url();
 }

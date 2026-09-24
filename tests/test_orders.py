@@ -64,5 +64,31 @@ class TestOrders(unittest.TestCase):
         self.assertEqual(st, '200 OK')
         self.assertEqual(res.get('status'), 'success')
 
+    def test_04_admin_add_product_to_existing_order(self):
+        status, headers, body = make_request('/api/auth/login', method='POST', body={'email': 'admin@brixenconsultant.co.uk', 'password': 'AdminPass123!'})
+        admin_token = extract_session_token(headers)
+        cookie = f"session_token={admin_token}"
+        svc = query_db("SELECT id, name, price, category FROM services WHERE name = 'VAT Registration Service';", one=True)
+        self.assertTrue(svc)
+        before = query_db("SELECT COUNT(*) as c FROM order_line_items WHERE order_id = 1;", one=True)
+        checkout_before = query_db("SELECT checkout_form_json FROM orders WHERE id = 1;", one=True)
+        st, _, res = make_request(
+            '/api/admin/orders/1/line-items',
+            method='POST',
+            body={'service_id': svc['id']},
+            cookie=cookie,
+        )
+        self.assertEqual(st, '200 OK')
+        self.assertEqual(res.get('status'), 'success')
+        after = query_db("SELECT COUNT(*) as c FROM order_line_items WHERE order_id = 1;", one=True)
+        self.assertEqual(int(after['c']), int(before['c']) + 1)
+        added = query_db(
+            "SELECT product_name FROM order_line_items WHERE order_id = 1 ORDER BY id DESC LIMIT 1;",
+            one=True,
+        )
+        self.assertEqual(added['product_name'], 'VAT Registration Service')
+        checkout_after = query_db("SELECT checkout_form_json FROM orders WHERE id = 1;", one=True)
+        self.assertEqual(checkout_before['checkout_form_json'], checkout_after['checkout_form_json'])
+
 if __name__ == '__main__':
     unittest.main()

@@ -135,11 +135,150 @@ def get_current_user(environ):
     touch_db_session(token)
     return dict(session_rec)
 
-def client_portal_login_ready(client):
+def client_is_b2b(client):
     if not client:
+        return False
+    role = str(client.get('role') or '').strip().upper()
+    # Order rows / partial dicts often omit role — still treat as B2B when flagged.
+    if role and role != 'CLIENT':
+        return False
+    if int(client.get('is_b2b') or 0) == 1:
+        return True
+    return str(client.get('client_type') or '').strip().upper() == 'B2B'
+
+
+# B2B portal clients: marketing never; order/work mail only to the B2B account owner
+# (end-company / form contacts on B2B orders must never be emailed).
+B2B_EMAIL_ALLOWED_NTYPES = frozenset({
+    'password_reset',
+    'security',
+    'warning',  # Companies House / compliance attention to the B2B owner
+    'order_update',
+    'order_complete',
+    'order',
+    'document',
+    'document_review',
+    'DOCUMENT',
+    'support',
+    'success',
+    'system',
+    'invoice',
+    'payment',
+})
+B2B_EMAIL_BLOCKED_NTYPES = frozenset({
+    'marketing',
+})
+
+
+def b2b_blocks_client_email(client, *, ntype=None, email_category=None):
+    """Block marketing to B2B. Order/work mail is allowed only via B2B-owner routing."""
+    if not client_is_b2b(client):
+        return False
+    category = str(email_category or '').strip().upper()
+    if category == 'MARKETING':
+        return True
+    key_l = str(ntype or '').strip().lower()
+    if key_l == 'marketing' or key_l in {t.lower() for t in B2B_EMAIL_BLOCKED_NTYPES}:
+        return True
+    return False
+
+
+def is_b2b_order_context(*, client=None, order=None):
+    client_rec = client if isinstance(client, dict) else None
+    if client_rec and client_is_b2b(client_rec):
+        return True
+    order_rec = order if isinstance(order, dict) else None
+    if order_rec and (
+        order_rec.get('b2b_client_id')
+        or (order_rec.get('checkout_form_json') and 'b2b' in str(order_rec.get('checkout_form_json')).lower())
+    ):
+        return True
+    return False
+
+
+def website_customer_login_url():
+    return wordpress_base_url() + '/my-account/'
+
+
+def client_can_use_crm_portal(client, *, impersonated=False):
+    """Staff always; B2B clients use this portal; Normal customers use the website."""
+    if impersonated:
+        return True
+    if not client:
+        return False
+    role = str(client.get('role') or '').strip().upper()
+    if role in {'SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF'}:
+        return True
+    if role != 'CLIENT':
+        return False
+    email = str(client.get('email') or '').strip().lower()
+    if email in {'guest.unlinked@brixenconsultants.com'}:
+        return False
+    return client_is_b2b(client)
+
+
+def client_portal_login_ready(client):
+    """True when this client is allowed to sign in on the CRM portal (B2B only)."""
+    if not client_can_use_crm_portal(client):
         return False
     wp_id = str(client.get('wordpress_user_id') or '').strip()
     return not wp_id.startswith('local_client_')
+
+
+def wordpress_provision_hmac(email, timestamp):
+    row = query_db("SELECT value FROM settings WHERE key = 'wordpress_webhook_secret';", one=True)
+    secret = (row['value'] if row and row['value'] else None) or os.environ.get('WORDPRESS_WEBHOOK_SECRET')
+    if not secret:
+        return None
+    payload = f"{str(email or '').strip().lower()}|{str(timestamp or '').strip()}"
+    return 'sha256=' + hmac.new(secret.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
+
+
+def provision_wordpress_website_user(*, email, password, full_name, phone=None, client_type='Normal'):
+    """Best-effort: create/update the matching WordPress login for website-only customers."""
+    email = str(email or '').strip().lower()
+    password = str(password or '')
+    if not email or len(password) < 8:
+        return {'ok': False, 'message': 'Missing website login details'}
+    ts = str(int(time.time()))
+    signature = wordpress_provision_hmac(email, ts)
+    if not signature:
+        return {'ok': False, 'message': 'Website sync is not configured (missing wordpress webhook secret)'}
+    body = json.dumps({
+        'email': email,
+        'password': password,
+        'full_name': full_name or email.split('@')[0],
+        'phone': phone or '',
+        'client_type': client_type,
+        'timestamp': ts,
+        'signature': signature,
+    }).encode('utf-8')
+    url = wordpress_base_url() + '/wp-json/brixen-crm/v1/provision-customer'
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={'Content-Type': 'application/json', 'Accept': 'application/json'},
+        method='POST',
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            raw = resp.read().decode('utf-8')
+        data = json.loads(raw) if raw else {}
+        if isinstance(data, dict) and data.get('status') == 'success':
+            return {'ok': True, 'wordpress_user_id': data.get('wordpress_user_id')}
+        return {'ok': False, 'message': (data or {}).get('message') or 'Website account was not created'}
+    except urllib.error.HTTPError as err:
+        detail = ''
+        try:
+            payload = json.loads(err.read().decode('utf-8') or '{}')
+            detail = str((payload or {}).get('message') or '').strip()
+        except Exception:
+            detail = ''
+        if detail:
+            return {'ok': False, 'message': f'HTTP {err.code}: {detail}'}
+        return {'ok': False, 'message': f'HTTP Error {err.code}: {getattr(err, "reason", "Unauthorized")}'}
+    except Exception as err:
+        return {'ok': False, 'message': str(err)}
 
 
 # P4: Email Notification Gateway Abstraction
@@ -287,6 +426,48 @@ def parse_smtp_identity(from_addr, display_name='Brixen Consultants'):
     return name, addr
 
 
+# Domains / patterns that must never receive CRM mail (spam traps, placeholders, role-noise).
+_BLOCKED_EMAIL_DOMAINS = frozenset({
+    'brixen-pending.local',
+    'example.com',
+    'example.org',
+    'test.com',
+    'mailinator.com',
+    'guerrillamail.com',
+    'tempmail.com',
+    '10minutemail.com',
+})
+_BLOCKED_EMAIL_LOCALPARTS = frozenset({
+    'noreply', 'no-reply', 'donotreply', 'do-not-reply', 'mailer-daemon', 'postmaster',
+})
+
+
+def is_deliverable_client_email(value):
+    """Strict gate before SMTP — invalid / placeholder addresses never leave the server."""
+    email = normalize_notify_email(value)
+    if not email or '@' not in email:
+        return False
+    local, _, domain = email.partition('@')
+    if not local or not domain or '.' not in domain:
+        return False
+    if domain in _BLOCKED_EMAIL_DOMAINS or domain.endswith('.local') or domain.endswith('.test'):
+        return False
+    if local in _BLOCKED_EMAIL_LOCALPARTS:
+        return False
+    if email.endswith('@brixen-pending.local'):
+        return False
+    return True
+
+
+def sanitize_email_subject(subject):
+    """Keep subjects short and human — reduces spam scoring."""
+    text = re.sub(r'\s+', ' ', str(subject or '').strip())
+    text = text.replace('!!!', '!').replace('???', '?')
+    if len(text) > 120:
+        text = text[:117].rstrip() + '…'
+    return text
+
+
 def build_outbound_email(recipient_email, subject, body_text, body_html=None, inline_images=None):
     from email.mime.image import MIMEImage
     from email.mime.multipart import MIMEMultipart
@@ -296,14 +477,29 @@ def build_outbound_email(recipient_email, subject, body_text, body_html=None, in
     brand = brand_settings()
     cfg = smtp_settings()
     _name, envelope_from = parse_smtp_identity(
-        cfg.get('from_addr'),
+        cfg.get('from_addr') or cfg.get('user') or 'notifications@brixenconsultants.com',
         'Brixen Consultants',
     )
+    # Align From with authenticated mailbox (Hostinger) — critical for spam filters / SPF.
+    smtp_user = str(cfg.get('user') or '').strip()
+    if smtp_user and '@' in smtp_user:
+        envelope_from = smtp_user
     display_name = 'Brixen Consultants'
-    reply_to = str(brand.get('support_email') or envelope_from or '').strip()
+    reply_to = str(
+        brand.get('support_email')
+        or 'contact@brixenconsultants.com'
+    ).strip() or 'contact@brixenconsultants.com'
     domain = 'brixenconsultants.com'
     if '@' in envelope_from:
         domain = envelope_from.rsplit('@', 1)[-1].lower() or domain
+
+    plain = str(body_text or '').strip()
+    if not plain and body_html:
+        # Always ship a real plain-text part (multipart/alternative) for deliverability.
+        plain = re.sub(r'<[^>]+>', ' ', str(body_html))
+        plain = re.sub(r'\s+', ' ', plain).strip()
+    if not plain:
+        plain = 'Message from Brixen Consultants. Please view this email in HTML if available.'
 
     images = list(inline_images or [])
     known = {str(item.get('cid') or '') for item in images}
@@ -334,32 +530,35 @@ def build_outbound_email(recipient_email, subject, body_text, body_html=None, in
     if body_html and attached:
         msg = MIMEMultipart('related')
         alt = MIMEMultipart('alternative')
-        alt.attach(MIMEText(body_text or '', 'plain', 'utf-8'))
+        alt.attach(MIMEText(plain, 'plain', 'utf-8'))
         alt.attach(MIMEText(body_html, 'html', 'utf-8'))
         msg.attach(alt)
         for item in attached:
             img = MIMEImage(item['payload'], _subtype=item['subtype'])
             img.add_header('Content-ID', f"<{item['cid']}>")
-            img.add_header('Content-Disposition', 'inline')
+            img.add_header('Content-Disposition', 'inline', filename=item['filename'])
             if img.get_param('name'):
                 img.del_param('name')
             msg.attach(img)
     elif body_html:
         msg = MIMEMultipart('alternative')
-        msg.attach(MIMEText(body_text or '', 'plain', 'utf-8'))
+        msg.attach(MIMEText(plain, 'plain', 'utf-8'))
         msg.attach(MIMEText(body_html, 'html', 'utf-8'))
     else:
-        msg = MIMEText(body_text or '', 'plain', 'utf-8')
+        msg = MIMEText(plain, 'plain', 'utf-8')
 
-    msg['Subject'] = subject or ''
+    msg['Subject'] = sanitize_email_subject(subject)
     msg['From'] = formataddr((display_name, envelope_from))
     msg['To'] = recipient_email
-    if reply_to and '@' in reply_to:
-        msg['Reply-To'] = formataddr((display_name, reply_to))
+    msg['Reply-To'] = formataddr((display_name, reply_to))
     msg['Date'] = formatdate(localtime=False)
     msg['Message-ID'] = make_msgid(domain=domain)
-    msg['Organization'] = 'Brixen Consultants'
+    msg['MIME-Version'] = '1.0'
+    msg['Organization'] = 'Brixen Consultants Ltd'
     msg['Content-Language'] = 'en-GB'
+    # Explicit transactional markers — helps Gmail/Outlook not treat as bulk marketing.
+    msg['X-Brixen-Mail-Class'] = 'transactional'
+    msg['X-Entity-Ref-ID'] = make_msgid(domain=domain).strip('<>')
     for junk_header in (
         'Auto-Submitted',
         'X-Auto-Response-Suppress',
@@ -370,6 +569,9 @@ def build_outbound_email(recipient_email, subject, body_text, body_html=None, in
         'Importance',
         'List-Unsubscribe',
         'List-Unsubscribe-Post',
+        'List-Id',
+        'Campaign-ID',
+        'X-Campaign',
     ):
         if junk_header in msg:
             del msg[junk_header]
@@ -449,10 +651,11 @@ def _smtp_deliver(recipient_email, subject, body_text, body_html, inline_images=
 class EmailService:
     @staticmethod
     def send_notification_email(recipient_email, subject, body_text, body_html=None, inline_images=None):
-        recipient_email = str(recipient_email or '').strip()
-        if not recipient_email or '@' not in recipient_email:
-            print(f"[EmailService Error] Missing recipient for '{subject}'")
-            return False, "Missing recipient"
+        recipient_email = normalize_notify_email(recipient_email)
+        if not is_deliverable_client_email(recipient_email):
+            print(f"[EmailService Error] Blocked undeliverable/spam-risk recipient for '{subject}'")
+            return False, "Invalid or blocked recipient"
+        subject = sanitize_email_subject(subject)
         outbox_id = None
         try:
             outbox_id = _queue_outbound_email(recipient_email, subject, body_text, body_html)
@@ -485,6 +688,51 @@ class EmailService:
                 time.sleep(1)
         _mark_outbound_email(outbox_id, 'failed', attempts=attempts, error=last_error)
         return False, last_error or 'Send failed'
+
+def dispatch_accounts_file_route(environ, start_response, path, method, user):
+    """Hand Accounts File screens to accounts_file.py when that module is present."""
+    if not (path.startswith('/api/admin/accounts-file') or path.startswith('/api/client/accounts-file')):
+        return None
+    try:
+        import accounts_file
+    except ImportError:
+        return json_response(
+            start_response,
+            {'status': 'error', 'message': 'Accounts File is not installed on this server.'},
+            "503 Service Unavailable",
+        )
+    content_type = (environ.get('CONTENT_TYPE') or '').lower()
+    body = {}
+    if method in ('POST', 'PUT', 'PATCH'):
+        if 'multipart/form-data' in content_type:
+            fields, files = parse_multipart_form(environ)
+            body = dict(fields)
+            body['_files'] = files
+        else:
+            body = parse_body(environ) or {}
+    query = urllib.parse.parse_qs(environ.get('QUERY_STRING') or '')
+    result = accounts_file.route(path, method, user, body, query)
+    if result is None:
+        return None
+    kind = result[0]
+    if kind == 'file':
+        payload = result[2] if len(result) > 2 else b''
+        file_type = result[3] if len(result) > 3 else 'application/octet-stream'
+        filename = result[4] if len(result) > 4 else 'download'
+        if isinstance(payload, str):
+            payload = payload.encode('utf-8')
+        elif not isinstance(payload, (bytes, bytearray)):
+            payload = b''
+        safe_name = re.sub(r'[^A-Za-z0-9._-]+', '_', str(filename or 'download'))
+        start_response(result[1], [
+            ('Content-Type', file_type or 'application/octet-stream'),
+            ('Content-Length', str(len(payload))),
+            ('Content-Disposition', f'attachment; filename="{safe_name}"'),
+        ])
+        return [bytes(payload)]
+    payload = result[2] if len(result) > 2 else {'status': 'error', 'message': 'Accounts file route not found'}
+    return json_response(start_response, payload, result[1] if len(result) > 1 else "404 Not Found")
+
 
 def json_response(start_response, data, status="200 OK", extra_headers=None):
     body = json.dumps(data).encode('utf-8')
@@ -881,6 +1129,7 @@ def strip_order_finance(row):
         'price', 'vat', 'total', 'payment_mode', 'payment_status',
         'unit_price', 'line_total', 'amount', 'tax', 'payment_method',
         'deposit_amount', 'amount_paid', 'amount_due',
+        'cost_price', 'catalog_cost', 'manual_cost', 'resolved_cost', 'cost_source', 'profit',
     ):
         out.pop(key, None)
     return out
@@ -1107,6 +1356,9 @@ ORDER_STATUSES = (
     'Pending', 'Processing', 'In Progress', 'Completed',
     'Cancelled', 'Refunded', 'Pending Verification'
 )
+LINE_ITEM_FULFILLMENT_STATUSES = (
+    'Pending', 'In Progress', 'Completed', 'Cancelled',
+)
 ORDER_PAYMENT_MODES = (
     'PKR(Bank Transfer)',
     'GBP(Bank Transfer)',
@@ -1309,32 +1561,30 @@ def load_company_for_notify(company=None, order=None):
 
 def resolve_work_notification_email(*, client=None, company=None, order=None, email_to=None):
     """
-    Company/order work emails go to the company-relevant address first:
-      1. Explicit email_to
-      2. If B2B Order / Customer -> B2B Account Owner email (owner_form_email / registered_email)
-      3. companies.registered_email
-      4. company form / owner email
-      5. order owner_form_email
-      6. client notification_email / login email
-    For B2B orders, notifications MUST go to the Account Owner email, NOT directly to the retail customer login email first.
+    Normal customers: company/order work email as usual (form / registered / client).
+    B2B orders: STRICT — only the B2B account owner (login / notification_email).
+    Never email end-company directors or form contacts on B2B portal orders.
     """
+    order_rec = dict(order) if isinstance(order, dict) else (query_db("SELECT * FROM orders WHERE id = ?;", (order,), one=True) if order else None)
+    client_rec = resolve_client_user(client or (order_rec or {}).get('user_id'))
+    if not client_rec and isinstance(client, dict) and (client.get('email') or client.get('is_b2b') or client.get('client_type')):
+        client_rec = dict(client)
+        client_rec.setdefault('role', 'CLIENT')
+        client_rec.setdefault('notification_email', client.get('notification_email') or '')
+
+    if is_b2b_order_context(client=client_rec, order=order_rec) or client_is_b2b(client_rec):
+        owner = client_notification_recipient(client_rec)
+        if not owner:
+            return ''
+        explicit = normalize_notify_email(email_to) if email_to is not None else ''
+        # Allow explicit only when it is the B2B owner address; otherwise force owner.
+        if explicit and explicit == normalize_notify_email(owner):
+            return explicit
+        return owner
+
     explicit = normalize_notify_email(email_to) if email_to is not None else ''
     if explicit:
         return explicit
-
-    order_rec = dict(order) if isinstance(order, dict) else (query_db("SELECT * FROM orders WHERE id = ?;", (order,), one=True) if order else None)
-    client_rec = resolve_client_user(client or (order_rec or {}).get('user_id'))
-
-    is_b2b_order = False
-    if client_rec and (client_rec.get('is_b2b') == 1 or client_rec.get('client_type') == 'B2B'):
-        is_b2b_order = True
-    elif order_rec and (order_rec.get('b2b_client_id') or (order_rec.get('checkout_form_json') and 'b2b' in str(order_rec.get('checkout_form_json')).lower())):
-        is_b2b_order = True
-
-    if is_b2b_order and order_rec:
-        b2b_owner_email = normalize_notify_email((order_rec or {}).get('owner_form_email'))
-        if b2b_owner_email:
-            return b2b_owner_email
 
     company_rec = load_company_for_notify(company, order_rec)
     if company_rec:
@@ -1370,15 +1620,14 @@ def order_prefix_value():
 import product_catalog_config
 
 def next_universal_order_number():
-    year = datetime.date.today().year
-    prefix = f"ORD-{year}-"
+    prefix = order_prefix_value()
     highest = 0
     for row in query_db("SELECT order_number FROM orders;") or []:
         number = str(row.get('order_number') or '').strip()
         match = re.search(r'(\d+)$', number)
         if match:
             highest = max(highest, int(match.group(1)))
-    return f"{prefix}{highest + 1:06d}"
+    return f"{prefix}{highest + 1}"
 
 def get_service_catalog_schema(service):
     """Enrich a service database record with product_catalog_config dynamic form schema."""
@@ -1386,9 +1635,11 @@ def get_service_catalog_schema(service):
         return None
     s = dict(service)
     pname = str(s.get('name') or '').strip()
-    config = product_catalog_config.get_product_form_config(pname)
+    category = s.get('category') or ''
+    config = product_catalog_config.get_product_form_config(pname, category)
+    profile = product_catalog_config.get_product_form_profile(pname, category)
     
-    if not s.get('form_config_json'):
+    if profile == product_catalog_config.FORM_PROFILE_WEBSITE or not s.get('form_config_json'):
         s['form_config'] = config.get('fields', [])
         s['repeatable_sections'] = config.get('repeatable_sections', [])
     else:
@@ -1400,13 +1651,35 @@ def get_service_catalog_schema(service):
             s['form_config'] = config.get('fields', [])
             s['repeatable_sections'] = config.get('repeatable_sections', [])
 
-    if not s.get('document_requirements_json'):
+    if product_catalog_config.service_skips_required_docs(pname, category) or product_catalog_config.service_is_personal_bank(pname, category):
+        s['document_requirements'] = []
+    elif product_catalog_config.service_needs_standard_kyc_docs(pname, category):
+        s['document_requirements'] = list(product_catalog_config.STANDARD_ORDER_DOCUMENT_REQUIREMENTS)
+    elif profile == product_catalog_config.FORM_PROFILE_WEBSITE:
+        s['document_requirements'] = list(
+            product_catalog_config.PRODUCT_FORM_CONFIGS['Business Website']['document_requirements']
+        )
+    elif not s.get('document_requirements_json'):
         s['document_requirements'] = config.get('document_requirements', [])
     else:
         try:
             s['document_requirements'] = json.loads(s['document_requirements_json'])
         except Exception:
             s['document_requirements'] = config.get('document_requirements', [])
+
+    s['form_profile'] = profile
+    s['needs_kyc_docs'] = product_catalog_config.service_needs_standard_kyc_docs(pname, category)
+    s['needs_companies_house'] = product_catalog_config.service_needs_companies_house(pname, category)
+    s['needs_access_credentials'] = product_catalog_config.service_needs_access_credentials(pname, category)
+    s['skips_director_dob'] = product_catalog_config.service_skips_director_dob(pname, category)
+    s['is_sole_trader'] = product_catalog_config.service_is_sole_trader(pname, category)
+    s['is_personal_bank'] = product_catalog_config.service_is_personal_bank(pname, category)
+    if s['is_sole_trader'] or s['is_personal_bank']:
+        s['needs_companies_house'] = False
+    if s['is_personal_bank']:
+        s['needs_kyc_docs'] = False
+        s['needs_access_credentials'] = False
+        s['document_requirements'] = []
             
     if not s.get('estimated_delivery_time'):
         s['estimated_delivery_time'] = '24-48 Hours'
@@ -1438,18 +1711,23 @@ def create_manual_crm_order(data, actor=None):
                 p = 0
             if p < 0:
                 return None, 'Price cannot be negative'
-            valid_items.append({'product_name': pn, 'price': p})
+            valid_items.append({
+                'product_name': pn,
+                'price': p,
+                'category_name': str(item.get('category_name') or item.get('category') or '').strip() or 'Manual CRM Order',
+            })
             total_price += p
         if not valid_items:
             return None, 'Enter at least one product name'
         
         extras = dict(extras)
         extras['price'] = round(total_price, 2)
+        extras['line_items'] = valid_items
         if len(valid_items) == 1:
             service_name = valid_items[0]['product_name']
         else:
             service_name = "Multiple Products"
-        service_id = None
+        service_id = optional_record_id(extras.get('service_id'))
     else:
         service_name = (extras.get('service_name') or extras.get('product') or '').strip()
         service_id = optional_record_id(extras.get('service_id'))
@@ -1472,25 +1750,86 @@ def create_manual_crm_order(data, actor=None):
         if not service_name:
             return None, 'Enter the service / product name'
 
+    svc_category = ''
+    if service_id:
+        svc_row = query_db("SELECT category FROM services WHERE id = ?;", (service_id,), one=True)
+        svc_category = (svc_row or {}).get('category') or ''
+    if line_items and isinstance(line_items, list) and line_items:
+        needs_kyc_docs = any(
+            product_catalog_config.service_needs_standard_kyc_docs(
+                str(item.get('product_name') or ''),
+                str(item.get('category_name') or item.get('category') or ''),
+            )
+            for item in line_items
+        )
+    else:
+        needs_kyc_docs = product_catalog_config.service_needs_standard_kyc_docs(service_name, svc_category)
+    wizard_submit = 'uploaded_docs' in extras or extras.get('repeatable_data') is not None
+    client_submit = bool(actor and actor.get('role') == 'CLIENT')
+    if needs_kyc_docs and (wizard_submit or client_submit):
+        missing_docs = product_catalog_config.missing_required_order_documents(extras.get('uploaded_docs'))
+        if missing_docs:
+            return None, (
+                'Upload the required documents: ID and Proof of Address. Missing: '
+                + '; '.join(missing_docs)
+            )
+
     company_id = optional_record_id(extras.get('company_id'))
     company = None
     if company_id:
         company = query_db("SELECT * FROM companies WHERE id = ?;", (company_id,), one=True)
-        if not company or int(company.get('user_id') or 0) != int(client_id):
-            return None, 'Company does not belong to this client'
+        if company and int(company.get('user_id') or 0) != int(client_id) and actor and actor.get('role') in INTERNAL_STAFF_ROLES:
+            execute_db("UPDATE companies SET user_id = ? WHERE id = ?;", (client_id, company_id))
     else:
-        company_name = (extras.get('company_name') or extras.get('name') or '').strip()
+        form_vals = extras.get('form_values') if isinstance(extras.get('form_values'), dict) else {}
+        company_name = (
+            extras.get('company_name')
+            or extras.get('name')
+            or form_vals.get('company_name')
+            or form_vals.get('desired_company_name')
+            or form_vals.get('registered_company_name')
+            or form_vals.get('proposed_company_name')
+            or ''
+        ).strip()
         if company_name:
-            company_id, company_err = create_manual_company({
-                **extras,
-                'client_mode': 'existing',
-                'client_id': client_id,
-                'name': company_name,
-                'registered_email': extras.get('company_email') or extras.get('registered_email') or extras.get('owner_form_email'),
-            }, actor)
+            company_number = (
+                extras.get('company_number')
+                or form_vals.get('company_number')
+                or form_vals.get('registration_number')
+                or ''
+            )
+            company_id, company_err = resolve_company_for_client_work(
+                client_id,
+                company_name,
+                company_number=company_number,
+                extras={
+                    **extras,
+                    'name': company_name,
+                    'company_number': company_number,
+                    'director': form_vals.get('director_name') or form_vals.get('full_name') or extras.get('director') or extras.get('owner_name'),
+                    'reg_office': (
+                        form_vals.get('registered_office_address')
+                        or form_vals.get('registered_address')
+                        or form_vals.get('address')
+                        or extras.get('reg_office')
+                    ),
+                    'package': service_name if 'package' in str(service_name or '').lower() else (extras.get('package') or service_name),
+                    'registered_email': (
+                        extras.get('company_email')
+                        or extras.get('registered_email')
+                        or extras.get('owner_form_email')
+                        or form_vals.get('access_email')
+                        or form_vals.get('registered_email')
+                        or form_vals.get('end_client_email')
+                        or form_vals.get('email')
+                        or (client or {}).get('email')
+                    ),
+                },
+                actor=actor,
+            )
             if company_err:
                 return None, company_err
-            company = query_db("SELECT * FROM companies WHERE id = ?;", (company_id,), one=True)
+            company = query_db("SELECT * FROM companies WHERE id = ?;", (company_id,), one=True) if company_id else None
 
     try:
         price = float(extras.get('price') if extras.get('price') not in (None, '') else 0)
@@ -1498,26 +1837,54 @@ def create_manual_crm_order(data, actor=None):
         return None, 'Enter a valid price'
     if price < 0:
         return None, 'Price cannot be negative'
-    vat_rate = 0.0
-    try:
-        if extras.get('vat') not in (None, ''):
-            vat = float(extras.get('vat'))
-        else:
-            vat = round(price * vat_rate, 2)
-    except (TypeError, ValueError):
-        return None, 'Enter a valid VAT amount'
-    total = round(price + vat, 2)
-    if extras.get('total') not in (None, ''):
-        try:
-            total = float(extras.get('total'))
-        except (TypeError, ValueError):
-            return None, 'Enter a valid total'
+    price, vat, total = order_amounts_without_vat(price)
 
-    owner_name = (extras.get('owner_name') or extras.get('director') or (client or {}).get('full_name') or '').strip()
+    form_vals = extras.get('form_values') if isinstance(extras.get('form_values'), dict) else {}
+
+    def form_pick(*keys):
+        for key in keys:
+            value = form_vals.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+            value = extras.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+        return ''
+
+    package_name = form_pick('package_name', 'service_name') or service_name
+    is_package_formation = is_company_registration_order(
+        {'category': svc_category, 'category_name': svc_category},
+        service_name,
+        line_items if isinstance(line_items, list) else [],
+    ) or any(
+        'package' in str(part or '').lower()
+        for part in (
+            [service_name, svc_category]
+            + [
+                (item or {}).get('product_name')
+                for item in (line_items if isinstance(line_items, list) else [])
+            ]
+            + [
+                (item or {}).get('category_name')
+                for item in (line_items if isinstance(line_items, list) else [])
+            ]
+        )
+    )
+
+    director_from_form = form_pick('director_name', 'full_name', 'end_client_name')
+    email_from_form = form_pick('access_email', 'registered_email', 'end_client_email', 'email', 'company_email')
+    phone_from_form = form_pick('uk_phone', 'uk_contact_number', 'uk_contact', 'end_client_phone', 'phone', 'company_phone', 'director_phone')
+    address_from_form = form_pick('registered_office_address', 'registered_address', 'address', 'reg_office')
+    home_address_from_form = form_pick('home_address', 'director_home_address')
+    nationality_from_form = form_pick('nationality', 'director_nationality') or ''
+    dob_from_form = form_pick('director_dob', 'dob', 'date_of_birth')
+
+    owner_name = (extras.get('owner_name') or extras.get('director') or director_from_form or (client or {}).get('full_name') or '').strip()
     owner_email = normalize_notify_email(
         extras.get('owner_form_email')
         or extras.get('company_email')
         or extras.get('registered_email')
+        or email_from_form
         or (company or {}).get('registered_email')
         or (client or {}).get('email')
     )
@@ -1532,43 +1899,107 @@ def create_manual_crm_order(data, actor=None):
         status = 'Processing'
     payment_mode = (extras.get('payment_mode') or 'Manual CRM').strip() or 'Manual CRM'
     notes = (extras.get('notes') or '').strip() or 'Created manually in CRM (no website signup).'
+    if line_items and isinstance(line_items, list):
+        listed = ', '.join(
+            str(item.get('product_name') or '').strip()
+            for item in line_items
+            if str(item.get('product_name') or '').strip()
+        )
+        if listed and listed not in notes:
+            notes = f"{notes} Products: {listed}." if notes else f"Products: {listed}."
     order_number = (extras.get('order_number') or '').strip() or next_universal_order_number()
     if query_db("SELECT id FROM orders WHERE order_number = ?;", (order_number,), one=True):
         order_number = next_universal_order_number()
 
     checkout_form_data = {
-        'company_name': (company or {}).get('name') or extras.get('company_name') or '',
+        'company_name': (company or {}).get('name') or form_pick('company_name', 'proposed_company_name', 'desired_company_name', 'registered_company_name') or extras.get('company_name') or '',
+        'desired_company_name': form_pick('desired_company_name', 'proposed_company_name', 'company_name'),
         'company_type': extras.get('company_type') or 'Private Limited Company by Shares (LTD)',
-        'sic_code': extras.get('sic_code') or '62020 - Information technology consultancy activities',
+        'sic_code': form_pick('sic_code', 'business_activities', 'sic_codes') or extras.get('sic_code') or '',
+        'business_activities': form_pick('business_activities', 'sic_code', 'sic_codes') or extras.get('business_activities') or '',
         'company_email': owner_email,
-        'company_phone': extras.get('company_phone') or '',
-        'registered_address_line1': extras.get('registered_address_line1') or extras.get('reg_office') or '',
+        'company_phone': phone_from_form or extras.get('company_phone') or '',
+        'registered_address_line1': extras.get('registered_address_line1') or address_from_form or extras.get('reg_office') or '',
         'registered_city': extras.get('registered_city') or '',
         'registered_postcode': extras.get('registered_postcode') or '',
         'registered_country': extras.get('registered_country') or 'United Kingdom',
         'director_name': owner_name,
         'director_email': owner_email,
-        'director_phone': extras.get('director_phone') or '',
-        'director_nationality': extras.get('director_nationality') or 'British',
+        'director_phone': phone_from_form or extras.get('director_phone') or '',
+        'director_nationality': nationality_from_form,
         'director_residence': extras.get('director_residence') or 'United Kingdom',
+        'director_dob': dob_from_form,
+        'home_address': home_address_from_form,
+        'package_name': package_name,
+        'unregistered_package': bool(is_package_formation),
         'payment_mode': payment_mode,
         'order_notes': notes
     }
+    if form_vals:
+        for key, value in form_vals.items():
+            if key in checkout_form_data:
+                continue
+            if value is None or value == '':
+                continue
+            checkout_form_data[key] = value
 
-    access_email = (extras.get('access_email') or extras.get('service_email') or '').strip() or None
-    access_email_password = (extras.get('access_email_password') or extras.get('service_password') or '').strip() or None
+    access_email = (
+        extras.get('access_email')
+        or extras.get('service_email')
+        or form_pick('access_email', 'registered_email', 'end_client_email', 'email')
+        or ''
+    ).strip() or None
+    access_email_password = (
+        extras.get('access_email_password')
+        or extras.get('service_password')
+        or form_pick('access_email_password', 'email_password', 'service_password')
+        or ''
+    ).strip() or None
 
     is_b2b_client = (client and (client.get('is_b2b') == 1 or client.get('client_type') == 'B2B'))
     b2b_client_id_val = client.get('b2b_id') if (is_b2b_client and client.get('b2b_id')) else None
+
+    end_client_name = (
+        extras.get('end_client_name') or
+        form_vals.get('end_client_name') or
+        form_vals.get('full_name') or
+        form_vals.get('contact_person') or
+        form_vals.get('director_name') or
+        extras.get('owner_name') or
+        (client and client.get('full_name')) or ''
+    ).strip() or None
+
+    end_client_email = (
+        extras.get('end_client_email') or
+        form_vals.get('end_client_email') or
+        form_vals.get('email') or
+        form_vals.get('forwarding_email') or
+        form_vals.get('registered_email') or
+        form_vals.get('access_email') or
+        extras.get('owner_form_email') or
+        (client and client.get('email')) or ''
+    ).strip() or None
+
+    end_client_phone = (
+        extras.get('end_client_phone') or
+        form_vals.get('end_client_phone') or
+        form_vals.get('phone') or
+        form_vals.get('uk_contact') or
+        form_vals.get('uk_phone') or
+        form_vals.get('uk_contact_number') or
+        form_vals.get('contact_phone') or
+        (client and client.get('phone')) or ''
+    ).strip() or None
 
     order_id = execute_db(
         """
         INSERT INTO orders (
             order_number, user_id, company_id, service_id, service_name,
             price, vat, total, status, progress_percent, notes, payment_mode,
-            owner_name, owner_form_email, assigned_staff_id, checkout_form_json,
+            owner_name, owner_form_email, end_client_name, end_client_email, end_client_phone,
+            assigned_staff_id, checkout_form_json,
             b2b_client_id, access_email, access_email_password
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """,
         (
             order_number,
@@ -1585,13 +2016,29 @@ def create_manual_crm_order(data, actor=None):
             payment_mode,
             owner_name or None,
             owner_email,
+            end_client_name,
+            end_client_email,
+            end_client_phone,
             (actor or {}).get('id'),
-            json.dumps(checkout_form_data),
+            json.dumps(
+                checkout_form_fields_from_stored_dict(checkout_form_data)
+                or checkout_form_data
+            ),
             b2b_client_id_val,
             access_email,
             access_email_password,
         ),
     )
+    if form_vals:
+        execute_db(
+            "UPDATE orders SET order_form_values_json = ? WHERE id = ?;",
+            (json.dumps(form_vals), order_id),
+        )
+    if dob_from_form:
+        execute_db(
+            "UPDATE orders SET checkout_dob = ? WHERE id = ?;",
+            (normalize_date_of_birth(dob_from_form), order_id),
+        )
 
     if company_id and owner_email:
         persist_company_registered_email(
@@ -1626,17 +2073,17 @@ def create_manual_crm_order(data, actor=None):
             execute_db(
                 """
                 INSERT INTO order_line_items (
-                    order_id, product_name, category_name, quantity, unit_price, line_total, sort_order
-                ) VALUES (?, ?, ?, 1, ?, ?, ?);
+                    order_id, product_name, category_name, quantity, unit_price, line_total, sort_order, fulfillment_status
+                ) VALUES (?, ?, ?, 1, ?, ?, ?, 'Pending');
                 """,
-                (order_id, pn, 'Manual CRM Order', p, p, idx)
+                (order_id, pn, str(item.get('category_name') or item.get('category') or 'Manual CRM Order').strip() or 'Manual CRM Order', p, p, idx)
             )
     else:
         execute_db(
             """
             INSERT INTO order_line_items (
-                order_id, product_name, category_name, quantity, unit_price, line_total, sort_order
-            ) VALUES (?, ?, ?, 1, ?, ?, 0);
+                order_id, product_name, category_name, quantity, unit_price, line_total, sort_order, fulfillment_status
+            ) VALUES (?, ?, ?, 1, ?, ?, 0, 'Pending');
             """,
             (order_id, service_name, 'Manual CRM Order', price, price)
         )
@@ -1644,16 +2091,18 @@ def create_manual_crm_order(data, actor=None):
     uploaded_docs = extras.get('uploaded_docs')
     if uploaded_docs and isinstance(uploaded_docs, dict):
         for req_key, doc_item in uploaded_docs.items():
-            if isinstance(doc_item, dict):
-                doc_id_val = doc_item.get('document_id') or doc_item.get('id')
-                if doc_id_val:
-                    try:
-                        execute_db(
-                            "UPDATE documents SET order_id = ?, company_id = COALESCE(company_id, ?) WHERE id = ?;",
-                            (order_id, company_id, int(doc_id_val))
-                        )
-                    except Exception:
-                        pass
+            items = doc_item if isinstance(doc_item, list) else [doc_item]
+            for item in items:
+                if isinstance(item, dict):
+                    doc_id_val = item.get('document_id') or item.get('id')
+                    if doc_id_val:
+                        try:
+                            execute_db(
+                                "UPDATE documents SET order_id = ?, company_id = COALESCE(company_id, ?) WHERE id = ?;",
+                                (order_id, company_id, int(doc_id_val))
+                            )
+                        except Exception:
+                            pass
 
     ensure_order_timeline(order_id)
     ensure_invoice_for_order(order_id)
@@ -2752,11 +3201,14 @@ def build_client_document_email(client, doc_name, client_message=None, company_n
 
 
 def resolve_client_user(client_or_id):
+    _client_email_cols = (
+        "id, email, notification_email, full_name, role, is_b2b, client_type, b2b_id"
+    )
     if isinstance(client_or_id, dict):
         user_id = client_or_id.get('user_id') or client_or_id.get('id')
         if user_id:
             row = query_db(
-                "SELECT id, email, notification_email, full_name, role FROM users WHERE id = ? AND role = 'CLIENT';",
+                f"SELECT {_client_email_cols} FROM users WHERE id = ? AND role = 'CLIENT';",
                 (user_id,),
                 one=True,
             )
@@ -2765,6 +3217,8 @@ def resolve_client_user(client_or_id):
         if client_or_id.get('role') == 'CLIENT' and client_or_id.get('email'):
             out = dict(client_or_id)
             out.setdefault('notification_email', client_or_id.get('notification_email') or '')
+            out.setdefault('is_b2b', client_or_id.get('is_b2b') or 0)
+            out.setdefault('client_type', client_or_id.get('client_type') or '')
             return out
         if client_or_id.get('email') and user_id:
             return {
@@ -2773,12 +3227,14 @@ def resolve_client_user(client_or_id):
                 'notification_email': client_or_id.get('notification_email') or '',
                 'full_name': client_or_id.get('full_name') or '',
                 'role': 'CLIENT',
+                'is_b2b': client_or_id.get('is_b2b') or 0,
+                'client_type': client_or_id.get('client_type') or '',
             }
         client_or_id = user_id or client_or_id.get('id')
     if not client_or_id:
         return None
     row = query_db(
-        "SELECT id, email, notification_email, full_name, role FROM users WHERE id = ? AND role = 'CLIENT';",
+        f"SELECT {_client_email_cols} FROM users WHERE id = ? AND role = 'CLIENT';",
         (client_or_id,),
         one=True,
     )
@@ -2826,6 +3282,14 @@ def notify_client(
         INSERT INTO notifications (user_id, title, message, type, link)
         VALUES (?, ?, ?, ?, ?);
     """, (client_rec['id'], title, message, ntype, link))
+
+    # Hard rule: B2B accounts never get marketing emails.
+    if b2b_blocks_client_email(client_rec, ntype=ntype):
+        return {
+            'notification_created': True,
+            'email_sent': False,
+            'email_status': 'Blocked: B2B clients do not receive marketing emails',
+        }
 
     if email_text is None or email_html is None:
         kwargs = {
@@ -3039,6 +3503,33 @@ def payment_notify_email_for_order(order):
     return real_order_connector(order).get('owner_form_email') or ''
 
 
+def payment_received_copy(invoice=None):
+    money = invoice_money_state(invoice or {})
+    if float(money.get('amount_due') or 0) > 0.004:
+        return {
+            'title': 'Deposit received',
+            'headline': 'We’ve received your deposit',
+            'message': 'Thank you. Your deposit is in. The remaining balance is due when the work is done.',
+            'kind': 'deposit',
+        }
+    return {
+        'title': 'Thank you for your complete payment',
+        'headline': 'Thank you for your complete payment',
+        'message': 'We’ve received the full amount for this invoice. Thank you — this payment is now complete.',
+        'kind': 'complete',
+    }
+
+
+def invoice_send_email_kind(invoice=None, *, received_more=False):
+    money = invoice_money_state(invoice or {})
+    due = float(money.get('amount_due') or 0)
+    if due <= 0.004 and str(money.get('status') or '') == 'Paid':
+        return 'payment_received'
+    if received_more:
+        return 'payment_received'
+    return 'payment_requested'
+
+
 def notify_payment_received(order, invoice=None):
     if not order:
         return {'notification_created': False, 'email_sent': False, 'email_status': 'No order'}
@@ -3046,23 +3537,10 @@ def notify_payment_received(order, invoice=None):
     service = str(order.get('service_name') or 'Your order').strip()
     number = str(order.get('order_number') or '').strip()
     invoice_number = str((invoice or {}).get('invoice_number') or '').strip()
-    money = invoice_money_state(invoice or {})
-    currency = money['currency']
-    timing = money['timing']
-    remaining = money['amount_due']
-    deposit = remaining > 0.004
-    if deposit:
-        title = 'Deposit received'
-        headline = 'We’ve received your deposit'
-        message = 'Thank you. Your deposit is in. The remaining balance is due when the work is done.'
-    elif timing == 'Advance':
-        title = 'Advance payment received'
-        headline = 'We’ve received your advance payment'
-        message = 'Thank you. Your advance payment is in and we will start this order.'
-    else:
-        title = 'Payment received'
-        headline = 'We’ve received your payment'
-        message = 'Thank you. Your payment for this completed work is in.'
+    copy = payment_received_copy(invoice)
+    title = copy['title']
+    headline = copy['headline']
+    message = copy['message']
     email_to = connector.get('owner_form_email') or ''
     invoice_url = ''
     if invoice and invoice.get('id'):
@@ -3368,41 +3846,32 @@ def record_dismissed_company_card(company):
     )
 
 
-def delete_company_card(company_id, actor=None):
-    """Remove a company portfolio card. Linked orders are reassigned or hidden."""
+def delete_company_card(company_id, actor=None, *, force_delete_genuine=False):
+    """Permanently remove a company and all linked CRM data (orders, invoices, docs)."""
+    import data_protection as _data_protection
+    import permanent_purge as _permanent_purge
     company = query_db("SELECT * FROM companies WHERE id = ?;", (company_id,), one=True)
     if not company:
         return None, 'Company not found'
-    record_dismissed_company_card(company)
-    replacement = match_company_for_client(company.get('user_id'), company.get('name'), exclude_id=company_id)
-    replacement_row = query_db(
-        "SELECT id, company_number FROM companies WHERE id = ?;",
-        (replacement,),
-        one=True,
-    ) if replacement else None
-    if replacement_row and not is_pending_company_number(replacement_row.get('company_number')):
-        linked_orders = query_db("SELECT id FROM orders WHERE company_id = ?;", (company_id,)) or []
-        for order in linked_orders:
-            attach_order_to_company(order['id'], replacement_row['id'])
-    else:
-        execute_db(
-            "UPDATE orders SET company_id = NULL, portfolio_hidden = 1 WHERE company_id = ?;",
-            (company_id,),
-        )
-        execute_db("UPDATE company_owners SET company_id = NULL WHERE company_id = ?;", (company_id,))
-    execute_db("DELETE FROM companies WHERE id = ?;", (company_id,))
+    blocked = _data_protection.refuse_manual_delete_company(
+        company, force=force_delete_genuine, actor=actor,
+    )
+    if blocked:
+        return None, blocked
+    result = _permanent_purge.purge_company_from_live(company=company, actor=actor, scrub_backups=True)
+    remove_stored_document_files(result.get('doc_paths') or [])
     if actor:
         log_activity(
             actor,
-            'COMPANY_DELETED',
+            'COMPANY_PERMANENTLY_DELETED',
             'companies',
             str(company_id),
-            f"Deleted company {company.get('name')} ({company.get('company_number') or 'no number'})",
+            f"Permanently deleted company {company.get('name')} ({company.get('company_number') or 'no number'}) — purged from DB and backups",
         )
     return company, None
 
 
-def bulk_delete_company_cards(company_ids, actor=None):
+def bulk_delete_company_cards(company_ids, actor=None, *, force_delete_genuine=False):
     deleted = []
     errors = []
     seen = set()
@@ -3415,7 +3884,7 @@ def bulk_delete_company_cards(company_ids, actor=None):
         if cid in seen:
             continue
         seen.add(cid)
-        company, err = delete_company_card(cid, actor=actor)
+        company, err = delete_company_card(cid, actor=actor, force_delete_genuine=force_delete_genuine)
         if err:
             errors.append({'id': cid, 'message': err})
         else:
@@ -3632,13 +4101,35 @@ def client_can_access_document(doc):
     return uploaded_by == 'Customer Upload' or category == 'Checkout Upload'
 
 
+def _strip_invisible_chars(value):
+    """Remove whitespace and format/invisible characters that paste from Excel/PDFs."""
+    text = str(value or '')
+    text = re.sub(r'[\u200b-\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]', '', text)
+    text = re.sub(r'\s+', '', text.strip())
+    return text
+
+
 def normalize_compliance_field(value, max_len=40):
-    text = re.sub(r'\s+', '', str(value or '').strip())
+    text = _strip_invisible_chars(value)
     if len(text) > max_len:
         return None, f'Enter at most {max_len} characters'
     if text and not re.fullmatch(r'[A-Za-z0-9/-]+', text):
         return None, 'Use letters, numbers, / or - only'
     return text, None
+
+
+def normalize_utr_number(value):
+    """UK Corporation Tax UTR: exactly 10 digits (spaces/invisible chars ignored)."""
+    text = _strip_invisible_chars(value)
+    if not text:
+        return '', None
+    if re.search(r'[^0-9/-]', text):
+        return None, 'Enter a 10-digit UTR'
+    digits = re.sub(r'\D', '', text)
+    if len(digits) != 10:
+        return None, 'Enter a 10-digit UTR'
+    return digits, None
+
 
 
 def parse_sic_codes(raw):
@@ -3732,11 +4223,11 @@ def company_notify_email_locked(company):
 
 
 def company_list_order_sql():
-    # Newest formed first (incorporation date), then newest CRM card, then id.
+    # Newest CRM registration first, then newest incorporation date, then id.
     return (
+        "datetime(created_at) DESC, "
         "CASE "
         "WHEN inc_date IS NOT NULL AND length(trim(inc_date)) >= 10 THEN date(inc_date) "
-        "WHEN created_at IS NOT NULL THEN date(created_at) "
         "ELSE date('1970-01-01') END DESC, "
         "id DESC"
     )
@@ -3893,6 +4384,11 @@ def public_client_company(row, deadlines=None, for_staff=False, resolve_owner=Fa
     payload['attention'] = attention
     payload['needs_attention'] = bool(attention)
     payload['accounts_next_due'] = companies_house_iso_date(src.get('accounts_next_due'))
+    payload['accounts_overdue'] = bool(src.get('accounts_overdue'))
+    payload['accounts_made_up_to'] = companies_house_iso_date(src.get('accounts_made_up_to'))
+    payload['accounts_period_start'] = companies_house_iso_date(src.get('accounts_period_start'))
+    payload['accounts_last_made_up_to'] = companies_house_iso_date(src.get('accounts_last_made_up_to'))
+    payload['share_capital'] = src.get('share_capital_gbp')
     payload['confirmation_next_due'] = companies_house_iso_date(src.get('confirmation_next_due'))
     if for_staff:
         payload['authentication_code'] = str(src.get('authentication_code') or '').strip()
@@ -3937,6 +4433,7 @@ COMPANY_STAFF_SELECT = (
     "sic_codes, registered_email, registered_email_locked, business_email_verified, "
     "business_email_verified_by, business_email_verified_at, business_email_source, business_email_updated_at, "
     "whatsapp_number, accounts_next_due, accounts_overdue, "
+    "accounts_made_up_to, accounts_period_start, accounts_last_made_up_to, share_capital_gbp, "
     "confirmation_next_due, confirmation_overdue, ch_attention_json, "
     "ch_alert_fingerprint, ch_alert_sent_at, compliance_last_notification_at, compliance_last_notification_id, "
     "b2b_id, client_type"
@@ -3947,6 +4444,7 @@ COMPANY_LIST_SELECT = (
     "sic_codes, registered_email, registered_email_locked, business_email_verified, "
     "business_email_verified_by, business_email_verified_at, business_email_source, business_email_updated_at, "
     "whatsapp_number, accounts_next_due, accounts_overdue, "
+    "accounts_made_up_to, accounts_period_start, accounts_last_made_up_to, share_capital_gbp, "
     "confirmation_next_due, confirmation_overdue, ch_attention_json, "
     "b2b_id, client_type"
 )
@@ -4049,7 +4547,7 @@ def update_company_compliance(company_id, data, actor=None):
         if email_err:
             return None, email_err
     if 'utr_number' in data:
-        utr, utr_err = normalize_compliance_field(data.get('utr_number'), 15)
+        utr, utr_err = normalize_utr_number(data.get('utr_number'))
         if utr_err:
             return None, 'UTR number: ' + utr_err
         sets.append('utr_number = ?')
@@ -4063,7 +4561,7 @@ def update_company_compliance(company_id, data, actor=None):
     if 'activation_code' in data:
         activation, activation_err = normalize_compliance_field(data.get('activation_code'), 40)
         if activation_err:
-            return None, 'Personal 11 dijits Code: ' + activation_err
+            return None, 'Personal 11 digits Code: ' + activation_err
         sets.append('activation_code = ?')
         params.append(activation or None)
     if 'identity_verified' in data:
@@ -4254,7 +4752,7 @@ def accountancy_readiness(company, current=None, book_count=0, statement_count=0
             issues.append({
                 'code': 'personal_code',
                 'severity': 'warn',
-                'title': 'Personal 11 dijits Code missing',
+                'title': 'Personal 11 digits code missing',
                 'detail': 'Store the WebFiling personal code used to access this company online.',
             })
     if not has_utr:
@@ -4962,9 +5460,10 @@ def schedule_company_detail_refresh(company_id):
 
 def client_greeting_label(now=None):
     hour = (now or datetime.datetime.now()).hour
-    if hour < 12:
+    # Keep late night as evening until 05:00 local.
+    if 5 <= hour < 12:
         return 'Good morning'
-    if hour < 17:
+    if 12 <= hour < 17:
         return 'Good afternoon'
     return 'Good evening'
 
@@ -5418,8 +5917,9 @@ def _classification_confidence_for_category(category, raw_text, scan_method):
 
 def triage_uploaded_document(file_bytes, filename, user_id, client_id=None, actor=None, run_company_match=True):
     """
-    AI triage for customer uploads. Never marks is_posted.
-    Returns a result dict used by insert/update handlers.
+    AI / OCR triage used by Smart Intake (and optional staff reprocess).
+    Ordinary document uploads must NOT call this — they store instantly without OCR.
+    Never marks is_posted.
     """
     name = (filename or 'upload.bin').strip() or 'upload.bin'
     file_hash = hashlib.sha256(file_bytes or b'').hexdigest() if file_bytes else None
@@ -5898,14 +6398,115 @@ def notify_client_document_uploaded(client, doc_name, client_message=None, compa
     )
 
 
+def normalize_line_item_fulfillment_status(value):
+    text = str(value or '').strip()
+    if text in LINE_ITEM_FULFILLMENT_STATUSES:
+        return text
+    return 'Pending'
+
+
+def derive_order_status_from_line_items(statuses):
+    """Map per-product fulfillment to the parent order status + progress."""
+    cleaned = [normalize_line_item_fulfillment_status(s) for s in (statuses or [])]
+    if not cleaned:
+        return None, None
+    active = [s for s in cleaned if s != 'Cancelled']
+    if not active:
+        return 'Cancelled', 0
+    completed = sum(1 for s in active if s == 'Completed')
+    in_progress = sum(1 for s in active if s == 'In Progress')
+    progress = int(round((100.0 * completed) / len(active)))
+    if completed == len(active):
+        return 'Completed', 100
+    if completed or in_progress:
+        return 'In Progress', progress
+    return 'Processing', progress
+
+
+def sync_order_status_from_line_items(order_id, actor=None):
+    """Update order status/progress from line-item fulfillment (skips Refunded)."""
+    order_id = optional_record_id(order_id)
+    if not order_id:
+        return None
+    order = query_db("SELECT id, status FROM orders WHERE id = ?;", (order_id,), one=True)
+    if not order:
+        return None
+    current = str(order.get('status') or '').strip()
+    if current in ('Refunded',):
+        return current
+    rows = query_db(
+        "SELECT fulfillment_status FROM order_line_items WHERE order_id = ? ORDER BY sort_order ASC, id ASC;",
+        (order_id,),
+    ) or []
+    if not rows:
+        return current
+    derived, progress = derive_order_status_from_line_items(
+        [r.get('fulfillment_status') for r in rows]
+    )
+    if not derived:
+        return current
+    execute_db(
+        """
+        UPDATE orders
+        SET status = ?, progress_percent = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?;
+        """,
+        (derived, progress if progress is not None else 0, order_id),
+    )
+    if actor and derived != current:
+        log_activity(
+            actor,
+            'ORDER_STATUS_AUTO',
+            'orders',
+            str(order_id),
+            f"Status auto-set to {derived} from product fulfillment",
+        )
+    return derived
+
+
+def set_order_line_item_fulfillment(order_id, line_item_id, status, actor=None):
+    order_id = optional_record_id(order_id)
+    line_item_id = optional_record_id(line_item_id)
+    status = normalize_line_item_fulfillment_status(status)
+    if not order_id or not line_item_id:
+        return None, 'Order product not found'
+    row = query_db(
+        "SELECT id, order_id, product_name FROM order_line_items WHERE id = ? AND order_id = ?;",
+        (line_item_id, order_id),
+        one=True,
+    )
+    if not row:
+        return None, 'Order product not found'
+    execute_db(
+        "UPDATE order_line_items SET fulfillment_status = ? WHERE id = ? AND order_id = ?;",
+        (status, line_item_id, order_id),
+    )
+    order_status = sync_order_status_from_line_items(order_id, actor=actor)
+    if actor:
+        log_activity(
+            actor,
+            'LINE_ITEM_STATUS',
+            'order_line_items',
+            str(line_item_id),
+            f"{row.get('product_name') or 'Product'} → {status}",
+        )
+    return {
+        'line_item_id': line_item_id,
+        'fulfillment_status': status,
+        'order_status': order_status,
+    }, None
+
+
 def public_line_item(row, for_client=False, include_finance=True):
     if not row:
         return None
     src = dict(row)
     item = {
+        'id': src.get('id'),
         'product_name': src.get('product_name'),
         'category_name': src.get('category_name'),
         'quantity': src.get('quantity'),
+        'fulfillment_status': normalize_line_item_fulfillment_status(src.get('fulfillment_status')),
     }
     if include_finance:
         item['unit_price'] = src.get('unit_price')
@@ -5936,6 +6537,31 @@ def normalize_retail_price(amount):
     if value == pounds_whole and pounds_whole % 10 == 9:
         return float(pounds_whole + 1)
     return value
+
+
+def order_amounts_without_vat(price, vat=None, total=None):
+    """Orders are charged at the listed price with no VAT added."""
+    try:
+        price = float(price if price not in (None, '') else 0)
+    except (TypeError, ValueError):
+        price = 0.0
+    try:
+        vat = float(vat if vat not in (None, '') else 0)
+    except (TypeError, ValueError):
+        vat = 0.0
+    try:
+        total = float(total if total not in (None, '') else 0)
+    except (TypeError, ValueError):
+        total = 0.0
+    if price > 0.004:
+        net = round(price, 2)
+    elif vat > 0.004 and total > vat:
+        net = round(total - vat, 2)
+    else:
+        net = round(total, 2)
+    if net < 0:
+        net = 0.0
+    return net, 0.0, net
 
 
 def parse_line_items_from_payload(o_data):
@@ -6030,8 +6656,9 @@ def replace_order_line_items(order_id, items, order_price=None, order_total=None
         execute_db("""
             INSERT INTO order_line_items (
                 order_id, woocommerce_product_id, woocommerce_variation_id, sku,
-                product_name, category_name, category_id, quantity, unit_price, line_total, sort_order
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                product_name, category_name, category_id, quantity, unit_price, line_total, sort_order,
+                fulfillment_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """, (
             order_id,
             str(item.get('woocommerce_product_id') or '') or None,
@@ -6044,7 +6671,147 @@ def replace_order_line_items(order_id, items, order_price=None, order_total=None
             float(unit or 0),
             float(total or 0),
             item.get('sort_order') or 0,
+            normalize_line_item_fulfillment_status(item.get('fulfillment_status')),
         ))
+
+
+def refresh_order_totals_from_line_items(order_id, extra_service_id=None):
+    order_id = optional_record_id(order_id)
+    if not order_id:
+        return None
+    sums = query_db(
+        "SELECT COALESCE(SUM(line_total), 0) AS total FROM order_line_items WHERE order_id = ?;",
+        (order_id,),
+        one=True,
+    ) or {}
+    names = query_db(
+        "SELECT product_name FROM order_line_items WHERE order_id = ? ORDER BY sort_order ASC, id ASC;",
+        (order_id,),
+    ) or []
+    new_total = round(float(sums.get('total') or 0), 2)
+    service_name = ', '.join(
+        str(row.get('product_name') or '').strip()
+        for row in names
+        if str(row.get('product_name') or '').strip()
+    )
+    extra_sid = optional_record_id(extra_service_id)
+    execute_db(
+        """
+        UPDATE orders
+        SET price = ?, vat = 0, total = ?,
+            service_name = CASE WHEN ? != '' THEN ? ELSE service_name END,
+            service_id = COALESCE(service_id, ?),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?;
+        """,
+        (new_total, new_total, service_name, service_name, extra_sid, order_id),
+    )
+    ensure_invoice_for_order(order_id)
+    execute_db(
+        """
+        UPDATE invoices
+        SET amount = ?, tax = 0, total = ?
+        WHERE order_id = ? AND status != 'Paid';
+        """,
+        (new_total, new_total, order_id),
+    )
+    return new_total
+
+
+def append_order_line_item(order_id, data, actor=None):
+    """Add a catalog product to an existing order without changing checkout form data."""
+    order_id = optional_record_id(order_id)
+    order = query_db("SELECT * FROM orders WHERE id = ?;", (order_id,), one=True) if order_id else None
+    if not order:
+        return None, 'Order not found'
+    if str(order.get('status') or '').strip() in ('Cancelled', 'Refunded'):
+        return None, 'Cannot add a product to a cancelled order'
+
+    payload = data if isinstance(data, dict) else {}
+    service = None
+    service_id = optional_record_id(payload.get('service_id') or payload.get('product_id'))
+    if service_id:
+        service = query_db("SELECT * FROM services WHERE id = ?;", (service_id,), one=True)
+    name = str(
+        payload.get('product_name')
+        or payload.get('name')
+        or (service or {}).get('name')
+        or ''
+    ).strip()
+    if not name:
+        return None, 'Choose a product'
+    if not service:
+        service = query_db(
+            "SELECT * FROM services WHERE LOWER(name) = LOWER(?) LIMIT 1;",
+            (name,),
+            one=True,
+        )
+    category = str(
+        payload.get('category_name')
+        or payload.get('category')
+        or (service or {}).get('category')
+        or 'Service'
+    ).strip() or 'Service'
+    price_raw = payload.get('unit_price') if payload.get('unit_price') not in (None, '') else payload.get('price')
+    if price_raw not in (None, ''):
+        try:
+            unit = normalize_retail_price(float(str(price_raw).replace('£', '').replace(',', '').strip()))
+        except (TypeError, ValueError, AttributeError):
+            return None, 'Enter a valid price'
+    else:
+        try:
+            unit = normalize_retail_price((service or {}).get('price') or 0)
+        except (TypeError, ValueError):
+            unit = 0.0
+    if unit < 0 or unit > 100000:
+        return None, 'Price must be between £0 and £100,000'
+    qty = 1
+    line_total = round(float(unit) * qty, 2)
+    sort_row = query_db(
+        "SELECT COALESCE(MAX(sort_order), -1) AS m FROM order_line_items WHERE order_id = ?;",
+        (order_id,),
+        one=True,
+    ) or {}
+    next_sort = int(sort_row.get('m') or -1) + 1
+    line_id = execute_db(
+        """
+        INSERT INTO order_line_items (
+            order_id, woocommerce_product_id, sku, product_name, category_name,
+            quantity, unit_price, line_total, sort_order, fulfillment_status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending');
+        """,
+        (
+            order_id,
+            str((service or {}).get('woocommerce_product_id') or '') or None,
+            (service or {}).get('sku'),
+            name,
+            category,
+            qty,
+            float(unit or 0),
+            line_total,
+            next_sort,
+        ),
+    )
+    refresh_order_totals_from_line_items(order_id, extra_service_id=(service or {}).get('id'))
+    if actor:
+        log_activity(
+            actor,
+            'ORDER_PRODUCT_ADDED',
+            'orders',
+            str(order_id),
+            f"Added {name} to {order.get('order_number') or order_id}",
+        )
+    line = query_db("SELECT * FROM order_line_items WHERE id = ?;", (line_id,), one=True)
+    refreshed = query_db("SELECT * FROM orders WHERE id = ?;", (order_id,), one=True)
+    lines = query_db(
+        "SELECT * FROM order_line_items WHERE order_id = ? ORDER BY sort_order ASC, id ASC;",
+        (order_id,),
+    ) or []
+    return {
+        'line_item': line,
+        'order': refreshed,
+        'line_items': lines,
+    }, None
 
 
 def normalize_company_name_key(name):
@@ -6124,6 +6891,255 @@ def match_company_for_client(client_id, company_name, exclude_id=None):
     return _pick_company_match(same) or _pick_company_match(near)
 
 
+def find_portal_company_match(company_name=None, company_number=None):
+    """Find an existing portal company by UK number or normalised name (any owner).
+
+    Prefers a real Companies House number over REG-/DUP- placeholders so staff
+    registration of a known company reuses the registered card instead of minting
+    a second 'non-registered' twin.
+    """
+    number = normalize_company_number(company_number or '')
+    if looks_like_uk_company_number(number) and not is_pending_company_number(number):
+        by_number = query_db(
+            """
+            SELECT *
+            FROM companies
+            WHERE UPPER(TRIM(COALESCE(company_number, ''))) = ?
+            ORDER BY
+                CASE WHEN UPPER(TRIM(COALESCE(company_number, ''))) LIKE 'REG-%' THEN 1 ELSE 0 END,
+                id ASC
+            LIMIT 1;
+            """,
+            (number.upper(),),
+            one=True,
+        )
+        if by_number:
+            return by_number
+
+    needle = normalize_company_name_key(company_name)
+    if not needle or len(needle) < 3:
+        return None
+    same = []
+    near = []
+    for row in query_db(
+        "SELECT id, name, company_number, user_id, director, registered_email, status, reg_office FROM companies;"
+    ) or []:
+        key = normalize_company_name_key(row.get('name'))
+        if not key:
+            continue
+        if key == needle:
+            same.append(row)
+        elif company_name_keys_are_near_duplicate(key, needle):
+            near.append(row)
+    picked_id = _pick_company_match(same) or _pick_company_match(near)
+    if not picked_id:
+        return None
+    return query_db("SELECT * FROM companies WHERE id = ?;", (picked_id,), one=True)
+
+
+def company_owner_is_claimable(owner_user_id, client_id):
+    """Allow reclaim when orphaned under staff, unowned, or already this client."""
+    owner_id = optional_record_id(owner_user_id)
+    target_id = optional_record_id(client_id)
+    if not owner_id or (target_id and int(owner_id) == int(target_id)):
+        return True
+    owner = query_db("SELECT id, role FROM users WHERE id = ?;", (owner_id,), one=True)
+    if not owner:
+        return True
+    return str(owner.get('role') or '') in INTERNAL_STAFF_ROLES
+
+
+def claim_company_for_client(company, client_id, extras=None):
+    """Move an existing company card onto this client and soft-fill blank fields."""
+    company = dict(company) if isinstance(company, dict) else None
+    client_id = optional_record_id(client_id)
+    if not company or not client_id:
+        return None
+    company_id = optional_record_id(company.get('id'))
+    if not company_id:
+        return None
+    extras = extras if isinstance(extras, dict) else {}
+
+    if optional_record_id(company.get('user_id')) != client_id:
+        if not company_owner_is_claimable(company.get('user_id'), client_id):
+            # Another real client already owns this card — still allow exact UK
+            # number matches (unique CH identity) to move with staff order work.
+            number = normalize_company_number(
+                extras.get('company_number') or company.get('company_number')
+            )
+            if not (
+                looks_like_uk_company_number(number)
+                and not is_pending_company_number(number)
+                and normalize_company_number(company.get('company_number')) == number
+            ):
+                return None
+        execute_db("UPDATE companies SET user_id = ? WHERE id = ?;", (client_id, company_id))
+
+    updates = []
+    params = []
+    director = str(extras.get('director') or extras.get('director_name') or extras.get('owner_name') or '').strip()
+    if director and (
+        not str(company.get('director') or '').strip()
+        or looks_like_placeholder_director(company.get('director'), company.get('name'))
+    ):
+        updates.append('director = ?')
+        params.append(director)
+    reg_office = str(
+        extras.get('reg_office')
+        or extras.get('registered_office_address')
+        or extras.get('registered_address')
+        or extras.get('address')
+        or ''
+    ).strip()
+    if reg_office and (
+        not str(company.get('reg_office') or '').strip()
+        or str(company.get('reg_office') or '').strip().lower() in ('united kingdom', 'uk', 'none', 'n/a')
+    ):
+        updates.append('reg_office = ?')
+        params.append(reg_office)
+    email = normalize_notify_email(
+        extras.get('registered_email')
+        or extras.get('company_email')
+        or extras.get('owner_form_email')
+        or extras.get('email')
+    )
+    if email and not normalize_notify_email(company.get('registered_email')):
+        updates.append('registered_email = ?')
+        params.append(email)
+    if updates:
+        params.append(company_id)
+        execute_db(
+            f"UPDATE companies SET {', '.join(updates)} WHERE id = ?;",
+            params,
+        )
+    return query_db("SELECT * FROM companies WHERE id = ?;", (company_id,), one=True)
+
+
+def absorb_client_pending_twins_into(target_company, client_id, company_name=None):
+    """Fold this client's REG-/empty pending cards with the same name into the registered card."""
+    target = dict(target_company) if isinstance(target_company, dict) else None
+    target_id = optional_record_id((target or {}).get('id'))
+    client_id = optional_record_id(client_id)
+    if not target_id or not client_id:
+        return 0
+    if is_pending_company_number(target.get('company_number')):
+        return 0
+    needle = normalize_company_name_key(company_name or target.get('name'))
+    if not needle:
+        return 0
+    merged = 0
+    for row in query_db(
+        "SELECT id, name, company_number, user_id FROM companies WHERE user_id = ? AND id != ?;",
+        (client_id, target_id),
+    ) or []:
+        if not is_pending_company_number(row.get('company_number')):
+            continue
+        key = normalize_company_name_key(row.get('name'))
+        if key != needle and not company_name_keys_are_near_duplicate(key, needle):
+            continue
+        if absorb_company_into(row['id'], target_id):
+            merged += 1
+    return merged
+
+
+def resolve_company_for_client_work(client_id, company_name, company_number=None, extras=None, actor=None):
+    """Reuse a portal company (by number/name) or create one — never twin a registered card."""
+    extras = dict(extras) if isinstance(extras, dict) else {}
+    name = str(company_name or extras.get('name') or extras.get('company_name') or '').strip()
+    number = normalize_company_number(
+        company_number
+        or extras.get('company_number')
+        or extras.get('registration_number')
+        or ''
+    )
+    client_id = optional_record_id(client_id)
+    if not client_id:
+        return None, 'Select a client account'
+    if len(name) < 2 and not (
+        looks_like_uk_company_number(number) and not is_pending_company_number(number)
+    ):
+        return None, 'Enter the company name'
+
+    portal = find_portal_company_match(name, number)
+    if portal:
+        claimed = claim_company_for_client(portal, client_id, {**extras, 'company_number': number or portal.get('company_number'), 'name': name or portal.get('name')})
+        if claimed:
+            absorb_client_pending_twins_into(claimed, client_id, name or claimed.get('name'))
+            ensure_registered_company_linked_to_orders(claimed['id'])
+            return claimed['id'], None
+        # Exact UK number owned by another client — still refuse create; return that card id for staff.
+        if looks_like_uk_company_number(number) and not is_pending_company_number(number):
+            return optional_record_id(portal.get('id')), None
+
+    existing_id = match_company_for_client(client_id, name) if name else None
+    if existing_id:
+        existing = query_db("SELECT * FROM companies WHERE id = ?;", (existing_id,), one=True)
+        if existing and looks_like_uk_company_number(number) and not is_pending_company_number(number):
+            if is_pending_company_number(existing.get('company_number')):
+                # Upgrade pending card if the number is free; otherwise absorb into the number holder.
+                clash = query_db(
+                    "SELECT * FROM companies WHERE UPPER(TRIM(COALESCE(company_number, ''))) = ? AND id != ?;",
+                    (number.upper(), existing_id),
+                    one=True,
+                )
+                if clash:
+                    claimed = claim_company_for_client(clash, client_id, extras)
+                    if claimed:
+                        absorb_company_into(existing_id, claimed['id'])
+                        return claimed['id'], None
+                else:
+                    execute_db(
+                        "UPDATE companies SET company_number = ? WHERE id = ?;",
+                        (number, existing_id),
+                    )
+                    hydrate_company_from_companies_house(
+                        query_db("SELECT * FROM companies WHERE id = ?;", (existing_id,), one=True),
+                        {**extras, 'company_number': number, 'name': name},
+                    )
+        return existing_id, None
+
+    create_payload = {
+        **extras,
+        'client_mode': 'existing',
+        'client_id': client_id,
+        'name': name,
+        'company_number': number or extras.get('company_number'),
+    }
+    return create_manual_company(create_payload, actor)
+
+
+def merge_pending_registered_name_twins():
+    """Absorb REG-* cards into registered portal companies with the same normalised name."""
+    pending = query_db(
+        """
+        SELECT id, user_id, name, company_number
+        FROM companies
+        WHERE company_number IS NULL
+           OR TRIM(company_number) = ''
+           OR UPPER(TRIM(company_number)) LIKE 'REG-%'
+        """
+    ) or []
+    merged = 0
+    for row in pending:
+        target = find_portal_company_match(row.get('name'), None)
+        if not target or optional_record_id(target.get('id')) == optional_record_id(row.get('id')):
+            continue
+        if is_pending_company_number(target.get('company_number')):
+            continue
+        # Align ownership onto the registered card's client when pending is claimable.
+        if optional_record_id(row.get('user_id')) != optional_record_id(target.get('user_id')):
+            if company_owner_is_claimable(target.get('user_id'), row.get('user_id')):
+                execute_db("UPDATE companies SET user_id = ? WHERE id = ?;", (row['user_id'], target['id']))
+            elif company_owner_is_claimable(row.get('user_id'), target.get('user_id')):
+                execute_db("UPDATE companies SET user_id = ? WHERE id = ?;", (target['user_id'], row['id']))
+            else:
+                continue
+        # Refresh so absorb sees matching user_id
+        if absorb_company_into(row['id'], target['id']):
+            merged += 1
+    return merged
+
+
 def parse_order_checkout_fields(row):
     raw = (row or {}).get('checkout_form_json')
     if isinstance(raw, list):
@@ -6131,12 +7147,239 @@ def parse_order_checkout_fields(row):
     if not raw:
         return []
     try:
-        parsed = json.loads(raw)
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
     except (TypeError, ValueError):
         return []
     if isinstance(parsed, list):
         return [item for item in parsed if isinstance(item, dict)]
+    if isinstance(parsed, dict):
+        return checkout_form_fields_from_stored_dict(parsed)
     return []
+
+
+def checkout_form_fields_from_stored_dict(data):
+    """Universal order wizard stores checkout_form_json as a flat dict — expand for staff UI."""
+    if not isinstance(data, dict):
+        return []
+
+    def pick(*keys):
+        for key in keys:
+            if key not in data:
+                continue
+            val = data.get(key)
+            if val is None:
+                continue
+            text = str(val).strip()
+            if text and text.lower() not in ('none', 'n/a', '—', '-', 'null'):
+                return text
+        return ''
+
+    rows = []
+
+    def add(label, value):
+        text = checkout_form_value_display(label, value)
+        if not text:
+            return
+        rows.append({'label': label, 'value': text})
+
+    add('Desired company name', pick(
+        'desired_company_name', 'proposed_company_name', 'company_name',
+        'registered_company_name', 'business_name',
+    ))
+    registered = pick('registered_office_address', 'address', 'registered_address')
+    if not registered:
+        registered = _join_address_parts(
+            pick('registered_address_line1'),
+            pick('registered_address_line2'),
+            pick('registered_city'),
+            pick('registered_postcode'),
+            pick('registered_country'),
+        )
+    add('Registered office address', registered)
+    add('Director name', pick('director_name', 'end_client_name', 'full_name', 'owner_name'))
+    add('Date of birth', pick('director_dob', 'dob', 'date_of_birth'))
+    add('Nationality', pick('director_nationality', 'nationality'))
+    sic_raw = pick('business_activities', 'sic_code', 'sic_codes', 'business_activity', 'business_description')
+    if sic_raw:
+        add('Business activities', sic_raw)
+    add('UK phone number', pick(
+        'end_client_phone', 'uk_phone', 'uk_contact', 'uk_contact_number',
+        'phone', 'director_phone', 'company_phone',
+    ))
+    home = pick('home_address', 'director_home_address', 'director_address')
+    if not home:
+        home = _join_address_parts(
+            pick('home_address_line1'),
+            pick('home_address_line2'),
+            pick('home_city'),
+            pick('home_postcode'),
+            pick('home_country'),
+        )
+    add('Personal address', home)
+    add('Email', pick(
+        'email', 'end_client_email', 'director_email', 'company_email',
+        'access_email', 'registered_email', 'forwarding_email',
+    ))
+
+    skip_keys = frozenset({
+        'desired_company_name', 'proposed_company_name', 'company_name', 'registered_company_name', 'business_name',
+        'registered_office_address', 'address', 'registered_address',
+        'registered_address_line1', 'registered_address_line2', 'registered_city', 'registered_postcode', 'registered_country',
+        'director_name', 'end_client_name', 'full_name', 'owner_name',
+        'director_dob', 'dob', 'date_of_birth',
+        'director_nationality', 'nationality',
+        'end_client_phone', 'uk_phone', 'uk_contact', 'uk_contact_number', 'phone', 'director_phone', 'company_phone',
+        'home_address', 'director_home_address', 'director_address',
+        'home_address_line1', 'home_address_line2', 'home_city', 'home_postcode', 'home_country',
+        'email', 'end_client_email', 'director_email', 'company_email', 'access_email', 'registered_email', 'forwarding_email',
+        'access_email_password', 'email_password', 'service_password',
+        'payment_mode', 'order_notes', 'unregistered_package', 'package_name', 'company_type',
+        'sic_code', 'sic_codes', 'business_activities', 'business_activity', 'business_description',
+        'director_residence', 'company_email', 'company_phone',
+    })
+    extra_labels = {
+        'company_number': 'Company number',
+        'trading_proof': 'Trading proof',
+        'service_notes': 'Service notes',
+        'source_of_funds': 'Source of funds',
+    }
+    for key, value in data.items():
+        if key in skip_keys:
+            continue
+        if value is None or value == '':
+            continue
+        if isinstance(value, (dict, list)):
+            continue
+        text = str(value).strip()
+        if not text or text.lower() in ('none', 'n/a', 'false', '0'):
+            continue
+        if 'password' in key.lower():
+            continue
+        label = extra_labels.get(key) or key.replace('_', ' ').strip().title()
+        add(label, text)
+
+    return normalize_checkout_form_fields(rows)
+
+
+def _upsert_checkout_field(fields, label, value):
+    """Add or fill a checkout row when value exists and field is blank."""
+    out = list(fields or [])
+    key = checkout_field_key(label)
+    if not key:
+        return out
+    text = checkout_form_value_display(label, value)
+    if not text:
+        return out
+    for item in out:
+        if checkout_field_key(item.get('label')) == key:
+            if not str(item.get('value') or '').strip():
+                item['value'] = text
+            return out
+    out.append({'label': label, 'value': text})
+    return out
+
+
+def enrich_order_checkout_form(order_row, fields):
+    """Rebuild wizard-style rows from order columns, form_values JSON, and linked company."""
+    order_row = dict(order_row or {})
+    merged = list(fields or [])
+
+    raw_fv = order_row.get('order_form_values_json')
+    if raw_fv:
+        try:
+            fv = json.loads(raw_fv) if isinstance(raw_fv, str) else raw_fv
+            if isinstance(fv, dict) and fv:
+                for row in checkout_form_fields_from_stored_dict(fv):
+                    merged = _upsert_checkout_field(merged, row.get('label'), row.get('value'))
+        except (TypeError, ValueError):
+            pass
+
+    merged = _upsert_checkout_field(
+        merged, 'Director name',
+        order_row.get('end_client_name') or order_row.get('owner_name'),
+    )
+    merged = _upsert_checkout_field(
+        merged, 'Email',
+        order_row.get('end_client_email') or order_row.get('access_email') or order_row.get('owner_form_email'),
+    )
+    merged = _upsert_checkout_field(
+        merged, 'UK phone number',
+        order_row.get('end_client_phone') or order_row.get('checkout_phone') or order_row.get('client_phone'),
+    )
+    merged = scrub_b2b_leaked_checkout_dob(order_row, merged)
+
+    raw_fv_home = None
+    raw_fv = order_row.get('order_form_values_json')
+    if raw_fv:
+        try:
+            fv = json.loads(raw_fv) if isinstance(raw_fv, str) else raw_fv
+            if isinstance(fv, dict):
+                for key in ('home_address', 'director_home_address', 'director_address'):
+                    val = str(fv.get(key) or '').strip()
+                    if val and val.lower() not in ('none', 'n/a', 'united kingdom', 'uk'):
+                        raw_fv_home = val
+                        break
+                sic = str(
+                    fv.get('business_activities')
+                    or fv.get('sic_code')
+                    or fv.get('sic_codes')
+                    or ''
+                ).strip()
+                if sic:
+                    merged = _upsert_checkout_field(merged, 'Business activities', sic)
+        except (TypeError, ValueError):
+            pass
+    if raw_fv_home:
+        merged = _upsert_checkout_field(merged, 'Personal address', raw_fv_home)
+
+    company_id = order_row.get('company_id')
+    if company_id:
+        co = query_db(
+            "SELECT name, director, reg_office, registered_email FROM companies WHERE id = ?;",
+            (company_id,),
+            one=True,
+        )
+        if co:
+            merged = _upsert_checkout_field(merged, 'Desired company name', co.get('name'))
+            merged = _upsert_checkout_field(merged, 'Director name', co.get('director'))
+            merged = _upsert_checkout_field(merged, 'Registered office address', co.get('reg_office'))
+            merged = _upsert_checkout_field(merged, 'Email', co.get('registered_email'))
+
+    if order_row.get('company_name'):
+        merged = _upsert_checkout_field(merged, 'Desired company name', order_row.get('company_name'))
+    if order_row.get('company_address'):
+        merged = _upsert_checkout_field(merged, 'Registered office address', order_row.get('company_address'))
+
+    order_id = order_row.get('id')
+    if order_id:
+        owner = query_db("SELECT * FROM company_owners WHERE order_id = ?;", (order_id,), one=True)
+        if owner:
+            merged = _upsert_checkout_field(merged, 'Personal address', owner.get('address'))
+            merged = _upsert_checkout_field(merged, 'Nationality', owner.get('nationality'))
+            merged = _upsert_checkout_field(merged, 'UK phone number', owner.get('phone'))
+        if company_id:
+            co_extra = query_db(
+                "SELECT sic_codes FROM companies WHERE id = ?;",
+                (company_id,),
+                one=True,
+            )
+            if co_extra and co_extra.get('sic_codes'):
+                sic_text = str(co_extra.get('sic_codes') or '').strip()
+                activities = sic_text
+                items = sic_activities_from_codes(sic_text)
+                if items:
+                    activities = '; '.join(
+                        f"{it.get('code')} — {it.get('description')}".strip(' —')
+                        for it in items
+                        if it.get('code') or it.get('description')
+                    ) or sic_text
+                merged = _upsert_checkout_field(merged, 'Business activities', activities)
+
+    merged = scrub_b2b_leaked_checkout_dob(order_row, merged)
+    if order_id:
+        scrub_b2b_leaked_company_owner_dob(order_id, order_row, merged)
+
+    return normalize_checkout_form_fields(merged)
 
 
 def match_company_for_client_by_number(client_id, company_number):
@@ -6210,6 +7453,9 @@ def attach_order_to_company(order_id, company_id):
             parsed = json.loads(raw)
             if isinstance(parsed, list):
                 fields = parsed
+            elif isinstance(parsed, dict):
+                # Keep dict checkout payloads intact; name is applied via company join in Orders UI.
+                return True
         except (TypeError, ValueError):
             fields = []
     updated = apply_current_company_name_to_checkout_fields(order, fields)
@@ -6218,6 +7464,73 @@ def attach_order_to_company(order_id, company_id):
         (json.dumps(updated), order_id),
     )
     return True
+
+
+def ensure_registered_company_linked_to_orders(company_id):
+    """When a company is registered, link it to the client's order so Orders → Company name shows it."""
+    try:
+        company_id = int(company_id)
+    except (TypeError, ValueError):
+        return 0
+    company = query_db(
+        "SELECT id, user_id, name, company_number FROM companies WHERE id = ?;",
+        (company_id,),
+        one=True,
+    )
+    if not company or not company.get('user_id'):
+        return 0
+    uid = company['user_id']
+    company_name = str(company.get('name') or '').strip()
+    official = (
+        looks_like_uk_company_number(company.get('company_number'))
+        and not is_pending_company_number(company.get('company_number'))
+    )
+
+    # Already visible on at least one order.
+    if query_db("SELECT id FROM orders WHERE company_id = ? LIMIT 1;", (company_id,), one=True):
+        return 0
+
+    unlinked = query_db(
+        """
+        SELECT o.id, o.service_name, o.checkout_form_json, c.name as company_name
+        FROM orders o
+        LEFT JOIN companies c ON c.id = o.company_id
+        WHERE o.user_id = ?
+          AND o.company_id IS NULL
+          AND COALESCE(o.portfolio_hidden, 0) = 0
+        ORDER BY o.created_at DESC;
+        """,
+        (uid,),
+    ) or []
+    if not unlinked:
+        return 0
+
+    linked = 0
+    company_key = normalize_company_name_key(company_name)
+
+    for order in unlinked:
+        display = order_display_company_name(order)
+        if company_key and display and normalize_company_name_key(display) == company_key:
+            if attach_order_to_company(order['id'], company_id):
+                linked += 1
+
+    if linked:
+        return linked
+
+    formation = [
+        row for row in unlinked
+        if is_company_registration_order({}, row.get('service_name'), [])
+    ]
+    if official and len(formation) == 1:
+        if attach_order_to_company(formation[0]['id'], company_id):
+            return 1
+
+    # Sole unlinked order for this client + officially registered company card.
+    if official and len(unlinked) == 1:
+        if attach_order_to_company(unlinked[0]['id'], company_id):
+            return 1
+
+    return 0
 
 
 def heal_orders_hidden_after_duplicate_company_delete():
@@ -6284,13 +7597,18 @@ def heal_orders_hidden_after_duplicate_company_delete():
 
 
 def absorb_company_into(source_id, target_id):
+    import data_protection as _data_protection
     source_id = optional_record_id(source_id)
     target_id = optional_record_id(target_id)
     if not source_id or not target_id or source_id == target_id:
         return False
-    source = query_db("SELECT id, user_id FROM companies WHERE id = ?;", (source_id,), one=True)
+    source = query_db("SELECT * FROM companies WHERE id = ?;", (source_id,), one=True)
     target = query_db("SELECT id, user_id FROM companies WHERE id = ?;", (target_id,), one=True)
     if not source or not target or source.get('user_id') != target.get('user_id'):
+        return False
+    # Never auto-delete a genuine registered company — only pending placeholders may be absorbed.
+    blocked = _data_protection.refuse_auto_delete_company(source)
+    if blocked:
         return False
     execute_db("UPDATE orders SET company_id = ?, portfolio_hidden = 0 WHERE company_id = ?;", (target_id, source_id))
     execute_db("UPDATE documents SET company_id = ? WHERE company_id = ?;", (target_id, source_id))
@@ -6348,8 +7666,6 @@ def merge_pending_order_company_duplicates():
         target_id = optional_record_id((order or {}).get('company_id'))
         if not order or not target_id or target_id == optional_record_id(row['id']):
             continue
-        if optional_record_id(order.get('user_id')) != optional_record_id(row.get('user_id')):
-            continue
         target = query_db(
             "SELECT id, user_id, company_number FROM companies WHERE id = ?;",
             (target_id,),
@@ -6357,7 +7673,78 @@ def merge_pending_order_company_duplicates():
         )
         if not target or is_pending_company_number(target.get('company_number')):
             continue
+        # REG placeholders can land on the wrong client after ownership moves;
+        # align then absorb into the registered card already on the order.
+        if optional_record_id(row.get('user_id')) != optional_record_id(target.get('user_id')):
+            execute_db("UPDATE companies SET user_id = ? WHERE id = ?;", (target['user_id'], row['id']))
         if absorb_company_into(row['id'], target['id']):
+            merged += 1
+    return merged
+
+
+def merge_duplicate_prefixed_company_cards():
+    """Merge DUP-{id}-{number} placeholder cards into the official company_number card.
+
+    Same-name cards with a real UK number plus a DUP-* twin show twice on
+    #admin-companies. Prefer the official-number card; move orders/docs; delete DUP.
+    When ownership differs, keep the genuine card under the client that already
+    holds order work on the DUP twin.
+    """
+    rows = query_db(
+        """
+        SELECT id, user_id, company_number, name
+        FROM companies
+        WHERE UPPER(COALESCE(company_number, '')) LIKE 'DUP-%'
+        """
+    ) or []
+    merged = 0
+    for row in rows:
+        number = str(row.get('company_number') or '').strip()
+        match = re.match(r'(?i)^DUP-\d+-(.+)$', number)
+        if not match:
+            continue
+        real_number = str(match.group(1) or '').strip().upper()
+        if not real_number or not looks_like_uk_company_number(real_number):
+            continue
+        target = query_db(
+            """
+            SELECT id, user_id, company_number
+            FROM companies
+            WHERE UPPER(COALESCE(company_number, '')) = ?
+              AND id != ?
+            LIMIT 1;
+            """,
+            (real_number, row['id']),
+            one=True,
+        )
+        if not target:
+            execute_db(
+                "UPDATE companies SET company_number = ? WHERE id = ?;",
+                (real_number, row['id']),
+            )
+            continue
+        source_id = optional_record_id(row['id'])
+        target_id = optional_record_id(target['id'])
+        if optional_record_id(row.get('user_id')) != optional_record_id(target.get('user_id')):
+            source_orders = query_db(
+                "SELECT COUNT(*) AS n FROM orders WHERE company_id = ?;",
+                (source_id,),
+                one=True,
+            )
+            target_orders = query_db(
+                "SELECT COUNT(*) AS n FROM orders WHERE company_id = ?;",
+                (target_id,),
+                one=True,
+            )
+            src_n = int((source_orders or {}).get('n') or 0)
+            tgt_n = int((target_orders or {}).get('n') or 0)
+            if src_n > 0 and tgt_n == 0:
+                execute_db("UPDATE companies SET user_id = ? WHERE id = ?;", (row['user_id'], target_id))
+            elif tgt_n > 0 and src_n == 0:
+                execute_db("UPDATE companies SET user_id = ? WHERE id = ?;", (target['user_id'], source_id))
+            else:
+                execute_db("UPDATE companies SET user_id = ? WHERE id = ?;", (target['user_id'], source_id))
+        if absorb_company_into(source_id, target_id):
             merged += 1
     return merged
 
@@ -6385,8 +7772,6 @@ def link_orphaned_formation_orders(user_id=None):
         params.append(guest_id)
     linked = 0
     for row in query_db(sql, params) or []:
-        if not is_company_registration_order({}, row.get('service_name'), []):
-            continue
         company_id = None
         wc_id = str(row.get('woocommerce_order_id') or '').strip()
         if wc_id:
@@ -6398,23 +7783,28 @@ def link_orphaned_formation_orders(user_id=None):
             if by_reg:
                 company_id = by_reg['id']
         if not company_id:
-            company_id = match_company_for_client(row['user_id'], row.get('client_name'))
-            if company_id:
-                # Only claim a card that is not already tied to another order.
-                taken = query_db(
-                    "SELECT id FROM orders WHERE company_id = ? LIMIT 1;",
-                    (company_id,),
-                    one=True,
-                )
-                if taken:
-                    company_id = None
+            full_order = query_db(
+                "SELECT id, user_id, service_name, checkout_form_json, company_id FROM orders WHERE id = ?;",
+                (row['id'],),
+                one=True,
+            )
+            checkout_name = order_display_company_name(full_order)
+            if checkout_name:
+                matched = match_company_for_client(row['user_id'], checkout_name)
+                company_id = matched['id'] if isinstance(matched, dict) else matched
+                if company_id:
+                    # Only claim a card that is not already tied to another order.
+                    taken = query_db(
+                        "SELECT id FROM orders WHERE company_id = ? LIMIT 1;",
+                        (company_id,),
+                        one=True,
+                    )
+                    if taken:
+                        company_id = None
         if not company_id:
             continue
-        execute_db(
-            "UPDATE orders SET company_id = ?, portfolio_hidden = 0 WHERE id = ? AND company_id IS NULL;",
-            (company_id, row['id']),
-        )
-        linked += 1
+        if attach_order_to_company(row['id'], company_id):
+            linked += 1
     linked += link_sole_company_pending_pairs(user_id=user_id)
     return linked
 
@@ -6689,6 +8079,154 @@ def uk_formfill_pro_url():
     return url.rstrip('/') or 'https://portal.brixenconsultants.com/formfill'
 
 
+def getaddress_api_key():
+    row = query_db("SELECT value FROM settings WHERE key = 'getaddress_api_key';", one=True)
+    key = (row['value'] if row and str(row.get('value') or '').strip() else None) or os.environ.get('GETADDRESS_API_KEY')
+    return str(key or '').strip()
+
+
+def normalize_uk_postcode(value):
+    text = re.sub(r'\s+', '', str(value or '').upper())
+    if not text:
+        return ''
+    if len(text) < 5:
+        return text
+    return f'{text[:-3]} {text[-3:]}'
+
+
+def _http_get_json(url, headers=None, timeout=8):
+    req = urllib.request.Request(url, headers=headers or {
+        'Accept': 'application/json',
+        'User-Agent': 'BrixenCRM/1.0 (UK postcode lookup)',
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode('utf-8')), None
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None, 'Postcode not found'
+        if exc.code == 401:
+            return None, 'Address API key was rejected'
+        if exc.code == 429:
+            return None, 'Address lookup rate limit reached. Try again shortly.'
+        return None, 'Address lookup failed'
+    except Exception:
+        return None, 'Address lookup failed'
+
+
+def lookup_uk_postcode_addresses(postcode):
+    """Return UK addresses for a postcode (getAddress.io if configured, else free sources)."""
+    pc = normalize_uk_postcode(postcode)
+    if not pc or not _UK_POSTCODE_RE.fullmatch(pc):
+        return {
+            'postcode': pc,
+            'addresses': [],
+            'message': 'Enter a valid UK postcode (e.g. SW1A 1AA).',
+            'source': None,
+        }
+
+    addresses = []
+    source = None
+    message = ''
+
+    ga_key = getaddress_api_key()
+    if ga_key:
+        encoded = urllib.parse.quote(pc.replace(' ', ''))
+        payload, err = _http_get_json(
+            f'https://api.getAddress.io/find/{encoded}?api-key={urllib.parse.quote(ga_key)}&expand=true'
+        )
+        if not err and isinstance(payload, dict):
+            source = 'getaddress'
+            for item in payload.get('addresses') or []:
+                if isinstance(item, dict):
+                    line = ', '.join(
+                        str(part).strip()
+                        for part in (
+                            item.get('line_1'),
+                            item.get('line_2'),
+                            item.get('line_3'),
+                            item.get('line_4'),
+                            item.get('locality') or item.get('town_or_city'),
+                            item.get('county'),
+                            item.get('postcode') or pc,
+                            'United Kingdom',
+                        )
+                        if str(part or '').strip()
+                    )
+                else:
+                    line = f"{str(item).strip()}, {pc}, United Kingdom"
+                if line and line not in addresses:
+                    addresses.append(line)
+            if addresses:
+                message = f'{len(addresses)} address{"es" if len(addresses) != 1 else ""} found.'
+            else:
+                message = 'Postcode found, but no street addresses were returned.'
+        elif err:
+            message = err
+
+    if not addresses:
+        encoded = urllib.parse.quote(pc.replace(' ', ''))
+        payload, err = _http_get_json(f'https://api.postcodes.io/postcodes/{encoded}')
+        if not err and isinstance(payload, dict) and payload.get('status') == 200:
+            result = payload.get('result') or {}
+            source = source or 'postcodes.io'
+            locality_bits = [
+                result.get('parish'),
+                result.get('admin_ward'),
+                result.get('admin_district') or result.get('parliamentary_constituency'),
+                result.get('region'),
+                result.get('postcode') or pc,
+                'United Kingdom',
+            ]
+            locality = ', '.join(str(b).strip() for b in locality_bits if str(b or '').strip())
+            if locality:
+                addresses.append(locality)
+            # Photon (OSM) often returns nearby named places / roads for the postcode.
+            photon, _photon_err = _http_get_json(
+                'https://photon.komoot.io/api/?' + urllib.parse.urlencode({
+                    'q': pc,
+                    'limit': 12,
+                    'lang': 'en',
+                })
+            )
+            for feat in ((photon or {}).get('features') or []):
+                props = (feat or {}).get('properties') or {}
+                cc = str(props.get('countrycode') or '').upper()
+                country = str(props.get('country') or '').lower()
+                if cc and cc not in ('GB', 'UK'):
+                    continue
+                if country and not any(token in country for token in ('united kingdom', 'england', 'scotland', 'wales', 'northern ireland')):
+                    continue
+                bits = [
+                    props.get('housenumber'),
+                    props.get('street') or props.get('name'),
+                    props.get('city') or props.get('town') or props.get('village') or props.get('locality'),
+                    props.get('county') or props.get('state'),
+                    props.get('postcode') or pc,
+                    'United Kingdom',
+                ]
+                line = ', '.join(str(b).strip() for b in bits if str(b or '').strip())
+                if line and line not in addresses and len(line) > 12:
+                    addresses.append(line)
+            if len(addresses) > 1:
+                source = 'postcodes.io+photon'
+                message = f'{len(addresses)} suggestions — pick one or edit the address.'
+            elif addresses:
+                message = 'Postcode verified — add the house/street number, or pick a suggestion.'
+            else:
+                message = 'Postcode verified. Enter the full street address manually.'
+        elif not addresses:
+            message = message or err or 'Postcode not found.'
+
+    return {
+        'postcode': pc,
+        'addresses': addresses[:20],
+        'message': message,
+        'source': source,
+        'getaddress_configured': bool(ga_key),
+    }
+
+
 def companies_house_request(path_qs):
     key = companies_house_api_key()
     if not key:
@@ -6755,11 +8293,12 @@ def public_companies_house_match(item):
     }
 
 
-def fetch_company_house_primary_officer(company_number):
+def fetch_company_house_primary_officer(company_number, *, live=False):
     num = str(company_number or '').strip().zfill(8)
     if not num or num == '00000000':
         return None, []
-    payload, error = cached_companies_house_request(f'/company/{urllib.parse.quote(num)}/officers')
+    req = companies_house_request if live else cached_companies_house_request
+    payload, error = req(f'/company/{urllib.parse.quote(num)}/officers')
     if error or not payload:
         return None, []
     officers_list = []
@@ -6788,6 +8327,297 @@ def fetch_company_house_primary_officer(company_number):
     if not primary_name and officers_list:
         primary_name = officers_list[0]['name']
     return primary_name, officers_list
+
+
+def normalize_company_name_for_match(name):
+    text = re.sub(r'[^A-Za-z0-9 ]', ' ', str(name or '').upper())
+    text = re.sub(r'\s+', ' ', text).strip()
+    for suffix in (' LIMITED', ' LTD', ' PLC', ' LLP'):
+        if text.endswith(suffix):
+            text = text[: -len(suffix)].strip()
+    return text
+
+
+def companies_house_name_availability(proposed_name):
+    """Check whether a proposed company name exactly matches an active CH registration."""
+    raw = (proposed_name or '').strip()
+    if len(raw) < 3:
+        return {
+            'available': None,
+            'status': 'too_short',
+            'message': 'Enter at least 3 characters to check availability.',
+            'matches': [],
+        }
+    if not companies_house_api_key():
+        return {
+            'available': None,
+            'status': 'not_configured',
+            'message': 'Add a Companies House API key in System Settings to check names live.',
+            'matches': [],
+        }
+    matches, error = search_companies_house(raw)
+    if error and not matches:
+        return {'available': None, 'status': 'error', 'message': error, 'matches': []}
+    target = normalize_company_name_for_match(raw)
+    exact = []
+    similar = []
+    for item in matches or []:
+        title = item.get('name') or item.get('title') or ''
+        if normalize_company_name_for_match(title) == target:
+            exact.append(item)
+        else:
+            similar.append(item)
+    if exact:
+        active = [
+            m for m in exact
+            if str(m.get('status') or m.get('company_status') or '').strip().lower() in ('active', 'open')
+        ]
+        if active:
+            return {
+                'available': False,
+                'status': 'taken',
+                'message': 'This name is already registered at Companies House.',
+                'matches': exact[:5],
+            }
+        return {
+            'available': True,
+            'status': 'dissolved_match',
+            'message': 'Exact name exists but the company is not active — you may still be able to register it.',
+            'matches': exact[:5],
+        }
+    return {
+        'available': True,
+        'status': 'likely_available',
+        'message': 'No exact match on Companies House — this name looks available.',
+        'matches': similar[:5],
+    }
+
+
+def search_sic_codes(query, limit=20):
+    q = (query or '').strip().lower()
+    labels = sic_code_labels()
+    if not labels:
+        return []
+    limit = max(1, min(int(limit or 20), 40))
+    if not q:
+        return []
+    results = []
+    for code, desc in labels.items():
+        code_s = str(code or '').strip()
+        desc_s = str(desc or '').strip()
+        hay = f'{code_s} {desc_s}'.lower()
+        if q in hay or (q.isdigit() and code_s.startswith(q)):
+            results.append({
+                'code': code_s.zfill(5) if code_s.isdigit() else code_s,
+                'description': desc_s,
+                'label': f'{code_s.zfill(5) if code_s.isdigit() else code_s} — {desc_s}'.strip(' —'),
+            })
+    results.sort(key=lambda row: (
+        0 if str(row.get('code') or '').startswith(q) else 1,
+        0 if q in str(row.get('description') or '').lower() else 1,
+        row.get('code') or '',
+    ))
+    return results[:limit]
+
+
+def _person_names_clearly_different(left, right):
+    a = re.sub(r'[^a-z ]', '', str(left or '').strip().lower())
+    b = re.sub(r'[^a-z ]', '', str(right or '').strip().lower())
+    if not a or not b:
+        return False
+    if a == b:
+        return False
+    a_parts = set(a.split())
+    b_parts = set(b.split())
+    if a_parts & b_parts:
+        return False
+    return True
+
+
+def director_name_for_order(order_row, fields=None):
+    order_row = dict(order_row or {})
+    for item in fields or []:
+        if checkout_field_key(item.get('label')) == checkout_field_key('Director name'):
+            text = str(item.get('value') or '').strip()
+            if text:
+                return text
+    for key in ('end_client_name', 'owner_name', 'company_director'):
+        text = str(order_row.get(key) or '').strip()
+        if text:
+            return text
+    return ''
+
+
+def b2b_dob_is_account_holder_leak(order_row, dob_value, fields=None):
+    """True when DOB matches the B2B login account but director is a different person."""
+    parsed = normalize_date_of_birth(dob_value)
+    if not parsed:
+        return False
+    user_id = order_row.get('user_id')
+    if not user_id:
+        return False
+    user = query_db(
+        "SELECT full_name, date_of_birth, is_b2b, client_type FROM users WHERE id = ?;",
+        (user_id,),
+        one=True,
+    )
+    if not user:
+        return False
+    is_b2b = user.get('is_b2b') == 1 or str(user.get('client_type') or '').upper() == 'B2B'
+    if not is_b2b:
+        return False
+    account_dob = normalize_date_of_birth(user.get('date_of_birth'))
+    if not account_dob or account_dob != parsed:
+        return False
+    account_name = str(user.get('full_name') or '').strip()
+    director = director_name_for_order(order_row, fields)
+    if not director or not account_name:
+        return True
+    return _person_names_clearly_different(director, account_name)
+
+
+def trusted_formation_dob(order_row, dob_value, fields=None):
+    parsed = normalize_date_of_birth(dob_value)
+    if not parsed:
+        return None
+    if b2b_dob_is_account_holder_leak(order_row, parsed, fields):
+        return None
+    return parsed
+
+
+def order_formation_dob(order_row, fields=None):
+    """Director DOB from wizard/checkout — never the B2B account holder profile."""
+    order_row = dict(order_row or {})
+    raw_fv = order_row.get('order_form_values_json')
+    if raw_fv:
+        try:
+            fv = json.loads(raw_fv) if isinstance(raw_fv, str) else raw_fv
+            if isinstance(fv, dict):
+                for key in ('director_dob', 'dob', 'date_of_birth'):
+                    trusted = trusted_formation_dob(order_row, fv.get(key), fields)
+                    if trusted:
+                        return trusted
+        except (TypeError, ValueError):
+            pass
+    trusted = trusted_formation_dob(order_row, order_row.get('checkout_dob'), fields)
+    if trusted:
+        return trusted
+    order_id = order_row.get('id')
+    if order_id:
+        owner = query_db(
+            "SELECT date_of_birth FROM company_owners WHERE order_id = ?;",
+            (order_id,),
+            one=True,
+        )
+        if owner:
+            trusted = trusted_formation_dob(order_row, owner.get('date_of_birth'), fields)
+            if trusted:
+                return trusted
+    for item in fields or []:
+        if checkout_field_key(item.get('label')) == checkout_field_key('Date of birth'):
+            trusted = trusted_formation_dob(order_row, item.get('value'), fields)
+            if trusted:
+                return trusted
+    return None
+
+
+def _remove_checkout_field(fields, label):
+    key = checkout_field_key(label)
+    if not key:
+        return list(fields or [])
+    return [
+        item for item in (fields or [])
+        if checkout_field_key(item.get('label')) != key
+    ]
+
+
+def scrub_b2b_leaked_checkout_dob(order_row, fields):
+    merged = list(fields or [])
+    dob = order_formation_dob(order_row, merged)
+    merged = _remove_checkout_field(merged, 'Date of birth')
+    if dob:
+        merged = _set_checkout_field(merged, 'Date of birth', dob)
+    return merged
+
+
+def order_is_formation_package(order_row):
+    order_row = dict(order_row or {})
+    line_items = order_row.get('_line_items_cache')
+    if line_items is None and order_row.get('id'):
+        line_items = query_db(
+            "SELECT product_name, category_name FROM order_line_items WHERE order_id = ? ORDER BY sort_order ASC, id ASC;",
+            (order_row['id'],),
+        ) or []
+    return is_company_registration_order({}, order_row.get('service_name'), line_items or [])
+
+
+FORMATION_CHECKOUT_SLOT_LABELS = (
+    'Desired company name',
+    'Registered office address',
+    'Director name',
+    'Date of birth',
+    'Nationality',
+    'Business activities',
+    'UK phone number',
+    'Personal address',
+    'Email',
+)
+
+
+def _ensure_checkout_field_present(fields, label):
+    key = checkout_field_key(label)
+    for item in fields or []:
+        if checkout_field_key(item.get('label')) == key:
+            return list(fields or [])
+    out = list(fields or [])
+    out.append({'label': label, 'value': ''})
+    return out
+
+
+def checkout_form_for_order_display(order_row, fields):
+    """Staff UI: keep formation rows visible even when value not captured yet."""
+    merged = normalize_checkout_form_fields(fields or [])
+    if not order_is_formation_package(order_row):
+        return merged
+    present = {checkout_field_key(item.get('label')) for item in merged if isinstance(item, dict)}
+    out = list(merged)
+    for label in FORMATION_CHECKOUT_SLOT_LABELS:
+        key = checkout_field_key(label)
+        if key not in present:
+            out.append({'label': label, 'value': ''})
+            present.add(key)
+    return out
+
+
+def scrub_b2b_leaked_company_owner_dob(order_id, order_row, fields):
+    if not order_id:
+        return
+    owner = query_db("SELECT id, date_of_birth FROM company_owners WHERE order_id = ?;", (order_id,), one=True)
+    if not owner:
+        return
+    if b2b_dob_is_account_holder_leak(order_row, owner.get('date_of_birth'), fields):
+        execute_db(
+            "UPDATE company_owners SET date_of_birth = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?;",
+            (owner['id'],),
+        )
+
+
+def _set_checkout_field(fields, label, value):
+    key = checkout_field_key(label)
+    text = checkout_form_value_display(label, value)
+    if not key or not text:
+        return list(fields or [])
+    out = []
+    replaced = False
+    for item in fields or []:
+        if checkout_field_key(item.get('label')) == key:
+            out.append({'label': label, 'value': text})
+            replaced = True
+        else:
+            out.append(dict(item))
+    if not replaced:
+        out.append({'label': label, 'value': text})
+    return out
 
 
 def search_companies_house(query):
@@ -9598,7 +11428,16 @@ def public_companies_house_profile(data):
     confirmation = data.get('confirmation_statement') if isinstance(data.get('confirmation_statement'), dict) else {}
     office = companies_house_registered_office(data.get('registered_office_address'))
     postcode = str((data.get('registered_office_address') or {}).get('postal_code') or '').strip()
-    accounts_due = companies_house_iso_date(accounts.get('next_due'))
+    accounts_due = companies_house_iso_date(accounts.get('next_due') or (accounts.get('next_accounts') or {}).get('due_on'))
+    next_accounts = accounts.get('next_accounts') if isinstance(accounts.get('next_accounts'), dict) else {}
+    last_accounts = accounts.get('last_accounts') if isinstance(accounts.get('last_accounts'), dict) else {}
+    accounts_made_up_to = companies_house_iso_date(
+        next_accounts.get('period_end_on') or accounts.get('next_made_up_to')
+    )
+    accounts_period_start = companies_house_iso_date(next_accounts.get('period_start_on'))
+    accounts_last_made_up_to = companies_house_iso_date(
+        last_accounts.get('made_up_to') or last_accounts.get('period_end_on')
+    )
     confirmation_due = companies_house_iso_date(confirmation.get('next_due'))
     return {
         'name': name,
@@ -9614,7 +11453,14 @@ def public_companies_house_profile(data):
         'company_type': str(data.get('type') or '').strip(),
         'registered_email': companies_house_email_from_data(data),
         'accounts_next_due': accounts_due,
-        'accounts_overdue': companies_house_flag_due(accounts.get('overdue'), accounts_due, overdue_only=True),
+        'accounts_overdue': companies_house_flag_due(
+            accounts.get('overdue') if accounts.get('overdue') is not None else next_accounts.get('overdue'),
+            accounts_due,
+            overdue_only=True,
+        ),
+        'accounts_made_up_to': accounts_made_up_to,
+        'accounts_period_start': accounts_period_start,
+        'accounts_last_made_up_to': accounts_last_made_up_to,
         'confirmation_next_due': confirmation_due,
         'confirmation_overdue': companies_house_flag_due(confirmation.get('overdue'), confirmation_due, overdue_only=True),
         'confirmation_pending': companies_house_flag_due(confirmation.get('overdue'), confirmation_due, overdue_only=False),
@@ -9633,6 +11479,83 @@ def fetch_companies_house_profile(company_number):
     if not profile:
         return None, 'Company not found at Companies House'
     return profile, None
+
+
+def live_companies_house_company_lookup(company_number):
+    """Always hit Companies House (no cache) for profile + active director."""
+    profile, error = fetch_companies_house_profile(company_number)
+    if error:
+        return None, error
+    director, officers = fetch_company_house_primary_officer(profile.get('company_number'), live=True)
+    out = dict(profile)
+    out['director'] = director or ''
+    out['director_name'] = director or ''
+    out['officers'] = officers or []
+    return out, None
+
+
+def _companies_house_capital_figure(block):
+    values = (block or {}).get('description_values') if isinstance(block, dict) else None
+    if not isinstance(values, dict):
+        return None
+    capital = values.get('capital')
+    rows = capital if isinstance(capital, list) else []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        currency = str(row.get('currency') or 'GBP').strip().upper()
+        if currency and currency != 'GBP':
+            continue
+        raw = str(row.get('figure') or '').replace(',', '').strip()
+        try:
+            amount = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if amount >= 0:
+            return amount
+    return None
+
+
+def fetch_companies_house_share_capital(company_number):
+    """Read issued share capital from NEWINC / SH01 statement of capital."""
+    number = normalize_company_number(company_number)
+    if not number:
+        return None
+    listing, error = cached_companies_house_request(
+        '/company/' + urllib.parse.quote(number) + '/filing-history?items_per_page=50'
+    )
+    if error or not isinstance(listing, dict):
+        return None
+    figure = None
+    items = list(listing.get('items') or [])
+    items.reverse()  # oldest first so later SH01 wins
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        type_code = str(item.get('type') or '').upper()
+        category = str(item.get('category') or '').lower()
+        description = str(item.get('description') or '').lower()
+        needs_detail = (
+            type_code in ('NEWINC', 'SH01', 'SH02', 'SH03', 'SH04', 'SH05')
+            or category == 'capital'
+            or 'statement-of-capital' in description
+        )
+        if not needs_detail:
+            continue
+        detail = item
+        tid = item.get('transaction_id')
+        if tid and type_code in ('NEWINC', 'SH01'):
+            extra, extra_err = cached_companies_house_request(
+                '/company/' + urllib.parse.quote(number) + '/filing-history/' + urllib.parse.quote(str(tid))
+            )
+            if not extra_err and isinstance(extra, dict):
+                detail = extra
+        found = _companies_house_capital_figure(detail)
+        for associated in detail.get('associated_filings') or []:
+            found = _companies_house_capital_figure(associated) or found
+        if found is not None:
+            figure = found
+    return figure
 
 
 def format_companies_house_officer_name(name):
@@ -9742,9 +11665,9 @@ def sync_company_directors_from_list(company_id, names):
         execute_db(
             """
             INSERT INTO company_directors (company_id, name, role, nationality, appointed_date)
-            VALUES (?, ?, 'Director', 'British', ?);
+            VALUES (?, ?, 'Director', ?, ?);
             """,
-            (company_id, name, today),
+            (company_id, name, '', today),
         )
     execute_db(
         "UPDATE companies SET director = ?, ch_checked_at = CURRENT_TIMESTAMP WHERE id = ?;",
@@ -9796,10 +11719,23 @@ def checkout_form_company_number(fields, company=None):
     return ''
 
 
-def companies_house_snapshot(company_number):
+def companies_house_snapshot(company_number, *, allow_network=True, force=False):
     number = normalize_company_number(company_number)
     if not looks_like_uk_company_number(number) or is_pending_company_number(number):
         return None
+    cache = getattr(companies_house_snapshot, '_cache', None)
+    if cache is None:
+        cache = {}
+        companies_house_snapshot._cache = cache
+    cached = cache.get(number)
+    now = time.time()
+    if force:
+        cache.pop(number, None)
+        cached = None
+    if cached and (now - cached[0]) < 3600:
+        return dict(cached[1])
+    if not allow_network:
+        return dict(cached[1]) if cached else None
     if not companies_house_api_key():
         return None
     global _CH_REGISTERED_SYNC_BLOCKED
@@ -9817,7 +11753,7 @@ def companies_house_snapshot(company_number):
     office = str((profile or {}).get('reg_office') or '').strip()
     if office.lower() in {'united kingdom', 'uk'}:
         office = ''
-    return {
+    snapshot = {
         'name': str((profile or {}).get('name') or '').strip(),
         'company_number': number,
         'status': status,
@@ -9832,11 +11768,21 @@ def companies_house_snapshot(company_number):
         'registered_email': str((profile or {}).get('registered_email') or '').strip(),
         'accounts_next_due': companies_house_iso_date((profile or {}).get('accounts_next_due')),
         'accounts_overdue': bool((profile or {}).get('accounts_overdue')),
+        'accounts_made_up_to': companies_house_iso_date((profile or {}).get('accounts_made_up_to')),
+        'accounts_period_start': companies_house_iso_date((profile or {}).get('accounts_period_start')),
+        'accounts_last_made_up_to': companies_house_iso_date((profile or {}).get('accounts_last_made_up_to')),
+        'share_capital_gbp': fetch_companies_house_share_capital(number),
         'confirmation_next_due': companies_house_iso_date((profile or {}).get('confirmation_next_due')),
         'confirmation_overdue': bool((profile or {}).get('confirmation_overdue')),
         'confirmation_pending': bool((profile or {}).get('confirmation_pending')),
         'default_address': bool((profile or {}).get('default_address')),
     }
+    cache[number] = (now, dict(snapshot))
+    if len(cache) > 500:
+        # Drop oldest half to keep memory bounded.
+        for stale_key, _ in sorted(cache.items(), key=lambda item: item[1][0])[:250]:
+            cache.pop(stale_key, None)
+    return snapshot
 
 
 def fill_company_blanks_from_snapshot(company, snapshot):
@@ -9881,7 +11827,7 @@ def fill_company_blanks_from_snapshot(company, snapshot):
     return bool(updates)
 
 
-def fill_checkout_blanks_from_companies_house(order_row, fields):
+def fill_checkout_blanks_from_companies_house(order_row, fields, allow_live=False):
     fields = [dict(field) for field in (fields or []) if isinstance(field, dict)]
     company = None
     company_id = (order_row or {}).get('company_id')
@@ -9891,7 +11837,10 @@ def fill_checkout_blanks_from_companies_house(order_row, fields):
             order_row['company_id'] = company_id
     if company_id:
         company = query_db(
-            "SELECT id, name, company_number, status, inc_date, director, reg_office FROM companies WHERE id = ?;",
+            """
+            SELECT id, name, company_number, status, inc_date, director, reg_office, sic_codes
+            FROM companies WHERE id = ?;
+            """,
             (company_id,),
             one=True,
         )
@@ -9901,36 +11850,58 @@ def fill_checkout_blanks_from_companies_house(order_row, fields):
     by_key = {}
     for field in fields:
         by_key[checkout_field_key(field.get('label'))] = field.get('value')
-    needs_live = (
-        checkout_value_is_blank(by_key.get('sic code'))
-        or checkout_value_is_blank(
-            by_key.get('registered address') or by_key.get('registered office') or by_key.get('registered office address'),
-            address=True,
+
+    def _needs_fill(source):
+        src = source or {}
+        return bool(
+            (checkout_value_is_blank(by_key.get('sic code')) and not str(src.get('sic_codes') or '').strip())
+            or (
+                checkout_value_is_blank(
+                    by_key.get('registered address') or by_key.get('registered office') or by_key.get('registered office address'),
+                    address=True,
+                )
+                and checkout_value_is_blank(src.get('reg_office'), address=True)
+            )
+            or (checkout_value_is_blank(by_key.get('incorporation date')) and not str(src.get('inc_date') or '').strip())
+            or (checkout_value_is_blank(by_key.get('company status')) and not str(src.get('status') or '').strip())
+            or (
+                checkout_value_is_blank(by_key.get('director name'))
+                and looks_like_placeholder_director((company or {}).get('director'), (company or {}).get('name'))
+                and not str(src.get('director') or '').strip()
+            )
         )
-        or checkout_value_is_blank(by_key.get('incorporation date'))
-        or checkout_value_is_blank(by_key.get('company status'))
-        or checkout_value_is_blank(by_key.get('company number'))
-        or (
-            checkout_value_is_blank(by_key.get('director name'))
-            and looks_like_placeholder_director((company or {}).get('director'), (company or {}).get('name'))
-        )
-    )
-    snapshot = companies_house_snapshot(number) if needs_live else None
+
+    # Always prefer the local company card first — order open must stay fast.
+    snapshot = None
+    if company:
+        snapshot = {
+            'name': str(company.get('name') or '').strip(),
+            'company_number': number,
+            'status': str(company.get('status') or '').strip(),
+            'inc_date': str(company.get('inc_date') or '')[:10],
+            'reg_office': str(company.get('reg_office') or '').strip(),
+            'sic_codes': str(company.get('sic_codes') or '').strip(),
+            'director': official_company_director(company) or str(company.get('director') or '').strip(),
+        }
+        if checkout_value_is_blank(snapshot.get('reg_office'), address=True):
+            snapshot['reg_office'] = ''
+
+    still_needs_network = _needs_fill(snapshot)
+    if allow_live and still_needs_network:
+        live = companies_house_snapshot(number, allow_network=True)
+        if live:
+            if snapshot:
+                for key, value in live.items():
+                    if value and not str(snapshot.get(key) or '').strip():
+                        snapshot[key] = value
+                    elif key in ('sic_codes', 'reg_office', 'inc_date', 'status', 'director', 'name') and value:
+                        if checkout_value_is_blank(snapshot.get(key), address=(key == 'reg_office')):
+                            snapshot[key] = value
+            else:
+                snapshot = live
+
     if not snapshot:
-        if company:
-            snapshot = {
-                'name': str(company.get('name') or '').strip(),
-                'company_number': number,
-                'status': str(company.get('status') or '').strip(),
-                'inc_date': str(company.get('inc_date') or '')[:10],
-                'reg_office': str(company.get('reg_office') or '').strip(),
-                'sic_codes': '',
-                'director': official_company_director(company) or '',
-            }
-            if checkout_value_is_blank(snapshot.get('reg_office'), address=True):
-                snapshot['reg_office'] = ''
-        else:
-            return fields
+        return fields
     values = {
         'company number': snapshot.get('company_number') or number,
         'desired company name': snapshot.get('name') or '',
@@ -10026,6 +11997,9 @@ def persist_companies_house_filing_state(company, snapshot, send_email=True):
             source['status_detail'] = snapshot.get('status_detail')
     issues = companies_house_attention_issues(source)
     accounts_due = companies_house_iso_date(source.get('accounts_next_due'))
+    accounts_made_up_to = companies_house_iso_date(source.get('accounts_made_up_to'))
+    accounts_period_start = companies_house_iso_date(source.get('accounts_period_start'))
+    accounts_last_made_up_to = companies_house_iso_date(source.get('accounts_last_made_up_to'))
     confirmation_due = companies_house_iso_date(source.get('confirmation_next_due'))
     accounts_overdue = 1 if any(item.get('code') == 'accounts_overdue' for item in issues) else 0
     confirmation_overdue = 1 if any(item.get('code') == 'confirmation_pending' for item in issues) else 0
@@ -10034,7 +12008,10 @@ def persist_companies_house_filing_state(company, snapshot, send_email=True):
     execute_db(
         """
         UPDATE companies
-        SET accounts_next_due = ?, accounts_overdue = ?, confirmation_next_due = ?,
+        SET accounts_next_due = ?, accounts_overdue = ?,
+            accounts_made_up_to = ?, accounts_period_start = ?, accounts_last_made_up_to = ?,
+            share_capital_gbp = ?,
+            confirmation_next_due = ?,
             confirmation_overdue = ?, ch_attention_json = ?, status = ?,
             reg_office = CASE WHEN ? != '' THEN ? ELSE reg_office END,
             ch_checked_at = CURRENT_TIMESTAMP
@@ -10043,6 +12020,10 @@ def persist_companies_house_filing_state(company, snapshot, send_email=True):
         (
             accounts_due or None,
             accounts_overdue,
+            accounts_made_up_to or None,
+            accounts_period_start or None,
+            accounts_last_made_up_to or None,
+            source.get('share_capital_gbp'),
             confirmation_due or None,
             confirmation_overdue,
             json.dumps(issues),
@@ -10055,6 +12036,10 @@ def persist_companies_house_filing_state(company, snapshot, send_email=True):
     company['ch_attention_json'] = json.dumps(issues)
     company['accounts_next_due'] = accounts_due
     company['accounts_overdue'] = accounts_overdue
+    company['accounts_made_up_to'] = accounts_made_up_to
+    company['accounts_period_start'] = accounts_period_start
+    company['accounts_last_made_up_to'] = accounts_last_made_up_to
+    company['share_capital_gbp'] = source.get('share_capital_gbp')
     company['confirmation_next_due'] = confirmation_due
     company['confirmation_overdue'] = confirmation_overdue
     if office:
@@ -10073,6 +12058,64 @@ def persist_companies_house_filing_state(company, snapshot, send_email=True):
         else:
             notify_companies_house_attention(company_id, issues)
     return issues
+
+
+def companies_house_filing_from_source(src):
+    made_up = companies_house_iso_date((src or {}).get('accounts_made_up_to'))
+    last_made_up = companies_house_iso_date((src or {}).get('accounts_last_made_up_to'))
+    return {
+        'name': str((src or {}).get('name') or '').strip(),
+        'company_number': normalize_company_number((src or {}).get('company_number')),
+        'inc': companies_house_iso_date((src or {}).get('inc_date')),
+        'accounts_period_start': companies_house_iso_date((src or {}).get('accounts_period_start')),
+        'accounts_made_up_to': made_up,
+        'accounts_last_made_up_to': last_made_up,
+        'accounts_next_due': companies_house_iso_date((src or {}).get('accounts_next_due')),
+        'accounts_overdue': bool((src or {}).get('accounts_overdue')),
+        'is_first_accounts': bool(made_up and not last_made_up),
+        'share_capital': (src or {}).get('share_capital_gbp') if (src or {}).get('share_capital_gbp') is not None else (src or {}).get('share_capital'),
+        'confirmation_next_due': companies_house_iso_date((src or {}).get('confirmation_next_due')),
+        'confirmation_overdue': bool((src or {}).get('confirmation_overdue')),
+        'source': 'stored',
+    }
+
+
+def live_companies_house_filing(company, *, force=True):
+    if not company:
+        return None
+    snapshot = companies_house_snapshot(company.get('company_number'), force=force)
+    if snapshot:
+        persist_companies_house_filing_state(company, snapshot, send_email=False)
+        filing = companies_house_filing_from_source(snapshot)
+        filing['source'] = 'companies_house_api'
+        if not filing.get('name'):
+            filing['name'] = str(company.get('name') or '').strip()
+        if not filing.get('inc'):
+            filing['inc'] = companies_house_iso_date(company.get('inc_date'))
+        return filing
+    filing = companies_house_filing_from_source(company)
+    filing['source'] = 'stored'
+    return filing
+
+
+def companies_house_filing_payload(company):
+    filing = live_companies_house_filing(company, force=True) or companies_house_filing_from_source(company)
+    return {
+        'status': 'success',
+        'companies_house': filing,
+        'company': {
+            'id': company.get('id'),
+            'name': filing.get('name') or company.get('name'),
+            'company_number': filing.get('company_number') or company.get('company_number'),
+            'inc_date': filing.get('inc') or company.get('inc_date'),
+            'accounts_next_due': filing.get('accounts_next_due'),
+            'accounts_overdue': filing.get('accounts_overdue'),
+            'accounts_made_up_to': filing.get('accounts_made_up_to'),
+            'accounts_period_start': filing.get('accounts_period_start'),
+            'accounts_last_made_up_to': filing.get('accounts_last_made_up_to'),
+            'share_capital': filing.get('share_capital'),
+        },
+    }
 
 
 def build_companies_house_attention_email(client, company, issues, greeting_name=None):
@@ -10560,6 +12603,7 @@ def hydrate_company_from_companies_house(company, extras=None):
     elif snapshot.get('director'):
         persist_official_director(company.get('id'), snapshot['director'])
     persist_companies_house_filing_state(company, snapshot)
+    ensure_registered_company_linked_to_orders(company.get('id'))
     return applied
 
 
@@ -10627,7 +12671,7 @@ def schedule_portfolio_ch_sync(user_id=None):
 
     def _job():
         try:
-            sync_pending_companies_from_companies_house(user_id=user_id, limit=2)
+            sync_pending_companies_from_companies_house(user_id=user_id, limit=15)
             sync_registered_companies_from_companies_house(limit=3, user_id=user_id)
         except Exception as exc:
             print(f"[CH list sync] {exc}")
@@ -10682,6 +12726,40 @@ def order_owner_display_name(row):
         pretty = pretty_director_name(director)
         return '' if pretty.lower() == 'director' else pretty
     return owner
+
+
+def order_list_contact_display(row):
+    """Orders table: director/end-client on the work — not the B2B portal login."""
+    row = dict(row or {})
+    is_b2b = row.get('is_b2b') == 1 or str(row.get('client_type') or '').upper() == 'B2B'
+    name = order_owner_display_name(row)
+    if not name:
+        name = str(row.get('end_client_name') or row.get('owner_name') or '').strip()
+    portal_email = str(row.get('portal_account_email') or '').strip()
+    if not portal_email and is_b2b:
+        portal_email = str(row.get('client_email') or '').strip()
+    work_email = ''
+    for candidate in (
+        row.get('end_client_email'),
+        row.get('owner_form_email'),
+        row.get('access_email'),
+    ):
+        text = str(candidate or '').strip()
+        if is_usable_form_email(text):
+            work_email = text
+            break
+    if not work_email and not is_b2b:
+        work_email = str(row.get('client_email') or '').strip()
+        if not is_usable_form_email(work_email):
+            work_email = ''
+    return {
+        'owner_name': name or '—',
+        'owner_form_email': work_email,
+        'order_contact_email': work_email,
+        'client_email': work_email,
+        'portal_account_email': portal_email if is_b2b else '',
+        'is_b2b': is_b2b,
+    }
 
 
 def connector_order_id(order_row):
@@ -10880,8 +12958,8 @@ def companies_house_status_value(raw_status, status_detail=None):
 
 _CH_PENDING_SYNC_BLOCKED = False
 _CH_REGISTERED_SYNC_BLOCKED = False
-CH_PENDING_RECHECK_SECONDS = 15 * 60
-CH_PENDING_SYNC_BATCH = 5
+CH_PENDING_RECHECK_SECONDS = 2 * 60
+CH_PENDING_SYNC_BATCH = 20
 CH_REGISTERED_RECHECK_SECONDS = 12 * 3600
 CH_REGISTERED_SYNC_BATCH = 15
 
@@ -11199,6 +13277,13 @@ def ensure_client_for_manual_company(data, actor=None):
     if not new_email or not STAFF_EMAIL_RE.match(new_email):
         return None, None, 'Enter a valid client email'
 
+    try:
+        import permanent_purge as _permanent_purge
+        if _permanent_purge.is_purged_email(new_email):
+            return None, None, 'This email was permanently deleted and cannot be restored or recreated'
+    except Exception:
+        pass
+
     existing = query_db("SELECT id, full_name, email, role FROM users WHERE LOWER(email) = ?;", (new_email,), one=True)
     if existing:
         if existing.get('role') != 'CLIENT':
@@ -11243,10 +13328,41 @@ def create_manual_company(data, actor=None):
     name = (extras.get('name') or extras.get('company_name') or '').strip()
     if len(name) < 2 or name.lower() in ('united kingdom', 'uk', 'none', 'n/a'):
         return None, 'Enter the registered company name'
+    requested_number = normalize_company_number(extras.get('company_number') or '')
+
+    # Reuse an existing portal card (registered number/name) instead of a REG-* twin.
+    portal = find_portal_company_match(name, requested_number)
+    if portal:
+        claimed = claim_company_for_client(
+            portal,
+            client_id,
+            {
+                **extras,
+                'name': name,
+                'company_number': requested_number or portal.get('company_number'),
+                'director': extras.get('director') or (client or {}).get('full_name'),
+                'registered_email': registered_email_for_client(client, extras),
+            },
+        )
+        if claimed:
+            absorb_client_pending_twins_into(claimed, client_id, name)
+            if requested_number and is_pending_company_number(claimed.get('company_number')):
+                hydrate_company_from_companies_house(claimed, {**extras, 'company_number': requested_number, 'name': name})
+            elif not is_pending_company_number(claimed.get('company_number')):
+                hydrate_company_from_companies_house(claimed, extras)
+            ensure_registered_company_linked_to_orders(claimed['id'])
+            link_orphaned_formation_orders(user_id=client_id)
+            return claimed['id'], None
+
     if match_company_for_client(client_id, name):
-        return None, 'This client already has a company with that name'
-    requested_number = (extras.get('company_number') or '').strip()
-    if requested_number and query_db("SELECT id FROM companies WHERE company_number = ?;", (requested_number,), one=True):
+        existing_id = match_company_for_client(client_id, name)
+        return existing_id, None
+    if requested_number and query_db(
+        "SELECT id FROM companies WHERE UPPER(TRIM(COALESCE(company_number, ''))) = ?;",
+        (requested_number.upper(),),
+        one=True,
+    ):
+        # Race / edge: number present but find_portal missed — refuse duplicate create.
         return None, 'That company number is already on another card'
     raw_status = str(extras.get('company_status') or extras.get('status') or 'Active').lower()
     status_map = {
@@ -11294,6 +13410,7 @@ def create_manual_company(data, actor=None):
     hydrate_company_from_companies_house(created, extras)
     persist_company_registered_email({'id': company_id, 'user_id': client_id, 'name': name, 'registered_email': form_email}, form_email)
     link_orphaned_formation_orders(user_id=client_id)
+    ensure_registered_company_linked_to_orders(company_id)
     return company_id, None
 
 
@@ -11371,6 +13488,37 @@ def ensure_company_from_registration_order(client_id, client_name, o_data, servi
         wc_id,
     ):
         return None
+    # Prefer the live order's company card when this WC order is already linked —
+    # prevents webhook backfill recreating REG-* twins under a mismatched email.
+    if wc_id:
+        linked_order = query_db(
+            """
+            SELECT id, user_id, company_id
+            FROM orders
+            WHERE woocommerce_order_id = ? OR order_number = ? OR order_number = ?
+            LIMIT 1;
+            """,
+            (wc_id, f'#{wc_id}', wc_id),
+            one=True,
+        )
+        linked_company_id = optional_record_id((linked_order or {}).get('company_id'))
+        if linked_company_id:
+            linked_company = query_db(
+                "SELECT id, company_number FROM companies WHERE id = ?;",
+                (linked_company_id,),
+                one=True,
+            )
+            if linked_company and not is_pending_company_number(linked_company.get('company_number')):
+                return linked_company_id
+        pending_any = query_db(
+            "SELECT id, name, user_id FROM companies WHERE company_number = ? LIMIT 1;",
+            (f'REG-{wc_id}',),
+            one=True,
+        )
+        if pending_any:
+            if company_name and str(pending_any.get('name') or '').strip() != company_name:
+                execute_db("UPDATE companies SET name = ? WHERE id = ?;", (company_name, pending_any['id']))
+            return pending_any['id']
     existing = match_company_for_client(client_id, company_name)
     if existing:
         return existing
@@ -11461,8 +13609,27 @@ def backfill_companies_from_registration_webhooks():
             continue
         email = (o_data.get('email') or '').strip()
         wp_user_id = str(o_data.get('wordpress_user_id') or '')
+        wc_id = str(o_data.get('woocommerce_order_id') or '').strip() or None
         client = None
-        if wp_user_id:
+        # Prefer the CRM order owner when this website order already exists.
+        if wc_id:
+            existing_order = query_db(
+                """
+                SELECT o.id, o.user_id, o.company_id, u.full_name, u.email
+                FROM orders o
+                JOIN users u ON u.id = o.user_id
+                WHERE o.woocommerce_order_id = ? OR o.order_number = ? OR o.order_number = ?
+                LIMIT 1;
+                """,
+                (wc_id, f'#{wc_id}', wc_id),
+                one=True,
+            )
+            if existing_order:
+                client = {
+                    'id': existing_order['user_id'],
+                    'full_name': existing_order.get('full_name') or email,
+                }
+        if not client and wp_user_id:
             client = query_db("SELECT id, full_name FROM users WHERE wordpress_user_id = ?;", (wp_user_id,), one=True)
         if not client and email:
             client = query_db("SELECT id, full_name FROM users WHERE email = ?;", (email,), one=True)
@@ -11475,7 +13642,7 @@ def backfill_companies_from_registration_webhooks():
             o_data,
             service_name,
             line_items,
-            str(o_data.get('woocommerce_order_id') or '') or None,
+            wc_id,
         )
         order_num = o_data.get('order_number')
         if company_id and order_num:
@@ -11534,7 +13701,7 @@ def upsert_woocommerce_product(p_data):
     sid = execute_db("""
         INSERT INTO services (
             name, description, category, price, duration, status, featured, vat_rate, renewal_period, woocommerce_product_id
-        ) VALUES (?, ?, ?, ?, ?, ?, 0, 0.20, 'Annual', ?);
+        ) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 'Annual', ?);
     """, (name, description, category, price, duration, status, wp_product_id))
     return {'created': True, 'updated': False, 'service_id': sid}
 
@@ -11544,8 +13711,10 @@ def shift_calendar_month(year, month, delta):
     return total // 12, (total % 12) + 1
 
 
-def build_monthly_revenue_chart(months=6):
+def build_monthly_revenue_chart(months=6, *, end_year=None, end_month=None):
     today = datetime.date.today()
+    end_year = int(end_year or today.year)
+    end_month = int(end_month or today.month)
     rows = query_db("""
         SELECT strftime('%Y-%m', created_at) AS month,
                COUNT(*) AS cnt,
@@ -11564,7 +13733,7 @@ def build_monthly_revenue_chart(months=6):
         }
     series = []
     for offset in range(months - 1, -1, -1):
-        year, month = shift_calendar_month(today.year, today.month, -offset)
+        year, month = shift_calendar_month(end_year, end_month, -offset)
         key = f'{year:04d}-{month:02d}'
         item = by_month.get(key, {'cnt': 0, 'rev': 0.0})
         series.append({
@@ -11576,19 +13745,175 @@ def build_monthly_revenue_chart(months=6):
     return series
 
 
-def build_admin_dashboard_payload(user):
+def parse_dashboard_month(raw):
+    """Accept YYYY-MM / this_month / last_month. Default current month."""
+    today = datetime.date.today()
+    text = str(raw or '').strip().lower()
+    if not text or text in {'this_month', 'current', 'month'}:
+        return today.year, today.month, f'{today.year:04d}-{today.month:02d}'
+    if text in {'last_month', 'previous'}:
+        year, month = shift_calendar_month(today.year, today.month, -1)
+        return year, month, f'{year:04d}-{month:02d}'
+    match = re.match(r'^(\d{4})-(\d{1,2})$', text)
+    if match:
+        year = int(match.group(1))
+        month = int(match.group(2))
+        if 1 <= month <= 12 and 2000 <= year <= 2100:
+            return year, month, f'{year:04d}-{month:02d}'
+    return today.year, today.month, f'{today.year:04d}-{today.month:02d}'
+
+
+def estimate_order_cost(order_row):
+    """Estimate supplier/original cost for an order from service catalog cost_price."""
+    if not order_row:
+        return 0.0
+    order_id = optional_record_id(order_row.get('id'))
+    total_cost = 0.0
+    matched = False
+    items = query_db(
+        """
+        SELECT product_name, quantity, woocommerce_product_id, unit_price, line_total
+        FROM order_line_items
+        WHERE order_id = ?
+        ORDER BY sort_order ASC, id ASC;
+        """,
+        (order_id,),
+    ) if order_id else []
+    for item in items or []:
+        qty = max(int(item.get('quantity') or 1), 1)
+        cost = None
+        wp_id = str(item.get('woocommerce_product_id') or '').strip()
+        if wp_id:
+            svc = query_db(
+                "SELECT cost_price FROM services WHERE woocommerce_product_id = ? LIMIT 1;",
+                (wp_id,),
+                one=True,
+            )
+            if svc is not None:
+                cost = float(svc.get('cost_price') or 0)
+                matched = True
+        if cost is None:
+            name = str(item.get('product_name') or '').strip()
+            if name:
+                svc = query_db(
+                    "SELECT cost_price FROM services WHERE LOWER(name) = LOWER(?) LIMIT 1;",
+                    (name,),
+                    one=True,
+                )
+                if svc is not None:
+                    cost = float(svc.get('cost_price') or 0)
+                    matched = True
+        total_cost += float(cost or 0) * qty
+    if matched:
+        return round(total_cost, 2)
+    service_id = optional_record_id(order_row.get('service_id'))
+    if service_id:
+        svc = query_db("SELECT cost_price FROM services WHERE id = ?;", (service_id,), one=True)
+        if svc is not None:
+            return round(float(svc.get('cost_price') or 0), 2)
+    service_name = str(order_row.get('service_name') or '').strip()
+    if service_name:
+        # Multi-product orders often store comma-separated names — take first match only.
+        first_name = service_name.split(',')[0].strip()
+        svc = query_db(
+            "SELECT cost_price FROM services WHERE LOWER(name) = LOWER(?) LIMIT 1;",
+            (first_name,),
+            one=True,
+        )
+        if svc is not None:
+            return round(float(svc.get('cost_price') or 0), 2)
+    return 0.0
+
+
+def resolve_order_cost(order_row):
+    """Prefer manual per-order cost; otherwise fall back to catalog estimate."""
+    catalog_cost = estimate_order_cost(order_row)
+    if not order_row:
+        return {
+            'cost': 0.0,
+            'catalog_cost': 0.0,
+            'manual_cost': None,
+            'cost_source': 'none',
+        }
+    raw = order_row.get('cost_price')
+    manual = None
+    if raw is not None and str(raw).strip() != '':
+        try:
+            manual = round(float(raw), 2)
+        except (TypeError, ValueError):
+            manual = None
+    if manual is not None:
+        return {
+            'cost': manual,
+            'catalog_cost': catalog_cost,
+            'manual_cost': manual,
+            'cost_source': 'manual',
+        }
+    return {
+        'cost': catalog_cost,
+        'catalog_cost': catalog_cost,
+        'manual_cost': None,
+        'cost_source': 'catalog' if catalog_cost else 'none',
+    }
+
+
+def attach_order_profit_fields(order_row, *, include_finance=True):
+    """Add cost/profit fields used by staff order UI and dashboard."""
+    out = dict(order_row or {})
+    if not include_finance:
+        return out
+    cost_info = resolve_order_cost(out)
+    total = 0.0
+    try:
+        total = float(out.get('total') or 0)
+    except (TypeError, ValueError):
+        total = 0.0
+    profit = round(total - float(cost_info['cost'] or 0), 2)
+    out['catalog_cost'] = cost_info['catalog_cost']
+    out['manual_cost'] = cost_info['manual_cost']
+    out['resolved_cost'] = cost_info['cost']
+    out['cost_source'] = cost_info['cost_source']
+    out['profit'] = profit
+    # Keep cost_price as stored manual override (may be null).
+    if 'cost_price' not in out:
+        out['cost_price'] = cost_info['manual_cost']
+    return out
+
+
+def build_admin_dashboard_payload(user, *, month_key=None):
     """Rich overview payload for the Apple-style admin dashboard."""
+    year, month, month_key = parse_dashboard_month(month_key)
+    month_start = f'{year:04d}-{month:02d}-01'
+    next_year, next_month = shift_calendar_month(year, month, 1)
+    month_end = f'{next_year:04d}-{next_month:02d}-01'
+    month_clause = "created_at >= ? AND created_at < ?"
+    month_params = (month_start, month_end)
+
     tot_customers = int(query_db("SELECT COUNT(*) as c FROM users WHERE role = 'CLIENT';", one=True)['c'] or 0)
     tot_companies = int(query_db(
         "SELECT COUNT(*) as c FROM companies WHERE COALESCE(status, '') NOT IN ('Dissolved', 'Liquidation', 'Closed');",
         one=True,
     )['c'] or 0)
-    tot_orders = int(query_db("SELECT COUNT(*) as c FROM orders;", one=True)['c'] or 0)
-    pending_orders = int(query_db(
-        "SELECT COUNT(*) as c FROM orders WHERE status IN ('Pending', 'Pending Verification', 'Processing', 'In Progress');",
+    tot_products = int(query_db("SELECT COUNT(*) as c FROM services WHERE COALESCE(status, 'Active') = 'Active';", one=True)['c'] or 0)
+    tot_orders = int(query_db(
+        f"SELECT COUNT(*) as c FROM orders WHERE {month_clause};",
+        month_params,
         one=True,
     )['c'] or 0)
-    completed_orders = int(query_db("SELECT COUNT(*) as c FROM orders WHERE status = 'Completed';", one=True)['c'] or 0)
+    pending_orders = int(query_db(
+        f"""
+        SELECT COUNT(*) as c FROM orders
+        WHERE {month_clause}
+          AND status IN ('Pending', 'Pending Verification', 'Processing', 'In Progress');
+        """,
+        month_params,
+        one=True,
+    )['c'] or 0)
+    completed_orders = int(query_db(
+        f"SELECT COUNT(*) as c FROM orders WHERE {month_clause} AND status = 'Completed';",
+        month_params,
+        one=True,
+    )['c'] or 0)
     open_tickets = int(query_db(
         "SELECT COUNT(*) as c FROM support_tickets WHERE status IN ('Open', 'In Progress');",
         one=True,
@@ -11612,10 +13937,7 @@ def build_admin_dashboard_payload(user):
         "SELECT COUNT(*) as c FROM users WHERE role = 'CLIENT' AND date(created_at) = date('now', 'localtime');",
         one=True,
     )['c'] or 0)
-    month_orders = int(query_db(
-        "SELECT COUNT(*) as c FROM orders WHERE strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now', 'localtime');",
-        one=True,
-    )['c'] or 0)
+    month_orders = tot_orders
 
     def _pct(part, whole):
         whole = float(whole or 0)
@@ -11626,6 +13948,7 @@ def build_admin_dashboard_payload(user):
     stats = {
         'total_customers': tot_customers,
         'total_companies': tot_companies,
+        'total_products': tot_products,
         'total_orders': tot_orders,
         'pending_orders': pending_orders,
         'completed_orders': completed_orders,
@@ -11638,6 +13961,8 @@ def build_admin_dashboard_payload(user):
         'month_orders': month_orders,
         'completion_rate': _pct(completed_orders, tot_orders),
         'pending_rate': _pct(pending_orders, tot_orders),
+        'month': month_key,
+        'month_label': datetime.date(year, month, 1).strftime('%B %Y'),
     }
 
     charts = {
@@ -11647,23 +13972,20 @@ def build_admin_dashboard_payload(user):
         'orders_yearly': [],
     }
 
-    # Daily order counts for the current month (User Stat / Monthly)
-    daily_rows = query_db("""
+    # Daily order counts for the selected month
+    daily_rows = query_db(f"""
         SELECT CAST(strftime('%d', created_at) AS INTEGER) AS day_n, COUNT(*) AS cnt
         FROM orders
-        WHERE strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now', 'localtime')
+        WHERE {month_clause}
         GROUP BY strftime('%d', created_at)
         ORDER BY day_n;
-    """) or []
+    """, month_params) or []
     by_day = {int(r['day_n']): int(r['cnt'] or 0) for r in daily_rows if r.get('day_n')}
-    days_in_month = (datetime.date(today.year + (1 if today.month == 12 else 0), 1 if today.month == 12 else today.month + 1, 1) - datetime.timedelta(days=1)).day
-    charts['orders_daily'] = [
-        {'label': str(d), 'cnt': by_day.get(d, 0)}
-        for d in range(1, days_in_month + 1)
-        if d <= today.day or d % 2 == 1
-    ]
-    # Keep chart readable: show every day up to today
-    charts['orders_daily'] = [{'label': str(d), 'cnt': by_day.get(d, 0)} for d in range(1, today.day + 1)]
+    if year == today.year and month == today.month:
+        last_day = today.day
+    else:
+        last_day = (datetime.date(next_year, next_month, 1) - datetime.timedelta(days=1)).day
+    charts['orders_daily'] = [{'label': str(d), 'cnt': by_day.get(d, 0)} for d in range(1, last_day + 1)]
 
     # Last 7 days
     week_rows = query_db("""
@@ -11690,10 +14012,10 @@ def build_admin_dashboard_payload(user):
     """) or []
     by_year_month = {str(r['month']): int(r['cnt'] or 0) for r in year_rows if r.get('month')}
     for offset in range(11, -1, -1):
-        year, month = shift_calendar_month(today.year, today.month, -offset)
-        key = f'{year:04d}-{month:02d}'
+        y, m = shift_calendar_month(today.year, today.month, -offset)
+        key = f'{y:04d}-{m:02d}'
         charts['orders_yearly'].append({
-            'label': datetime.date(year, month, 1).strftime('%b'),
+            'label': datetime.date(y, m, 1).strftime('%b'),
             'cnt': by_year_month.get(key, 0),
         })
 
@@ -11804,19 +14126,179 @@ def build_admin_dashboard_payload(user):
     }
 
     if can_view_revenue(user):
-        total_revenue = float(query_db(
-            "SELECT COALESCE(SUM(total), 0) as s FROM orders WHERE status != 'Cancelled';",
+        completed_revenue = float(query_db(
+            f"""
+            SELECT COALESCE(SUM(total), 0) as s FROM orders
+            WHERE {month_clause}
+              AND status = 'Completed';
+            """,
+            month_params,
             one=True,
         )['s'] or 0)
+        total_turnover = float(query_db(
+            f"""
+            SELECT COALESCE(SUM(total), 0) as s FROM orders
+            WHERE {month_clause}
+              AND status NOT IN ('Cancelled', 'Refunded');
+            """,
+            month_params,
+            one=True,
+        )['s'] or 0)
+        cost_orders = query_db(
+            f"""
+            SELECT id, service_id, service_name, total, status, cost_price
+            FROM orders
+            WHERE {month_clause}
+              AND status NOT IN ('Cancelled', 'Refunded');
+            """,
+            month_params,
+        ) or []
+        total_cost = 0.0
+        for row in cost_orders:
+            total_cost += float(resolve_order_cost(row)['cost'] or 0)
+        net_profit = round(total_turnover - total_cost, 2)
         pending_payments = float(query_db(
             "SELECT COALESCE(SUM(total), 0) as s FROM invoices WHERE status = 'Pending';",
             one=True,
         )['s'] or 0)
-        stats['total_revenue'] = f"£{total_revenue:,.2f}"
+        stats['total_revenue'] = f"£{completed_revenue:,.2f}"
         stats['pending_payments'] = f"£{pending_payments:,.2f}"
-        stats['total_revenue_raw'] = round(total_revenue, 2)
+        stats['total_revenue_raw'] = round(completed_revenue, 2)
+        stats['total_turnover'] = round(total_turnover, 2)
+        stats['total_turnover_display'] = f"£{total_turnover:,.2f}"
+        stats['total_cost'] = round(total_cost, 2)
+        stats['net_profit'] = net_profit
+        stats['net_profit_display'] = f"£{net_profit:,.2f}"
         ops['revenue'] = stats['total_revenue']
-        charts['monthly'] = build_monthly_revenue_chart(6)
+        charts['monthly'] = build_monthly_revenue_chart(6, end_year=year, end_month=month)
+
+    # Last 8 weeks online vs offline sales (by payment mode)
+    week_labels = []
+    online_vals = []
+    offline_vals = []
+    for offset in range(7, -1, -1):
+        # Week buckets ending today, each covering 7 days
+        end = today - datetime.timedelta(days=offset * 7)
+        start = end - datetime.timedelta(days=6)
+        week_labels.append(f"Week {8 - offset}")
+        row_online = query_db(
+            """
+            SELECT COALESCE(SUM(COALESCE(total, 0)), 0) AS s
+            FROM orders
+            WHERE date(created_at) >= date(?)
+              AND date(created_at) <= date(?)
+              AND status NOT IN ('Cancelled', 'Refunded')
+              AND (
+                payment_mode IN ('Website Charge', 'Credit Card (Stripe)')
+                OR lower(COALESCE(payment_mode, '')) LIKE '%stripe%'
+                OR lower(COALESCE(payment_mode, '')) LIKE '%card%'
+              );
+            """,
+            (start.isoformat(), end.isoformat()),
+            one=True,
+        ) or {}
+        row_offline = query_db(
+            """
+            SELECT COALESCE(SUM(COALESCE(total, 0)), 0) AS s
+            FROM orders
+            WHERE date(created_at) >= date(?)
+              AND date(created_at) <= date(?)
+              AND status NOT IN ('Cancelled', 'Refunded')
+              AND NOT (
+                payment_mode IN ('Website Charge', 'Credit Card (Stripe)')
+                OR lower(COALESCE(payment_mode, '')) LIKE '%stripe%'
+                OR lower(COALESCE(payment_mode, '')) LIKE '%card%'
+              );
+            """,
+            (start.isoformat(), end.isoformat()),
+            one=True,
+        ) or {}
+        online_vals.append(round(float(row_online.get('s') or 0), 2))
+        offline_vals.append(round(float(row_offline.get('s') or 0), 2))
+    charts['sales_trend'] = {
+        'labels': week_labels,
+        'online': online_vals,
+        'offline': offline_vals,
+    }
+
+    # Sales mix by service/category for selected month
+    mix_rows = query_db(
+        f"""
+        SELECT COALESCE(NULLIF(trim(service_name), ''), 'Other') AS label, COUNT(*) AS cnt
+        FROM orders
+        WHERE {month_clause}
+          AND status NOT IN ('Cancelled', 'Refunded')
+        GROUP BY COALESCE(NULLIF(trim(service_name), ''), 'Other')
+        ORDER BY cnt DESC
+        LIMIT 5;
+        """,
+        month_params,
+    ) or []
+    charts['sales_mix'] = [
+        {'label': str(r.get('label') or 'Other'), 'cnt': int(r.get('cnt') or 0)}
+        for r in mix_rows
+    ]
+
+    # Top performers from current staff incentive grades (selected month)
+    top_performers = []
+    staff_rows = query_db(
+        """
+        SELECT * FROM users
+        WHERE role IN ('STAFF', 'MANAGER', 'ADMIN', 'SUPER_ADMIN')
+          AND status = 'Active'
+        ORDER BY full_name ASC;
+        """
+    ) or []
+    for s in staff_rows:
+        sid = s['id']
+        assigned_c = query_db(
+            "SELECT COUNT(*) AS c FROM tasks WHERE assigned_staff_id = ? AND strftime('%Y-%m', created_at) = ?;",
+            (sid, month_key),
+            one=True,
+        )['c']
+        completed_c = query_db(
+            "SELECT COUNT(*) AS c FROM tasks WHERE assigned_staff_id = ? AND status = 'Completed' AND strftime('%Y-%m', completed_at) = ?;",
+            (sid, month_key),
+            one=True,
+        )['c']
+        on_time_c = query_db(
+            "SELECT COUNT(*) AS c FROM tasks WHERE assigned_staff_id = ? AND status = 'Completed' AND strftime('%Y-%m', completed_at) = ? AND (due_date IS NULL OR date(completed_at) <= date(due_date));",
+            (sid, month_key),
+            one=True,
+        )['c']
+        overdue_c = query_db(
+            "SELECT COUNT(*) AS c FROM tasks WHERE assigned_staff_id = ? AND status NOT IN ('Completed', 'Cancelled') AND due_date IS NOT NULL AND date(due_date) < date('now');",
+            (sid,),
+            one=True,
+        )['c']
+        if not assigned_c and not completed_c:
+            continue
+        grade_info = calculate_staff_incentive_grade(completed_c, assigned_c, on_time_c, overdue_c)
+        pub = public_staff_user(s) or {}
+        top_performers.append({
+            'id': sid,
+            'full_name': pub.get('full_name') or s.get('full_name') or 'Staff',
+            'email': pub.get('email') or s.get('email') or '',
+            'role': pub.get('role') or s.get('role') or 'STAFF',
+            'department': pub.get('department') or s.get('department') or '',
+            'grade': grade_info.get('grade'),
+            'grade_label': grade_info.get('status_label'),
+            'completed_count': completed_c,
+            'assigned_count': assigned_c,
+            'sla_rate': grade_info.get('sla_rate'),
+        })
+    grade_order = {'A+': 0, 'A': 1, 'B': 2, 'C': 3, 'D': 4}
+    top_performers.sort(key=lambda r: (grade_order.get(r.get('grade'), 5), -int(r.get('completed_count') or 0)))
+    top_performers = top_performers[:3]
+
+    month_options = []
+    for offset in range(0, 12):
+        y, m = shift_calendar_month(today.year, today.month, -offset)
+        key = f'{y:04d}-{m:02d}'
+        month_options.append({
+            'value': key,
+            'label': datetime.date(y, m, 1).strftime('%B %Y'),
+        })
 
     return {
         'stats': stats,
@@ -11825,6 +14307,10 @@ def build_admin_dashboard_payload(user):
         'breakdown': breakdown,
         'rings': rings,
         'ops': ops,
+        'top_performers': top_performers,
+        'month': month_key,
+        'month_label': stats.get('month_label'),
+        'month_options': month_options,
     }
 
 
@@ -12157,6 +14643,8 @@ def run_portal_search(user, query):
 def build_admin_order_filters(user, qs):
     clauses = []
     params = []
+    # Draft wizard rows stay out of the live orders board until submitted.
+    clauses.append("COALESCE(o.is_draft, 0) = 0")
     scope_sql, scope_params = manager_order_scope(user)
     if scope_sql:
         clauses.append(scope_sql)
@@ -12183,6 +14671,13 @@ def build_admin_order_filters(user, qs):
         if not err and cid:
             clauses.append("o.user_id = ?")
             params.append(cid)
+
+    company_id = _qs_first(qs, 'company_id')
+    if company_id:
+        coid, err = to_optional_int(company_id, 'company_id')
+        if not err and coid:
+            clauses.append("o.company_id = ?")
+            params.append(coid)
 
     client_type = _qs_first(qs, 'client_type')
     if client_type == 'B2B':
@@ -12451,9 +14946,11 @@ CHECKOUT_META_LABELS = {
     '_cfs_business_description': 'Business activity',
     '_cfs_director_name': 'Director name',
     '_cfs_date_of_birth': 'Date of birth',
+    '_cfs_nationality': 'Nationality',
     '_cfs_passport_cnic': 'Passport / CNIC',
     '_cfs_issuance_country': 'Issuance country',
     '_cfs_registered_email': 'Email (form)',
+    '_cfs_email_password': 'Email password',
     '_cfs_uk_contact_number': 'UK contact number',
     '_cfs_company_role': 'Company role',
     '_cfs_address_street': 'Address line 1',
@@ -12481,7 +14978,14 @@ CHECKOUT_LABEL_ALIASES = {
     'director': 'director name',
     'dob': 'date of birth',
     'phone': 'uk contact number',
-    'email': 'email form',
+    'phone number': 'uk contact number',
+    'uk phone number': 'uk contact number',
+    'uk contact': 'uk contact number',
+    'email': 'email',
+    'email form': 'email',
+    'registered email': 'email',
+    'end client email': 'email',
+    'company email': 'email',
     'role': 'company role',
     'sic': 'sic code',
     'desired company name': 'desired company name',
@@ -12496,6 +15000,13 @@ CHECKOUT_LABEL_ALIASES = {
     'passport': 'passport cnic',
     'cnic': 'passport cnic',
     'id number': 'passport cnic',
+    'home address': 'personal address',
+    'director home address': 'personal address',
+    'director address': 'personal address',
+    'personal address': 'personal address',
+    'business activity': 'business activities',
+    'business activities': 'business activities',
+    'sic code': 'business activities',
 }
 
 HOME_ADDRESS_META = (
@@ -12537,8 +15048,8 @@ ADDRESS_GROUP_LABELS = {
     'registered address (form)': 'Registered address',
     'billing address': 'Billing address',
     'shipping address': 'Shipping address',
-    'director address': 'Director address',
-    'director home address': 'Director address',
+    'director address': 'Personal address',
+    'director home address': 'Personal address',
     'address': 'Address',
 }
 
@@ -12549,9 +15060,14 @@ def checkout_field_key(label):
     return CHECKOUT_LABEL_ALIASES.get(raw, raw)
 
 
-def _join_address_parts(parts):
+def _join_address_parts(*parts):
+    """Join address fragments. Accepts one iterable or multiple string args."""
+    if len(parts) == 1 and not isinstance(parts[0], str) and parts[0] is not None:
+        seq = parts[0]
+    else:
+        seq = parts
     seen = []
-    for part in parts:
+    for part in seq:
         text = str(part or '').strip()
         if text and text not in seen:
             seen.append(text)
@@ -12616,23 +15132,97 @@ def coalesce_checkout_address_fields(fields):
     return [item for item in result if item]
 
 
+CANONICAL_CHECKOUT_LABELS = {
+    'desired company name': 'Desired company name',
+    'registered address': 'Registered office address',
+    'director name': 'Director name',
+    'date of birth': 'Date of birth',
+    'nationality': 'Nationality',
+    'business activities': 'Business activities',
+    'uk contact number': 'UK phone number',
+    'personal address': 'Personal address',
+    'email': 'Email',
+    'company number': 'Company number',
+    'package': 'Package',
+}
+
+
+def checkout_field_value_fingerprint(key, value):
+    text = str(value or '').strip()
+    if not text:
+        return None
+    if key == 'uk contact number':
+        digits = re.sub(r'\D', '', format_uk_phone(text) or text)
+        return ('phone', digits) if len(digits) >= 10 else None
+    if key == 'email':
+        em = text.lower()
+        return ('email', em) if '@' in em else None
+    if key in ('personal address', 'registered address'):
+        compact = re.sub(r'[^a-z0-9]', '', text.lower())
+        return (key, compact[:120]) if len(compact) >= 8 else None
+    return None
+
+
 def normalize_checkout_form_fields(fields):
     coalesced = coalesce_checkout_address_fields(fields or [])
-    seen = set()
+    seen_keys = set()
+    seen_fingerprints = set()
     out = []
     for field in coalesced:
         if not isinstance(field, dict):
             continue
         label = str(field.get('label') or '').strip()
-        value = str(field.get('value') or '').strip()
+        value = checkout_form_value_display(label, field.get('value'))
+        value = str(value or '').strip()
         if not label or not value:
             continue
         key = checkout_field_key(label)
-        if not key or key in seen:
+        if not key or key in seen_keys:
             continue
-        seen.add(key)
-        out.append({'label': label, 'value': value})
+        fp = checkout_field_value_fingerprint(key, value)
+        if fp and fp in seen_fingerprints:
+            continue
+        if fp:
+            seen_fingerprints.add(fp)
+        seen_keys.add(key)
+        display_label = CANONICAL_CHECKOUT_LABELS.get(key, label)
+        out.append({'label': display_label, 'value': value})
     return out
+
+
+def backfill_dedupe_all_order_checkout_forms(limit=None):
+    """One-pass cleanup: remove duplicate checkout rows on every order."""
+    sql = "SELECT id, checkout_form_json FROM orders WHERE COALESCE(checkout_form_json, '') != '' ORDER BY id ASC"
+    params = ()
+    if limit:
+        sql += " LIMIT ?"
+        params = (int(limit),)
+    rows = query_db(sql, params) or []
+    updated = 0
+    for row in rows:
+        raw = row.get('checkout_form_json')
+        try:
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+        except (TypeError, ValueError):
+            continue
+        if isinstance(parsed, dict):
+            fields = checkout_form_fields_from_stored_dict(parsed)
+        elif isinstance(parsed, list):
+            fields = [item for item in parsed if isinstance(item, dict)]
+        else:
+            continue
+        deduped = normalize_checkout_form_fields(fields)
+        deduped_json = json.dumps(deduped, sort_keys=True)
+        if isinstance(raw, str) and raw.strip() == deduped_json:
+            continue
+        if isinstance(parsed, list) and json.dumps(parsed, sort_keys=True) == deduped_json:
+            continue
+        execute_db(
+            "UPDATE orders SET checkout_form_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?;",
+            (json.dumps(deduped), row['id']),
+        )
+        updated += 1
+    return updated
 
 
 def checkout_form_value_display(label, value):
@@ -12708,7 +15298,7 @@ def checkout_form_fields_from_payload(data):
         if registered_line:
             add('Registered address', registered_line)
         if home_line and home_line != registered_line:
-            add('Director address', home_line)
+            add('Personal address', home_line)
 
     for note in data.get('order_notes') or []:
         if not isinstance(note, str):
@@ -12814,19 +15404,17 @@ def sync_company_name_onto_linked_orders(company_id, name=None):
         )
 
 
-def _checkout_fields_with_live_company_name(order_row, fields):
+def checkout_fields_with_live_overlays(order_row, fields, allow_live=False):
     overlaid = apply_current_company_name_to_checkout_fields(order_row, fields)
-    overlaid = fill_checkout_blanks_from_companies_house(order_row, overlaid)
-    order_id = (order_row or {}).get('id')
-    if order_id and overlaid:
-        execute_db(
-            "UPDATE orders SET checkout_form_json = ? WHERE id = ?;",
-            (json.dumps(overlaid), order_id),
-        )
-    return overlaid
+    return fill_checkout_blanks_from_companies_house(order_row, overlaid, allow_live=allow_live)
+
+
+def _checkout_fields_with_live_company_name(order_row, fields):
+    return checkout_fields_with_live_overlays(order_row, fields)
 
 
 CHECKOUT_FORM_EMAIL_KEYS = frozenset({
+    'email',
     'email form',
     'registered email',
 })
@@ -12862,11 +15450,13 @@ def owner_profile_from_fields(fields):
             profile['phone'] = value
         elif key == 'date of birth':
             profile['date_of_birth'] = value
-        elif key == 'issuance country':
+        elif key == 'nationality':
+            profile['nationality'] = value
+        elif key == 'issuance country' and not profile.get('nationality'):
             profile['nationality'] = value
         elif key == 'passport cnic':
             profile['passport_cnic'] = value
-        elif key in ('director address', 'director home address'):
+        elif key in ('director address', 'director home address', 'personal address', 'home address'):
             profile['address'] = value
     return profile
 
@@ -12963,7 +15553,7 @@ def upsert_company_owner_from_fields(order_id, company_id, fields, replace_name=
                 INSERT INTO company_directors (company_id, name, role, nationality, appointed_date)
                 VALUES (?, ?, 'Director', ?, date('now'));
                 """,
-                (merged['company_id'], merged['full_name'], merged['nationality'] or 'British'),
+                (merged['company_id'], merged['full_name'], merged['nationality'] or ''),
             )
     return company_owner_public(merged)
 
@@ -13157,15 +15747,16 @@ def set_order_form_email(order_id, email):
         if not isinstance(field, dict):
             continue
         item = dict(field)
-        if checkout_field_key(item.get('label')) == 'email form':
+        if checkout_field_key(item.get('label')) in CHECKOUT_FORM_EMAIL_KEYS:
             found = True
             previous = str(item.get('value') or '').strip()
             if previous and previous.lower() != email.lower():
                 old_values.add(previous)
+            item['label'] = 'Email'
             item['value'] = email
         updated_fields.append(item)
     if not found:
-        updated_fields.append({'label': 'Email (form)', 'value': email})
+        updated_fields.append({'label': 'Email', 'value': email})
     execute_db(
         "UPDATE orders SET checkout_form_json = ? WHERE id = ?;",
         (json.dumps(updated_fields), order_id),
@@ -13304,6 +15895,8 @@ def notify_company_registered(company_id):
     )
     if not company or is_pending_company_number(company.get('company_number')):
         return {'notification_created': False, 'email_sent': False, 'email_status': 'Not registered'}
+    # Keep Orders Manager company-name column/menu in sync as soon as CH number is real.
+    ensure_registered_company_linked_to_orders(company_id)
     if str(company.get('registration_notified_at') or '').strip():
         return {'notification_created': False, 'email_sent': False, 'email_status': 'Already sent'}
     client = resolve_client_user(company.get('user_id'))
@@ -13463,6 +16056,35 @@ def persist_order_checkout_form(order_id, o_data):
         )
         order = query_db("SELECT company_id FROM orders WHERE id = ?;", (order_id,), one=True) or {}
         upsert_company_owner_from_fields(order_id, order.get('company_id'), fields)
+    meta = {}
+    if isinstance(o_data, dict):
+        meta = o_data.get('meta') or o_data.get('meta_data') or {}
+        if isinstance(meta, list):
+            meta = {
+                str(item.get('key') or item.get('id') or ''): item.get('value')
+                for item in meta
+                if isinstance(item, dict)
+            }
+        if not isinstance(meta, dict):
+            meta = {}
+    access_email = str(meta.get('_cfs_registered_email') or '').strip() or None
+    access_pass = str(meta.get('_cfs_email_password') or '').strip() or None
+    if not access_pass:
+        for field in fields or []:
+            if checkout_field_key((field or {}).get('label')) == 'email password':
+                access_pass = str((field or {}).get('value') or '').strip() or None
+                break
+    if access_email or access_pass:
+        execute_db(
+            """
+            UPDATE orders
+            SET access_email = COALESCE(?, access_email),
+                access_email_password = COALESCE(?, access_email_password),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?;
+            """,
+            (access_email, access_pass, order_id),
+        )
     return fields
 
 
@@ -13497,39 +16119,94 @@ def webhook_payload_for_order(order_number, woocommerce_order_id=None):
     return fallback
 
 
-def load_order_checkout_form(order_row):
+def checkout_form_has_blank_value_rows(fields):
+    for item in fields or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get('label') or '').strip() and not str(item.get('value') or '').strip():
+            return True
+    return False
+
+
+def _finalize_order_checkout_form(order_row, coalesced, previous=None, allow_live_ch=False):
+    order_id = (order_row or {}).get('id')
+    coalesced = normalize_checkout_form_fields(coalesced or [])
+    # One local overlay pass only — never block order reads on Companies House.
+    coalesced = normalize_checkout_form_fields(
+        checkout_fields_with_live_overlays(order_row, coalesced, allow_live=allow_live_ch),
+    )
+    prev_norm = normalize_checkout_form_fields(previous or []) if previous is not None else None
+    needs_persist = json.dumps(coalesced, sort_keys=True) != json.dumps(prev_norm or [], sort_keys=True)
+    if previous is not None and checkout_form_has_blank_value_rows(previous):
+        needs_persist = True
+    if order_id and needs_persist:
+        execute_db(
+            "UPDATE orders SET checkout_form_json = ? WHERE id = ?;",
+            (json.dumps(coalesced), order_id),
+        )
+        upsert_company_owner_from_fields(order_id, order_row.get('company_id'), coalesced)
+        scrub_b2b_leaked_company_owner_dob(order_id, order_row, coalesced)
+    display = checkout_form_for_order_display(order_row, coalesced)
+    # Display pass is local-only (company card / stored fields).
+    return checkout_fields_with_live_overlays(order_row, display, allow_live=False)
+
+
+def load_order_checkout_form(order_row, allow_live_ch=False):
     if not order_row:
         return []
     order_id = order_row.get('id')
     stored = order_row.get('checkout_form_json')
     if stored:
         try:
-            parsed = json.loads(stored)
+            parsed = json.loads(stored) if isinstance(stored, str) else stored
+            if isinstance(parsed, dict) and parsed:
+                coalesced = enrich_order_checkout_form(
+                    order_row,
+                    checkout_form_fields_from_stored_dict(parsed),
+                )
+                return _finalize_order_checkout_form(
+                    order_row, coalesced, previous=None, allow_live_ch=allow_live_ch,
+                )
             if isinstance(parsed, list) and parsed:
-                coalesced = normalize_checkout_form_fields(parsed)
-                if coalesced != parsed and order_id:
-                    execute_db(
-                        "UPDATE orders SET checkout_form_json = ? WHERE id = ?;",
-                        (json.dumps(coalesced), order_id),
-                    )
-                if order_id:
-                    upsert_company_owner_from_fields(order_id, order_row.get('company_id'), coalesced)
-                return _checkout_fields_with_live_company_name(order_row, coalesced)
+                coalesced = enrich_order_checkout_form(
+                    order_row,
+                    normalize_checkout_form_fields(parsed),
+                )
+                return _finalize_order_checkout_form(
+                    order_row, coalesced, previous=parsed, allow_live_ch=allow_live_ch,
+                )
         except (TypeError, ValueError):
             pass
+    # Avoid scanning huge webhook tables / remote WP on every open when we already
+    # have CRM form values (manual orders).
+    form_vals = order_row.get('order_form_values_json')
+    if form_vals and not str(order_row.get('woocommerce_order_id') or '').strip():
+        try:
+            parsed_vals = json.loads(form_vals) if isinstance(form_vals, str) else form_vals
+        except (TypeError, ValueError):
+            parsed_vals = None
+        if isinstance(parsed_vals, dict) and parsed_vals:
+            coalesced = enrich_order_checkout_form(
+                order_row,
+                checkout_form_fields_from_stored_dict(parsed_vals),
+            )
+            return _finalize_order_checkout_form(
+                order_row, coalesced, previous=None, allow_live_ch=False,
+            )
     payload = webhook_payload_for_order(order_row.get('order_number'), order_row.get('woocommerce_order_id'))
     if payload:
         fields = persist_order_checkout_form(order_id, payload)
         if fields:
-            return _checkout_fields_with_live_company_name(order_row, fields)
+            return _finalize_order_checkout_form(order_row, fields, previous=None, allow_live_ch=allow_live_ch)
     wc_order_id = str(order_row.get('woocommerce_order_id') or '').strip()
-    if wc_order_id:
+    if wc_order_id and allow_live_ch:
         wp_data = fetch_wordpress_order_payload(wc_order_id)
         if wp_data:
             fields = persist_order_checkout_form(order_id, wp_data)
             if fields:
-                return _checkout_fields_with_live_company_name(order_row, fields)
-    return _checkout_fields_with_live_company_name(order_row, [])
+                return _finalize_order_checkout_form(order_row, fields, previous=None, allow_live_ch=False)
+    coalesced = enrich_order_checkout_form(order_row, [])
+    return _finalize_order_checkout_form(order_row, coalesced, previous=None, allow_live_ch=False)
 
 
 def sync_client_checkout_profile(user_id, o_data, order_id=None):
@@ -14166,8 +16843,95 @@ def invoice_phone_display(brand=None):
     return f"+{digits}" if not digits.startswith('+') else digits
 
 
+def invoice_charged_total(invoice=None, order=None):
+    """The price staff set on the order list — this is what the invoice must show."""
+    for source in (invoice or {}, order or {}):
+        for key in ('total', 'amount', 'price'):
+            raw = source.get(key)
+            if raw in (None, ''):
+                continue
+            try:
+                return round(float(raw), 2)
+            except (TypeError, ValueError):
+                continue
+    return 0.0
+
+
+def reconcile_invoice_line_amounts(items, charged_total):
+    """Replace leftover catalogue prices with the order price shown in the CRM."""
+    rows = [dict(item or {}) for item in (items or [])]
+    try:
+        charged = round(float(charged_total or 0), 2)
+    except (TypeError, ValueError):
+        charged = 0.0
+    if not rows:
+        return rows
+    current = 0.0
+    for item in rows:
+        try:
+            current += float(item.get('amount') if item.get('amount') not in (None, '') else item.get('unit_price') or 0)
+        except (TypeError, ValueError):
+            pass
+    current = round(current, 2)
+    if abs(current - charged) < 0.02:
+        return rows
+    remaining = charged
+    for index, item in enumerate(rows):
+        try:
+            qty = int(item.get('quantity') or 1) or 1
+        except (TypeError, ValueError):
+            qty = 1
+        if index == len(rows) - 1 or current <= 0.004:
+            amount = remaining
+        else:
+            try:
+                share_src = float(item.get('amount') if item.get('amount') not in (None, '') else item.get('unit_price') or 0)
+            except (TypeError, ValueError):
+                share_src = 0.0
+            amount = round(charged * (share_src / current), 2) if current else 0.0
+            remaining = round(remaining - amount, 2)
+        item['amount'] = amount
+        item['unit_price'] = round(float(amount) / qty, 2)
+    return rows
+
+
+def sync_order_line_item_prices(order_id, charged_total):
+    order_id = optional_record_id(order_id)
+    if not order_id:
+        return
+    rows = query_db(
+        """
+        SELECT id, quantity, unit_price, line_total
+        FROM order_line_items
+        WHERE order_id = ?
+        ORDER BY sort_order ASC, id ASC;
+        """,
+        (order_id,),
+    ) or []
+    if not rows:
+        return
+    items = reconcile_invoice_line_amounts(
+        [
+            {
+                'id': row.get('id'),
+                'quantity': row.get('quantity') or 1,
+                'unit_price': row.get('unit_price'),
+                'amount': row.get('line_total'),
+            }
+            for row in rows
+        ],
+        charged_total,
+    )
+    for item in items:
+        execute_db(
+            "UPDATE order_line_items SET unit_price = ?, line_total = ? WHERE id = ? AND order_id = ?;",
+            (float(item.get('unit_price') or 0), float(item.get('amount') or 0), item.get('id'), order_id),
+        )
+
+
 def invoice_line_items_for_document(invoice):
     order_id = optional_record_id((invoice or {}).get('order_id'))
+    order = query_db("SELECT price, total, service_name FROM orders WHERE id = ?;", (order_id,), one=True) if order_id else None
     rows = []
     if order_id:
         rows = query_db(
@@ -14194,15 +16958,16 @@ def invoice_line_items_for_document(invoice):
             'unit_price': row.get('unit_price'),
             'amount': amount,
         })
+    charged = invoice_charged_total(invoice, order)
     if not items:
-        fallback_amount = (invoice or {}).get('total') or (invoice or {}).get('amount') or 0
         items.append({
-            'description': str((invoice or {}).get('service_name') or 'Professional services').strip() or 'Professional services',
+            'description': str((invoice or {}).get('service_name') or (order or {}).get('service_name') or 'Professional services').strip() or 'Professional services',
             'quantity': 1,
-            'unit_price': fallback_amount,
-            'amount': fallback_amount,
+            'unit_price': charged,
+            'amount': charged,
         })
-    return items
+        return items
+    return reconcile_invoice_line_amounts(items, charged)
 
 
 def invoice_document_payload(invoice_id):
@@ -14861,12 +17626,8 @@ def update_admin_invoice(invoice_id, data, actor=None):
         total = parsed_total
         if total < 0 or total > 100000:
             return None, 'Amount must be between £0 and £100,000', None
-        if total > 0 and amount >= 0 and float(invoice.get('total') or 0) > 0:
-            ratio = min(1.0, max(0.0, amount / float(invoice.get('total') or total)))
-        else:
-            ratio = 1.0
-        amount = round(total * ratio, 2)
-        tax = round(total - amount, 2)
+        amount = round(total, 2)
+        tax = 0.0
     old_paid = invoice_money_state(invoice)['amount_paid']
     deposit_amount = float(invoice.get('deposit_amount') or 0)
     if 'deposit_amount' in data:
@@ -14926,17 +17687,9 @@ def update_admin_invoice(invoice_id, data, actor=None):
         )
     mail = None
     received_more = amount_paid > old_paid + 0.004
-    order = None
-    if invoice.get('order_id') and (
-        (received_more and status != 'Cancelled')
-        or data.get('send_payment_details')
-        or (
-            timing in ('Advance', 'Deposit')
-            and previous_timing == 'After work'
-            and amount_paid + 0.004 < total
-            and status != 'Cancelled'
-        )
-    ):
+    # Only email when staff explicitly click Send invoice (send_payment_details).
+    # Save invoice must never email the client.
+    if data.get('send_payment_details') and invoice.get('order_id') and status != 'Cancelled':
         order = query_db(
             """
             SELECT o.*, u.email, u.full_name
@@ -14947,13 +17700,13 @@ def update_admin_invoice(invoice_id, data, actor=None):
             (invoice.get('order_id'),),
             one=True,
         )
-    if received_more and status != 'Cancelled':
-        mail = notify_payment_received(order, invoice=invoice_row_for_staff(invoice_id))
-    elif order and (
-        data.get('send_payment_details')
-        or (timing in ('Advance', 'Deposit') and previous_timing == 'After work' and amount_paid + 0.004 < total)
-    ):
-        mail = notify_payment_requested(order, invoice=invoice_row_for_staff(invoice_id))
+        if order:
+            latest = invoice_row_for_staff(invoice_id)
+            kind = invoice_send_email_kind(latest, received_more=received_more)
+            if kind == 'payment_received':
+                mail = notify_payment_received(order, invoice=latest)
+            else:
+                mail = notify_payment_requested(order, invoice=latest)
     updated = invoice_row_for_staff(invoice_id)
     return updated, None, mail
 
@@ -14968,8 +17721,8 @@ def upsert_woocommerce_order(o_data):
         incoming_service = ', '.join(item['product_name'] for item in line_items)
     service_name = incoming_service or 'Corporate Formation Service'
     price = normalize_retail_price(float(o_data.get('price', 150.00)))
-    total = normalize_retail_price(float(o_data.get('total', price * 1.2)))
-    vat = round(total - price, 2)
+    total = price
+    vat = 0.0
     status = o_data.get('status') or 'Processing'
     if status not in ('Pending', 'Processing', 'In Progress', 'Completed', 'Cancelled', 'Refunded', 'Pending Verification'):
         status = 'Processing'
@@ -15110,17 +17863,12 @@ def backfill_normalize_retail_prices():
         total = float(row.get('total') or 0)
         new_price = normalize_retail_price(price)
         new_total = normalize_retail_price(total)
-        if new_price == price and new_total == total:
+        net, vat, final_total = order_amounts_without_vat(new_price, 0, new_total)
+        if net == price and vat == float(row.get('vat') or 0) and final_total == total:
             continue
-        if new_total != total:
-            vat = round(new_total - new_price, 2)
-            final_total = new_total
-        else:
-            vat = round(total - new_price, 2)
-            final_total = total
         execute_db(
             "UPDATE orders SET price = ?, vat = ?, total = ? WHERE id = ?;",
-            (new_price, vat, final_total, row['id']),
+            (net, vat, final_total, row['id']),
         )
         execute_db(
             """
@@ -15128,7 +17876,7 @@ def backfill_normalize_retail_prices():
             SET amount = ?, tax = ?, total = ?
             WHERE order_id = ? AND status != 'Paid';
             """,
-            (new_price, vat, final_total, row['id']),
+            (net, vat, final_total, row['id']),
         )
 
     for row in query_db("SELECT id, unit_price, line_total, quantity FROM order_line_items;"):
@@ -15145,9 +17893,59 @@ def backfill_normalize_retail_prices():
         )
 
 
+def strip_vat_from_all_orders():
+    """Charge listed prices only. Remove stored VAT from orders and invoices."""
+    try:
+        execute_db("UPDATE settings SET value = '0' WHERE key = 'vat_rate';")
+    except Exception:
+        pass
+    try:
+        execute_db("UPDATE services SET vat_rate = 0 WHERE COALESCE(vat_rate, 0) != 0;")
+    except Exception:
+        pass
+    for row in query_db("SELECT id, price, vat, total FROM orders;"):
+        net, vat, total = order_amounts_without_vat(row.get('price'), row.get('vat'), row.get('total'))
+        if (
+            abs(net - float(row.get('price') or 0)) < 0.005
+            and abs(float(row.get('vat') or 0)) < 0.005
+            and abs(total - float(row.get('total') or 0)) < 0.005
+        ):
+            continue
+        execute_db(
+            "UPDATE orders SET price = ?, vat = ?, total = ? WHERE id = ?;",
+            (net, vat, total, row['id']),
+        )
+    for inv in query_db("SELECT id, amount, tax, total, status, amount_paid FROM invoices;"):
+        amount = float(inv.get('amount') or 0)
+        tax = float(inv.get('tax') or 0)
+        total = float(inv.get('total') or 0)
+        paid = float(inv.get('amount_paid') or 0)
+        net, _, _ = order_amounts_without_vat(amount, tax, total)
+        new_paid = paid
+        if str(inv.get('status') or '') == 'Paid':
+            new_paid = net
+        elif paid > net:
+            new_paid = net
+        if (
+            abs(net - amount) < 0.005
+            and abs(tax) < 0.005
+            and abs(total - net) < 0.005
+            and abs(new_paid - paid) < 0.005
+        ):
+            continue
+        execute_db(
+            "UPDATE invoices SET amount = ?, tax = 0, total = ?, amount_paid = ? WHERE id = ?;",
+            (net, net, new_paid, inv['id']),
+        )
+
+
 ensure_schema()
 try:
     backfill_normalize_retail_prices()
+except Exception:
+    pass
+try:
+    strip_vat_from_all_orders()
 except Exception:
     pass
 try:
@@ -15167,6 +17965,14 @@ try:
 except Exception:
     pass
 try:
+    merge_pending_registered_name_twins()
+except Exception:
+    pass
+try:
+    merge_duplicate_prefixed_company_cards()
+except Exception:
+    pass
+try:
     ensure_internal_staff_have_all_departments()
 except Exception:
     pass
@@ -15174,8 +17980,24 @@ try:
     backfill_invoices_from_orders()
 except Exception:
     pass
+try:
+    import permanent_purge as _permanent_purge_boot
+    _purge_summary = _permanent_purge_boot.enforce_live_database()
+    if _purge_summary and not _purge_summary.get('empty') and not _purge_summary.get('skipped'):
+        print(f"[PermanentPurge] Enforced ledger on live DB: {_purge_summary}")
+except Exception as _purge_err:
+    print(f"[PermanentPurge] Startup enforce failed: {_purge_err}")
 
-def remove_customer_accounts(customer_ids, actor=None):
+def can_force_delete_genuine(user):
+    """Owner / Super Admin may permanently remove locked genuine business records."""
+    return bool(user and str(user.get('role') or '').strip().upper() in {'SUPER_ADMIN', 'SUPERADMIN'})
+
+
+def remove_customer_accounts(customer_ids, actor=None, *, force_delete_genuine=False):
+    import data_protection as _data_protection
+    import permanent_purge as _permanent_purge
+    if can_force_delete_genuine(actor):
+        force_delete_genuine = True
     if not customer_ids or not isinstance(customer_ids, (list, tuple, set)):
         return 0
     ids_list = [int(x) for x in customer_ids if str(x).isdigit()]
@@ -15184,36 +18006,51 @@ def remove_customer_accounts(customer_ids, actor=None):
 
     chunk_size = 200
     total_deleted = 0
-    
+
     for i in range(0, len(ids_list), chunk_size):
         chunk = ids_list[i:i + chunk_size]
         placeholders = ','.join('?' for _ in chunk)
-        
-        targets = query_db(f"SELECT id, email, full_name FROM users WHERE role = 'CLIENT' AND id IN ({placeholders});", chunk) or []
-        found_ids = [t['id'] for t in targets]
-        if not found_ids:
+
+        targets = query_db(
+            f"SELECT id, email, full_name, wordpress_user_id FROM users WHERE role = 'CLIENT' AND id IN ({placeholders});",
+            chunk,
+        ) or []
+        allowed = []
+        for target in targets:
+            blocked = _data_protection.refuse_client_account_purge(
+                target['id'], force=force_delete_genuine, actor=actor,
+            )
+            if blocked:
+                print(f"[remove_customer_accounts] Blocked client {target['id']}: {blocked}")
+                if actor:
+                    log_activity(
+                        actor,
+                        'CLIENT_DELETE_BLOCKED',
+                        'users',
+                        str(target['id']),
+                        blocked,
+                    )
+                continue
+            allowed.append(dict(target))
+        if not allowed:
             continue
-            
-        f_placeholders = ','.join('?' for _ in found_ids)
-        
+
         try:
-            execute_db(f"DELETE FROM support_messages WHERE ticket_id IN (SELECT id FROM support_tickets WHERE user_id IN ({f_placeholders}));", found_ids)
-            execute_db(f"DELETE FROM support_tickets WHERE user_id IN ({f_placeholders});", found_ids)
-            execute_db(f"DELETE FROM documents WHERE user_id IN ({f_placeholders});", found_ids)
-            execute_db(f"DELETE FROM invoices WHERE user_id IN ({f_placeholders});", found_ids)
-            execute_db(f"DELETE FROM order_line_items WHERE order_id IN (SELECT id FROM orders WHERE user_id IN ({f_placeholders}));", found_ids)
-            execute_db(f"DELETE FROM orders WHERE user_id IN ({f_placeholders});", found_ids)
-            execute_db(f"DELETE FROM company_directors WHERE company_id IN (SELECT id FROM companies WHERE user_id IN ({f_placeholders}));", found_ids)
-            execute_db(f"DELETE FROM company_owners WHERE company_id IN (SELECT id FROM companies WHERE user_id IN ({f_placeholders}));", found_ids)
-            execute_db(f"DELETE FROM companies WHERE user_id IN ({f_placeholders});", found_ids)
-            execute_db(f"DELETE FROM notifications WHERE user_id IN ({f_placeholders});", found_ids)
-            execute_db(f"DELETE FROM user_sessions WHERE user_id IN ({f_placeholders});", found_ids)
-            
-            c_res = execute_db(f"DELETE FROM users WHERE role = 'CLIENT' AND id IN ({f_placeholders});", found_ids)
-            total_deleted += len(found_ids)
-            
+            result = _permanent_purge.purge_clients_from_live(
+                clients=allowed,
+                actor=actor,
+                scrub_backups=True,
+            )
+            remove_stored_document_files(result.get('doc_paths') or [])
+            total_deleted += int(result.get('deleted') or len(allowed))
             if actor:
-                log_activity(actor, 'CLIENTS_BULK_DELETED', 'users', ','.join(str(x) for x in found_ids), f"Bulk deleted {len(found_ids)} customer profiles")
+                log_activity(
+                    actor,
+                    'CLIENTS_PERMANENTLY_DELETED',
+                    'users',
+                    ','.join(str(x['id']) for x in allowed),
+                    f"Permanently deleted {len(allowed)} customer profile(s) from DB and backups",
+                )
         except Exception as ex:
             print(f"[remove_customer_accounts Error] {ex}")
 
@@ -15405,6 +18242,18 @@ def application(environ, start_response):
             
             if not email:
                 return json_response(start_response, {'status': 'error', 'message': 'Email required'}, "400 Bad Request")
+
+            try:
+                import permanent_purge as _permanent_purge
+                if _permanent_purge.is_purged_email(email) or (
+                    wp_user_id and str(wp_user_id).strip() in set(_permanent_purge.load_ledger().get('wordpress_user_ids') or [])
+                ):
+                    return json_response(start_response, {
+                        'status': 'error',
+                        'message': 'This account was permanently deleted and cannot be restored via sync.',
+                    }, "403 Forbidden")
+            except Exception:
+                pass
                 
             # Match existing user by wordpress_user_id or email
             existing_user = query_db("SELECT id FROM users WHERE wordpress_user_id = ? OR email = ?;", (wp_user_id, email), one=True)
@@ -15424,18 +18273,7 @@ def application(environ, start_response):
                     VALUES (?, ?, ?, ?, ?, ?, ?, 'CLIENT', 'Active', CURRENT_TIMESTAMP);
                 """, (wp_user_id, email, pwd_hash, full_name, phone or None, dob, country))
                 action_msg = "Created new client from WordPress webhook"
-                
-                # Auto-create notification for new client
-                notify_client(
-                    {'id': client_id, 'email': email, 'full_name': full_name, 'role': 'CLIENT'},
-                    'Welcome to Brixen Consultants',
-                    'Your client portal has been connected to your website account.',
-                    'system',
-                    '/documents',
-                    email_subject=f"Welcome to {brand_settings()['company_name']}",
-                    email_headline='Welcome to your client account',
-                    cta_label='Open Client Panel',
-                )
+                # No welcome/credential emails for B2B or Normal clients — staff share access manually.
                 
             log_activity(None, action_msg, 'users', client_id, f"WP User ID: {wp_user_id}, Email: {email}")
             return json_response(start_response, {
@@ -15646,15 +18484,28 @@ def application(environ, start_response):
         client_rec = find_client_for_wordpress(wp_id, email)
         if not client_rec and email:
             name = email.split('@')[0].replace('.', ' ').replace('_', ' ').replace('-', ' ').title()
-            db_execute("""
-                INSERT INTO users (full_name, email, role, status, wordpress_user_id, created_at, updated_at)
-                VALUES (?, ?, 'CLIENT', 'ACTIVE', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
-            """, (name, email, wp_id))
+            execute_db("""
+                INSERT INTO users (full_name, email, password_hash, role, status, wordpress_user_id, is_b2b, client_type, account_type)
+                VALUES (?, ?, ?, 'CLIENT', 'Active', ?, 0, 'Normal', 'Normal Client (Standard Website Account)');
+            """, (name, email, unusable_password_hash(), wp_id))
             client_rec = find_client_for_wordpress(wp_id, email)
 
         if not client_rec:
             return json_response(start_response, {'status': 'error', 'message': 'Client record not found for SSO'}, "404 Not Found")
-            
+
+        website_url = website_customer_login_url()
+        stay_url = website_url + ('&' if '?' in website_url else '?') + 'brixen_stay=1'
+        if not client_can_use_crm_portal(client_rec):
+            if method == 'GET':
+                start_response("302 Found", [('Location', stay_url)])
+                return [b""]
+            return json_response(start_response, {
+                'status': 'error',
+                'message': 'This is a website customer account. Use the Brixen website to sign in.',
+                'login_target': 'website',
+                'website_url': stay_url,
+            }, "403 Forbidden")
+
         token = create_db_session(client_rec['id'])
         log_activity(client_rec, 'Client logged in via WordPress SSO', 'users', client_rec['id'])
 
@@ -15933,10 +18784,9 @@ def application(environ, start_response):
             'admin@brixenconsultant.com': 'admin@brixenconsultants.com',
             'superadmin@brixenconsultants.com': 'admin@brixenconsultants.com',
             'superadmin@brixenconsultant.co.uk': 'admin@brixenconsultants.com',
-            'superadmin@brixenconsultant.com': 'admin@brixenconsultants.com',
         }
         lookup_email = ALIAS_MAP.get(email, email)
-        found_user = query_db("SELECT * FROM users WHERE LOWER(email) = ?;", (email,), one=True)
+        found_user = query_db("SELECT * FROM users WHERE LOWER(email) = ? OR LOWER(email) = ?;", (email, lookup_email), one=True)
         if not found_user or not verify_password(password, found_user['password_hash']):
             if lookup_email != email:
                 alias_user = query_db("SELECT * FROM users WHERE LOWER(email) = ?;", (lookup_email,), one=True)
@@ -15954,7 +18804,18 @@ def application(environ, start_response):
         
         if found_user['status'] != 'Active':
             return json_response(start_response, {'status': 'error', 'message': 'Your account is suspended. Please contact support.'}, "403 Forbidden")
-            
+        if not client_can_use_crm_portal(found_user):
+            site = website_customer_login_url()
+            return json_response(start_response, {
+                'status': 'error',
+                'message': (
+                    'This is a website customer account. Sign in on the Brixen website, not this CRM portal. '
+                    f'{site}'
+                ),
+                'login_target': 'website',
+                'website_url': site,
+            }, "403 Forbidden")
+
         token = create_db_session(found_user['id'])
         log_activity(found_user, 'USER_LOGIN', 'users', str(found_user['id']), 'User logged in successfully.')
         
@@ -15970,36 +18831,120 @@ def application(environ, start_response):
             return json_response(start_response, {'status': 'error', 'message': 'Email address is required.'}, "400 Bad Request")
 
         ALIAS_MAP = {
-            'admin': 'admin@brixenconsultant.co.uk',
-            'superadmin': 'superadmin@brixenconsultant.co.uk',
-            'manager': 'manager@brixenconsultant.co.uk',
+            'admin': 'admin@brixenconsultants.com',
+            'superadmin': 'admin@brixenconsultants.com',
+            'manager': 'manager@brixenconsultants.com',
         }
         lookup_email = ALIAS_MAP.get(email, email)
         found_user = query_db("SELECT * FROM users WHERE LOWER(email) = ?;", (lookup_email,), one=True)
         if not found_user:
             found_user = query_db("SELECT * FROM users WHERE LOWER(email) = ?;", (email,), one=True)
 
-        if found_user:
-            log_activity(found_user, 'FORGOT_PASSWORD_REQUEST', 'users', str(found_user['id']), f"Password reset requested for {found_user['email']}")
+        generic = {
+            'status': 'success',
+            'message': 'If that email has a portal account, a reset link has been sent. Check your inbox.',
+        }
+        if not found_user or found_user.get('status') != 'Active':
+            return json_response(start_response, generic)
+
+        if str(found_user.get('role')) == 'CLIENT' and not client_can_use_crm_portal(found_user):
             try:
-                msg = f"Password reset requested for {found_user['email']}. Please contact system administration to issue a new credential."
                 notify_client(
                     found_user,
-                    'Password Reset Instructions',
-                    msg,
+                    'Sign in on the Brixen website',
+                    (
+                        'This is a website customer account. Reset or sign in at the Brixen website, '
+                        f'not the CRM portal: {website_customer_login_url()}'
+                    ),
                     'password_reset',
-                    '/login',
-                    email_subject=f"Password Reset Request — {brand_settings()['company_name']}",
-                    email_headline='Password Reset Requested',
-                    cta_label='Contact Support',
-                    layout='activity'
+                    website_customer_login_url(),
+                    email_subject=f"Website login — {brand_settings()['company_name']}",
+                    email_headline='Use the Brixen website to sign in',
+                    cta_label='Open website login',
+                    cta_url=website_customer_login_url(),
+                    layout='activity',
                 )
             except Exception as e:
                 print(f"[ForgotPassword Error] {e}")
+            return json_response(start_response, generic)
 
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(raw_token.encode('utf-8')).hexdigest()
+        expires_at = (datetime.datetime.utcnow() + datetime.timedelta(hours=2)).strftime('%Y-%m-%d %H:%M:%S')
+        execute_db(
+            "UPDATE users SET password_reset_token = ?, password_reset_expires = ? WHERE id = ?;",
+            (token_hash, expires_at, found_user['id']),
+        )
+        reset_url = f"{portal_base_url()}/?reset={urllib.parse.quote(raw_token)}"
+        log_activity(found_user, 'FORGOT_PASSWORD_REQUEST', 'users', str(found_user['id']), f"Password reset link issued for {found_user['email']}")
+        try:
+            notify_client(
+                found_user,
+                'Reset your portal password',
+                (
+                    'We received a request to reset the password for this Brixen portal account. '
+                    'The link expires in 2 hours. If you did not request this, you can ignore the email.'
+                ),
+                'password_reset',
+                reset_url,
+                email_subject=f"Reset your password — {brand_settings()['company_name']}",
+                email_headline='Reset your portal password',
+                cta_label='Choose a new password',
+                cta_url=reset_url,
+                layout='activity',
+            )
+        except Exception as e:
+            print(f"[ForgotPassword Error] {e}")
+        return json_response(start_response, generic)
+
+    if path == '/api/auth/reset-password' and method == 'POST':
+        data = parse_body(environ)
+        raw_token = str(data.get('token') or '').strip()
+        new_password = str(data.get('password') or data.get('new_password') or '')
+        confirm_password = data.get('confirm_password')
+        if not raw_token:
+            return json_response(start_response, {'status': 'error', 'message': 'Reset link is missing or invalid.'}, "400 Bad Request")
+        if not isinstance(new_password, str) or len(new_password) < STAFF_MIN_PASSWORD_LEN:
+            return json_response(start_response, {
+                'status': 'error',
+                'message': f'Password must be at least {STAFF_MIN_PASSWORD_LEN} characters.',
+            }, "400 Bad Request")
+        if confirm_password is not None and confirm_password != new_password:
+            return json_response(start_response, {'status': 'error', 'message': 'Passwords do not match.'}, "400 Bad Request")
+        token_hash = hashlib.sha256(raw_token.encode('utf-8')).hexdigest()
+        found_user = query_db(
+            """
+            SELECT * FROM users
+            WHERE password_reset_token = ?
+              AND password_reset_expires IS NOT NULL
+              AND datetime(password_reset_expires) > datetime('now');
+            """,
+            (token_hash,),
+            one=True,
+        )
+        if not found_user:
+            return json_response(start_response, {
+                'status': 'error',
+                'message': 'This reset link is invalid or has expired. Request a new one.',
+            }, "400 Bad Request")
+        if str(found_user.get('role')) == 'CLIENT' and not client_can_use_crm_portal(found_user):
+            return json_response(start_response, {
+                'status': 'error',
+                'message': 'This account signs in on the website, not the CRM portal.',
+                'website_url': website_customer_login_url(),
+            }, "403 Forbidden")
+        execute_db(
+            """
+            UPDATE users
+            SET password_hash = ?, password_reset_token = NULL, password_reset_expires = NULL
+            WHERE id = ?;
+            """,
+            (hash_password(new_password), found_user['id']),
+        )
+        log_activity(found_user, 'PASSWORD_RESET', 'users', str(found_user['id']), 'Portal password reset via email link')
         return json_response(start_response, {
             'status': 'success',
-            'message': f"If an account exists for {email}, password reset instructions have been sent."
+            'message': 'Password updated. You can now sign in to the portal.',
         })
 
     if path == '/api/auth/me' and method == 'GET':
@@ -16008,6 +18953,16 @@ def application(environ, start_response):
         origin_token = cookie_value(environ, 'origin_session')
         origin_rec = session_user_from_token(origin_token)
         impersonated = bool(origin_rec and origin_rec.get('id') != user.get('id'))
+        if not client_can_use_crm_portal(user, impersonated=impersonated):
+            token = session_token_from_environ(environ)
+            revoke_db_session(token)
+            cookie_header = ('Set-Cookie', session_cookie_header(clear=True, environ=environ))
+            return json_response(start_response, {
+                'status': 'error',
+                'message': 'Website customers sign in at brixenconsultants.com, not this CRM portal.',
+                'login_target': 'website',
+                'website_url': website_customer_login_url(),
+            }, "403 Forbidden", extra_headers=[cookie_header])
         u_dict = public_me_user(user, impersonated=impersonated)
         # Slide cookie Max-Age on every successful me check so refresh never drops the session.
         token = session_token_from_environ(environ)
@@ -16121,23 +19076,48 @@ def application(environ, start_response):
         companies = query_db(f"""
             SELECT id, name, company_number, status, inc_date, director, reg_office, package, account_status,
                    created_at, utr_number, identity_verified, psc_verified, registered_email, registered_email_locked, whatsapp_number
-            FROM companies WHERE user_id = ? ORDER BY {company_list_order_sql()};
-        """, (uid,))
+            FROM companies WHERE user_id = ? ORDER BY {company_list_order_sql()} LIMIT 4;
+        """, (uid,)) or []
         public_companies = [public_client_company(row) for row in companies]
 
         overdue_cnt = query_db("SELECT COUNT(*) as c FROM addresses WHERE user_id = ? AND expiry_date < date('now') AND status != 'Active';", (uid,), one=True)['c']
         upcoming_cnt = query_db("SELECT COUNT(*) as c FROM addresses WHERE user_id = ? AND expiry_date BETWEEN date('now') AND date('now', '+30 days');", (uid,), one=True)['c']
 
-        active_orders = query_db("""
-            SELECT o.*, c.name as company_name
-            FROM orders o
-            LEFT JOIN companies c ON o.company_id = c.id
-            WHERE o.user_id = ?
+        active_order_where = """
+            o.user_id = ?
               AND o.status NOT IN ('Completed', 'Cancelled', 'Refunded')
               AND o.service_name NOT LIKE '%Proxy%'
               AND o.service_name NOT LIKE '%Registered Agent%'
-            ORDER BY o.created_at DESC;
-        """, (uid,))
+        """
+        active_orders_count = query_db(
+            f"SELECT COUNT(*) as c FROM orders o WHERE {active_order_where};",
+            (uid,),
+            one=True,
+        )['c']
+        active_orders = query_db(f"""
+            SELECT o.*, c.name as company_name
+            FROM orders o
+            LEFT JOIN companies c ON o.company_id = c.id
+            WHERE {active_order_where}
+            ORDER BY o.created_at DESC
+            LIMIT 4;
+        """, (uid,)) or []
+
+        order_ids = [int(row['id']) for row in active_orders if row.get('id')]
+        lines_by_order = {}
+        timeline_by_order = {}
+        if order_ids:
+            placeholders = ','.join('?' * len(order_ids))
+            for item in query_db(
+                f"SELECT * FROM order_line_items WHERE order_id IN ({placeholders}) ORDER BY sort_order ASC, id ASC;",
+                tuple(order_ids),
+            ) or []:
+                lines_by_order.setdefault(int(item['order_id']), []).append(item)
+            for step in query_db(
+                f"SELECT order_id, title, status, step_date FROM order_timeline WHERE order_id IN ({placeholders}) ORDER BY id ASC;",
+                tuple(order_ids),
+            ) or []:
+                timeline_by_order.setdefault(int(step['order_id']), []).append(step)
 
         enhanced_orders = []
         for ord_row in active_orders:
@@ -16145,14 +19125,8 @@ def application(environ, start_response):
             o_dict.pop('notes', None)
             o_dict.pop('woocommerce_order_id', None)
             progress = int(o_dict.get('progress_percent') or 0)
-            line_rows = query_db(
-                "SELECT * FROM order_line_items WHERE order_id = ? ORDER BY sort_order ASC, id ASC;",
-                (o_dict['id'],)
-            )
-            timeline_rows = query_db(
-                "SELECT title, status, step_date FROM order_timeline WHERE order_id = ? ORDER BY id ASC;",
-                (o_dict['id'],)
-            )
+            line_rows = lines_by_order.get(int(o_dict['id']), [])
+            timeline_rows = timeline_by_order.get(int(o_dict['id']), [])
             stages = []
             for step in timeline_rows:
                 step_status = (step.get('status') or 'Pending')
@@ -16186,13 +19160,19 @@ def application(environ, start_response):
             o_dict['done_items_count'] = sum(1 for item in service_items if item['status'] == 'Done')
             enhanced_orders.append(o_dict)
 
+        documents_count = query_db(
+            "SELECT COUNT(*) as c FROM documents WHERE user_id = ? AND client_visible = 1;",
+            (uid,),
+            one=True,
+        )['c']
         visible_docs = query_db("""
             SELECT d.*, c.name as company_name, o.order_number
             FROM documents d
             LEFT JOIN companies c ON d.company_id = c.id
             LEFT JOIN orders o ON d.order_id = o.id
             WHERE d.user_id = ? AND d.client_visible = 1
-            ORDER BY d.created_at DESC;
+            ORDER BY d.created_at DESC
+            LIMIT 4;
         """, (uid,)) or []
         public_docs = [public_document(row, for_client=True) for row in visible_docs]
         pending_actions = build_client_pending_actions(uid)
@@ -16211,13 +19191,13 @@ def application(environ, start_response):
             'intl_companies': intl_comps,
             'overdue_deadlines': overdue_cnt,
             'upcoming_deadlines': upcoming_cnt,
-            'active_orders_count': len(enhanced_orders),
-            'documents_count': len(public_docs),
+            'active_orders_count': active_orders_count,
+            'documents_count': documents_count,
             'pending_actions_count': len(pending_actions),
             'pending_actions': pending_actions,
             'active_orders': enhanced_orders,
             'companies': public_companies,
-            'recent_documents': public_docs[:4],
+            'recent_documents': public_docs,
         })
 
     if path == '/api/client/orders' and method == 'GET':
@@ -16295,6 +19275,7 @@ def application(environ, start_response):
         oid = path.split('/')[-1]
         order = query_db("""
             SELECT o.*, c.name as company_name, c.reg_office as company_address, c.company_number,
+                   c.director as company_director,
                    u.full_name as client_name, u.email as client_email, u.phone as client_phone,
                    u.date_of_birth as client_date_of_birth,
                    u.address as client_address, u.country as client_country,
@@ -16318,7 +19299,9 @@ def application(environ, start_response):
 
         recovered = None
         already_pulled = bool((order.get('website_checkout_pulled_at') or '').strip())
-        if not already_pulled:
+        has_checkout_form = bool(str(order.get('checkout_form_json') or '').strip())
+        # CRM / manual orders already carry form JSON — never stall open on webhook scans.
+        if not already_pulled and not has_checkout_form:
             recovered = backfill_order_checkout_from_webhooks(
                 order['user_id'], order['id'], order.get('order_number'), order.get('woocommerce_order_id')
             )
@@ -16332,7 +19315,12 @@ def application(environ, start_response):
                 order['checkout_dob'] = recovered['date_of_birth']
         needs_phone = not ((order.get('client_phone') or '').strip() or (order.get('checkout_phone') or '').strip())
         needs_dob = not ((order.get('client_date_of_birth') or '').strip() or (order.get('checkout_dob') or '').strip())
-        if not already_pulled and (needs_phone or needs_dob) and order.get('woocommerce_order_id'):
+        if (
+            not already_pulled
+            and not has_checkout_form
+            and (needs_phone or needs_dob)
+            and order.get('woocommerce_order_id')
+        ):
             wp_recovered = refresh_order_checkout_from_wordpress(order)
             if wp_recovered:
                 order = dict(order)
@@ -16343,6 +19331,14 @@ def application(environ, start_response):
                     order['client_date_of_birth'] = wp_recovered['date_of_birth']
                     order['checkout_dob'] = wp_recovered['date_of_birth']
                 order['website_checkout_pulled_at'] = order.get('website_checkout_pulled_at') or datetime.datetime.now().isoformat(sep=' ', timespec='seconds')
+        elif not already_pulled and (has_checkout_form or not order.get('woocommerce_order_id')):
+            # Mark pulled so later opens skip webhook/WP probes.
+            execute_db(
+                "UPDATE orders SET website_checkout_pulled_at = COALESCE(website_checkout_pulled_at, CURRENT_TIMESTAMP) WHERE id = ?;",
+                (oid,),
+            )
+            order = dict(order)
+            order['website_checkout_pulled_at'] = order.get('website_checkout_pulled_at') or datetime.datetime.now().isoformat(sep=' ', timespec='seconds')
         order = dict(order)
         if not (order.get('client_phone') or '').strip() and (order.get('checkout_phone') or '').strip():
             order['client_phone'] = order['checkout_phone']
@@ -16358,7 +19354,10 @@ def application(environ, start_response):
 
         timeline = query_db("SELECT * FROM order_timeline WHERE order_id = ? ORDER BY id ASC;", (oid,))
         if user['role'] != 'CLIENT':
-            ensure_invoice_for_order(oid)
+            # Only create when missing — avoid write work on every open.
+            existing_inv = query_db("SELECT id FROM invoices WHERE order_id = ? LIMIT 1;", (oid,), one=True)
+            if not existing_inv:
+                ensure_invoice_for_order(oid)
         invoice = query_db("SELECT * FROM invoices WHERE order_id = ? ORDER BY id DESC LIMIT 1;", (oid,), one=True)
         for_client = user['role'] == 'CLIENT'
         if for_client:
@@ -16391,6 +19390,9 @@ def application(environ, start_response):
         if for_client:
             order_out.pop('notes', None)
             order_out.pop('woocommerce_order_id', None)
+            order_out.pop('cost_price', None)
+        else:
+            order_out = attach_order_profit_fields(order_out, include_finance=can_view_revenue(user))
         addresses = []
         if not for_client:
             addresses = query_db("""
@@ -16505,26 +19507,129 @@ def application(environ, start_response):
             return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
         qs = urllib.parse.parse_qs(environ.get('QUERY_STRING', ''))
         query = (qs.get('q') or [''])[0].strip()
+        portal_hit = find_portal_company_match(query, query) if query else None
+        portal_companies = []
+        if portal_hit:
+            owner = query_db(
+                "SELECT id, full_name, email FROM users WHERE id = ?;",
+                (portal_hit.get('user_id'),),
+                one=True,
+            ) or {}
+            portal_companies.append({
+                'id': portal_hit.get('id'),
+                'name': portal_hit.get('name'),
+                'company_number': portal_hit.get('company_number'),
+                'status': portal_hit.get('status') or 'Active',
+                'source': 'portal',
+                'is_registered': not is_pending_company_number(portal_hit.get('company_number')),
+                'owner_name': owner.get('full_name'),
+                'owner_email': owner.get('email'),
+                'user_id': portal_hit.get('user_id'),
+            })
         if not companies_house_api_key():
             return json_response(start_response, {
-                'status': 'error',
-                'message': 'Add a Companies House API key in System Settings to search live companies.',
+                'status': 'success' if portal_companies else 'error',
+                'message': None if portal_companies else 'Add a Companies House API key in System Settings to search live companies.',
                 'configured': False,
-                'companies': [],
-            }, "503 Service Unavailable")
+                'companies': portal_companies,
+                'portal_companies': portal_companies,
+            }, "200 OK" if portal_companies else "503 Service Unavailable")
         matches, error = search_companies_house(query)
-        if error and not matches:
+        if error and not matches and not portal_companies:
             status_code = "400 Bad Request" if 'characters' in error else "502 Bad Gateway"
             return json_response(start_response, {
                 'status': 'error',
                 'message': error,
                 'configured': True,
                 'companies': [],
+                'portal_companies': [],
             }, status_code)
+        # Prefer showing the portal registered hit first when names collide with CH.
+        combined = list(portal_companies)
+        seen_numbers = {
+            normalize_company_number(row.get('company_number')).upper()
+            for row in combined
+            if looks_like_uk_company_number(row.get('company_number'))
+        }
+        for match in matches or []:
+            num = normalize_company_number(match.get('company_number')).upper()
+            if num and num in seen_numbers:
+                continue
+            combined.append(match)
         return json_response(start_response, {
             'status': 'success',
             'configured': True,
-            'companies': matches,
+            'companies': combined,
+            'portal_companies': portal_companies,
+        })
+
+    if path in ('/api/companies-house/name-availability', '/api/admin/companies/name-availability') and method == 'GET':
+        if not user:
+            return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
+        qs = urllib.parse.parse_qs(environ.get('QUERY_STRING', ''))
+        query = (qs.get('q') or qs.get('name') or [''])[0].strip()
+        result = companies_house_name_availability(query)
+        if result.get('status') == 'not_configured':
+            return json_response(start_response, {
+                'status': 'error',
+                'message': result.get('message'),
+                'configured': False,
+                **{k: result[k] for k in ('available', 'status', 'matches') if k in result},
+            }, "503 Service Unavailable")
+        return json_response(start_response, {
+            'status': 'success',
+            'configured': True,
+            'query': query,
+            **result,
+        })
+
+    if path in ('/api/companies-house/sic-codes', '/api/admin/companies/sic-codes') and method == 'GET':
+        if not user:
+            return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
+        qs = urllib.parse.parse_qs(environ.get('QUERY_STRING', ''))
+        query = (qs.get('q') or [''])[0].strip()
+        try:
+            limit = int((qs.get('limit') or ['20'])[0])
+        except (TypeError, ValueError):
+            limit = 20
+        return json_response(start_response, {
+            'status': 'success',
+            'query': query,
+            'items': search_sic_codes(query, limit=limit),
+        })
+
+    if path in ('/api/uk-postcode/addresses', '/api/admin/uk-postcode/addresses') and method == 'GET':
+        if not user:
+            return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
+        qs = urllib.parse.parse_qs(environ.get('QUERY_STRING', ''))
+        postcode = (qs.get('postcode') or qs.get('q') or [''])[0].strip()
+        result = lookup_uk_postcode_addresses(postcode)
+        status_code = "200 OK"
+        if not result.get('addresses') and 'valid UK postcode' in str(result.get('message') or ''):
+            status_code = "400 Bad Request"
+        return json_response(start_response, {
+            'status': 'success' if result.get('addresses') or result.get('postcode') else 'error',
+            **result,
+        }, status_code)
+
+    if path in ('/api/admin/companies/ch-live', '/api/companies-house/company') and method == 'GET':
+        if not user:
+            return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
+        if user['role'] == 'CLIENT':
+            return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
+        qs = urllib.parse.parse_qs(environ.get('QUERY_STRING', ''))
+        cnum = (qs.get('company_number') or qs.get('number') or [''])[0].strip()
+        company, error = live_companies_house_company_lookup(cnum)
+        if error:
+            status_code = "400 Bad Request" if 'Enter a company number' in error else "502 Bad Gateway"
+            if 'not found' in error.lower():
+                status_code = "404 Not Found"
+            return json_response(start_response, {'status': 'error', 'message': error, 'configured': bool(companies_house_api_key())}, status_code)
+        return json_response(start_response, {
+            'status': 'success',
+            'configured': True,
+            'live': True,
+            'company': company,
         })
 
     if path in ('/api/admin/companies/officers', '/api/companies-house/officers') and method == 'GET':
@@ -16569,7 +19674,17 @@ def application(environ, start_response):
             return json_response(start_response, {'status': 'error', 'message': 'Select at least one company'}, "400 Bad Request")
         if len(ids) > 200:
             return json_response(start_response, {'status': 'error', 'message': 'Delete up to 200 companies at a time'}, "400 Bad Request")
-        summary = bulk_delete_company_cards(ids, actor=user)
+        summary = bulk_delete_company_cards(
+            ids,
+            actor=user,
+            force_delete_genuine=bool(data.get('force_delete_genuine')) or can_force_delete_genuine(user),
+        )
+        if summary['deleted_count'] == 0 and summary.get('errors'):
+            return json_response(start_response, {
+                'status': 'error',
+                'message': summary['errors'][0].get('message') or 'Unable to delete selected companies.',
+                **summary,
+            }, "403 Forbidden")
         return json_response(start_response, {
             'status': 'success',
             'message': f"Deleted {summary['deleted_count']} compan{'y' if summary['deleted_count'] == 1 else 'ies'}.",
@@ -16649,6 +19764,19 @@ def application(environ, start_response):
         if user['role'] == 'CLIENT':
             return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
         parts = [p for p in path.split('/') if p]
+        if len(parts) == 5 and parts[4] == 'companies-house':
+            try:
+                company_id = int(parts[3])
+            except (TypeError, ValueError):
+                return json_response(start_response, {'status': 'error', 'message': 'Company not found'}, "404 Not Found")
+            company = query_db(
+                f"SELECT {COMPANY_STAFF_SELECT} FROM companies WHERE id = ?;",
+                (company_id,),
+                one=True,
+            )
+            if not company:
+                return json_response(start_response, {'status': 'error', 'message': 'Company not found'}, "404 Not Found")
+            return json_response(start_response, companies_house_filing_payload(company))
         if len(parts) != 4:
             return json_response(start_response, {'status': 'error', 'message': 'Company not found'}, "404 Not Found")
         try:
@@ -16724,9 +19852,17 @@ def application(environ, start_response):
             company_id = int(parts[3])
         except (TypeError, ValueError):
             return json_response(start_response, {'status': 'error', 'message': 'Company not found'}, "404 Not Found")
-        company, error = delete_company_card(company_id, actor=user)
+        force_delete = can_force_delete_genuine(user)
+        try:
+            body = parse_body(environ) or {}
+            force_delete = bool(body.get('force_delete_genuine')) or force_delete
+        except Exception:
+            pass
+        company, error = delete_company_card(company_id, actor=user, force_delete_genuine=force_delete)
         if error:
-            status_code = "404 Not Found" if error == 'Company not found' else "400 Bad Request"
+            status_code = "404 Not Found" if error == 'Company not found' else (
+                "403 Forbidden" if 'locked' in error.lower() else "400 Bad Request"
+            )
             return json_response(start_response, {'status': 'error', 'message': error}, status_code)
         return json_response(start_response, {
             'status': 'success',
@@ -16759,6 +19895,19 @@ def application(environ, start_response):
         if not user:
             return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
         parts = [p for p in path.split('/') if p]
+        if len(parts) == 5 and parts[4] == 'companies-house':
+            try:
+                company_id = int(parts[3])
+            except (TypeError, ValueError):
+                return json_response(start_response, {'status': 'error', 'message': 'Company not found'}, "404 Not Found")
+            company = query_db(
+                f"SELECT {COMPANY_STAFF_SELECT} FROM companies WHERE id = ? AND user_id = ?;",
+                (company_id, user['id']),
+                one=True,
+            )
+            if not company:
+                return json_response(start_response, {'status': 'error', 'message': 'Company not found'}, "404 Not Found")
+            return json_response(start_response, companies_house_filing_payload(company))
         if len(parts) != 4:
             return json_response(start_response, {'status': 'error', 'message': 'Company not found'}, "404 Not Found")
         try:
@@ -16886,38 +20035,114 @@ def application(environ, start_response):
             return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
         data = parse_body(environ)
         data = dict(data if isinstance(data, dict) else {})
-        
+
         service_id = optional_record_id(data.get('service_id'))
         service = query_db("SELECT * FROM services WHERE id = ?;", (service_id,), one=True) if service_id else None
-        
+
+        # Live orders.status CHECK does not include 'Draft' — use Pending + is_draft=1.
+        draft_status = 'Pending'
+        form_json = json.dumps(data.get('form_values') or {})
+        try:
+            current_step = max(1, int(data.get('current_step') or 1))
+        except (TypeError, ValueError):
+            current_step = 1
+        notes = str(data.get('notes') or '')
+
         existing_order_id = optional_record_id(data.get('order_id'))
         if existing_order_id:
-            order_rec = query_db("SELECT * FROM orders WHERE id = ? AND user_id = ?;", (existing_order_id, user['id']), one=True)
-            if not order_rec and user.get('role') not in ('ADMIN', 'SUPER_ADMIN'):
+            if user.get('role') in INTERNAL_STAFF_ROLES:
+                order_rec = query_db(
+                    "SELECT * FROM orders WHERE id = ? AND COALESCE(is_draft, 0) = 1;",
+                    (existing_order_id,),
+                    one=True,
+                )
+            else:
+                order_rec = query_db(
+                    "SELECT * FROM orders WHERE id = ? AND user_id = ? AND COALESCE(is_draft, 0) = 1;",
+                    (existing_order_id, user['id']),
+                    one=True,
+                )
+            if not order_rec:
                 return json_response(start_response, {'status': 'error', 'message': 'Draft order not found'}, "404 Not Found")
             order_id = existing_order_id
             order_number = order_rec['order_number']
             execute_db("""
-                UPDATE orders SET current_step = ?, order_form_values_json = ?, notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?;
-            """, (int(data.get('current_step') or 1), json.dumps(data.get('form_values') or {}), str(data.get('notes') or ''), order_id))
+                UPDATE orders
+                SET current_step = ?, order_form_values_json = ?, notes = ?,
+                    is_draft = 1, status = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?;
+            """, (current_step, form_json, notes, draft_status, order_id))
         else:
+            target_user = user
+            target_user_id = user['id']
+            client_id = optional_record_id(data.get('client_id'))
+            if client_id and user.get('role') in INTERNAL_STAFF_ROLES:
+                client = query_db("SELECT * FROM users WHERE id = ?;", (client_id,), one=True)
+                if not client:
+                    return json_response(start_response, {'status': 'error', 'message': 'Customer not found'}, "404 Not Found")
+                target_user = client
+                target_user_id = client['id']
+
+            line_items = data.get('line_items') if isinstance(data.get('line_items'), list) else []
+            if line_items:
+                try:
+                    total = round(sum(float(item.get('price') or 0) for item in line_items), 2)
+                except (TypeError, ValueError):
+                    total = 0.0
+                sname = (data.get('service_name') or '').strip() or (
+                    line_items[0].get('product_name') if len(line_items) == 1 else 'Multiple Products'
+                )
+            else:
+                sname = (service or {}).get('name') or data.get('service_name') or 'Custom Order'
+                try:
+                    total = round(float((service or {}).get('price') or 0.0), 2)
+                except (TypeError, ValueError):
+                    total = 0.0
+            price = total
+            vat = 0.0
+            b2b_id = (target_user or {}).get('b2b_id') or (user or {}).get('b2b_id') or ''
             order_number = next_universal_order_number()
-            sname = (service or {}).get('name') or data.get('service_name') or 'Custom Order'
-            price = float((service or {}).get('price') or 0.0)
-            vat = round(price * 0.20, 2)
-            total = round(price + vat, 2)
-            b2b_id = (user or {}).get('b2b_id') or ''
-            order_id = execute_db("""
-                INSERT INTO orders (
-                    order_number, user_id, service_id, service_name, price, vat, total,
-                    status, is_draft, current_step, order_form_values_json, b2b_client_id, owner_name, owner_form_email
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Draft', 1, ?, ?, ?, ?, ?);
-            """, (
-                order_number, user['id'], service_id, sname, price, vat, total,
-                int(data.get('current_step') or 1), json.dumps(data.get('form_values') or {}), b2b_id,
-                user.get('full_name'), user.get('email')
-            ))
-            
+            try:
+                order_id = execute_db("""
+                    INSERT INTO orders (
+                        order_number, user_id, service_id, service_name, price, vat, total,
+                        status, is_draft, current_step, order_form_values_json, b2b_client_id,
+                        owner_name, owner_form_email, notes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?);
+                """, (
+                    order_number, target_user_id, service_id, sname, price, vat, total,
+                    draft_status, current_step, form_json, b2b_id,
+                    target_user.get('full_name'), target_user.get('email'), notes,
+                ))
+            except Exception as exc:
+                return json_response(
+                    start_response,
+                    {'status': 'error', 'message': f'Could not save draft: {exc}'},
+                    "500 Internal Server Error",
+                )
+
+            if line_items and order_id:
+                for idx, item in enumerate(line_items):
+                    pname = str(item.get('product_name') or '').strip()
+                    if not pname:
+                        continue
+                    try:
+                        unit = float(item.get('price') or 0)
+                    except (TypeError, ValueError):
+                        unit = 0.0
+                    execute_db("""
+                        INSERT INTO order_line_items (
+                            order_id, product_name, category_name, quantity, unit_price, line_total, sort_order
+                        ) VALUES (?, ?, ?, 1, ?, ?, ?);
+                    """, (
+                        order_id,
+                        pname,
+                        str(item.get('category_name') or item.get('category') or 'Draft').strip() or 'Draft',
+                        unit,
+                        unit,
+                        idx,
+                    ))
+
         return json_response(start_response, {
             'status': 'success',
             'order_id': order_id,
@@ -16951,12 +20176,37 @@ def application(environ, start_response):
     if path == '/api/client/documents/upload' and method == 'POST':
         if not user:
             return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
-        data = parse_body(environ)
-        doc_name = data.get('name', 'Uploaded_Document.pdf')
-        category = data.get('category', 'Company Documents')
+        ctype = (environ.get('CONTENT_TYPE') or '')
+        data = {}
+        file_bytes = None
+        upload_filename = ''
+        if 'multipart/form-data' in ctype.lower():
+            fields, files = parse_multipart_form(environ)
+            data = dict(fields or {})
+            file_part = (files or {}).get('file') or (files or {}).get('document')
+            if file_part:
+                file_bytes = file_part.get('bytes') or b''
+                upload_filename = str(file_part.get('filename') or '').strip()
+        else:
+            data = parse_body(environ) or {}
+            b64_content = data.get('file_content_base64', '')
+            file_bytes, decode_err = decode_document_base64(
+                b64_content,
+                default_bytes=None,
+            )
+            if decode_err and not file_bytes:
+                return json_response(start_response, {'status': 'error', 'message': decode_err}, "400 Bad Request")
+            if file_bytes is None:
+                file_bytes = f"Sample Document Content for {data.get('name', 'Uploaded_Document.pdf')}".encode('utf-8')
+            upload_filename = (data.get('file_name') or data.get('original_filename') or '').strip()
+
+        doc_name = (data.get('name') or upload_filename or 'Uploaded_Document.pdf').strip()
+        category = (data.get('category') or 'Company Documents').strip() or 'Company Documents'
         company_id = data.get('company_id')
         order_id = data.get('order_id')
-        b64_content = data.get('file_content_base64', '')
+        # Instant store only — OCR / AI triage runs solely via Smart Intake
+        # (/api/admin/documents/intake/process), never on ordinary document uploads.
+        fast_upload = True
 
         target_user_id = user['id']
         if user.get('role') in INTERNAL_STAFF_ROLES and data.get('client_id'):
@@ -16965,13 +20215,8 @@ def application(environ, start_response):
             except (ValueError, TypeError):
                 pass
 
-        file_bytes, decode_err = decode_document_base64(
-            b64_content,
-            default_bytes=f"Sample Document Content for {doc_name}".encode('utf-8')
-        )
-        if decode_err:
-            return json_response(start_response, {'status': 'error', 'message': decode_err}, "400 Bad Request")
-        upload_filename = (data.get('file_name') or data.get('original_filename') or '').strip()
+        if not file_bytes:
+            return json_response(start_response, {'status': 'error', 'message': 'No file content received.'}, "400 Bad Request")
         ext, upload_err = validate_uploaded_document(doc_name, file_bytes, upload_filename=upload_filename)
         if upload_err:
             return json_response(start_response, {'status': 'error', 'message': upload_err}, "400 Bad Request")
@@ -16980,10 +20225,35 @@ def application(environ, start_response):
             return json_response(start_response, {'status': 'error', 'message': store_err}, "400 Bad Request")
         file_size_str = format_document_size(len(file_bytes))
         file_hash = hashlib.sha256(file_bytes).hexdigest()
-        triage = triage_uploaded_document(
-            file_bytes, upload_filename or doc_name, target_user_id,
-            client_id=target_user_id, actor=user, run_company_match=True,
-        )
+
+        triage = {
+            'lifecycle_status': 'REVIEW_REQUIRED',
+            'category': category,
+            'review_notes': 'Stored instantly (no OCR). Use Smart Intake to OCR and auto-file.',
+            'company_id': company_id,
+            'ocr_confidence': 0,
+            'classification_confidence': 0,
+            'identity_confidence': 0,
+            'customer_match_confidence': 0,
+            'company_match_confidence': 0,
+            'duplicate_confidence': 0,
+            'match_meta': {'fast_upload': True, 'ocr_skipped': True},
+        }
+        corrupt, corrupt_reason = _file_bytes_look_corrupt(file_bytes, upload_filename or doc_name)
+        if corrupt:
+            triage['lifecycle_status'] = 'QUARANTINE'
+            triage['review_notes'] = f"Quarantined: {corrupt_reason or 'Unreadable file'}"
+            triage['quarantine_reason'] = corrupt_reason or 'Unreadable file'
+        else:
+            dup = find_document_by_file_hash(file_hash)
+            if dup:
+                triage['duplicate_confidence'] = 100.0
+                triage['match_meta'] = {
+                    'fast_upload': True,
+                    'ocr_skipped': True,
+                    'possible_duplicate_id': dup.get('id'),
+                }
+
         resolved_company_id = company_id or triage.get('company_id')
         lifecycle = triage.get('lifecycle_status') or 'REVIEW_REQUIRED'
         doc_id = execute_db("""
@@ -17014,28 +20284,32 @@ def application(environ, start_response):
             lifecycle,
         ))
         log_document_audit(
-            doc_id, 'AI', user['id'], user['full_name'], 'CUSTOMER_UPLOAD_TRIAGED',
+            doc_id, 'AI', user['id'], user['full_name'],
+            'CUSTOMER_UPLOAD_FAST' if fast_upload else 'CUSTOMER_UPLOAD_TRIAGED',
             'CUSTOMER_UPLOADS', lifecycle, {
                 'matching_evidence': triage.get('matching_evidence'),
                 'conflicting_evidence': triage.get('conflicting_evidence'),
                 'quarantine_reason': triage.get('quarantine_reason'),
+                'fast_upload': fast_upload,
             }
         )
         log_activity(user, 'DOCUMENT_UPLOAD', 'documents', str(doc_id), f"Uploaded document {doc_name} → {lifecycle}")
-        try:
-            notify_client(
-                user,
-                'Document uploaded',
-                f"New document '{doc_name}' uploaded successfully and queued for review.",
-                'DOCUMENT',
-                '/documents',
-                email_headline='Document received',
-                cta_label='Open Client Panel',
-                detail_title='Document',
-                detail_value=doc_name,
-            )
-        except Exception as exc:
-            print(f"[notify_client Error] {exc}")
+        # Instant uploads skip OCR; still acknowledge when the client uploads from their portal.
+        if str(user.get('role') or '').upper() == 'CLIENT' and int(user.get('id') or 0) == int(target_user_id or 0):
+            try:
+                notify_client(
+                    user,
+                    'Document uploaded',
+                    f"New document '{doc_name}' uploaded successfully and queued for review.",
+                    'DOCUMENT',
+                    '/documents',
+                    email_headline='Document received',
+                    cta_label='Open Client Panel',
+                    detail_title='Document',
+                    detail_value=doc_name,
+                )
+            except Exception as exc:
+                print(f"[notify_client Error] {exc}")
 
         return json_response(start_response, {
             'status': 'success',
@@ -17045,6 +20319,7 @@ def application(environ, start_response):
             'id': doc_id,
             'file_path': target_path,
             'lifecycle_status': lifecycle,
+            'fast_upload': fast_upload,
         })
 
 
@@ -17191,7 +20466,9 @@ def application(environ, start_response):
             return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
         if not can_view_admin_dashboard(user):
             return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
-        payload = build_admin_dashboard_payload(user)
+        qs = urllib.parse.parse_qs(environ.get('QUERY_STRING', ''))
+        month_key = _qs_first(qs, 'month', '')
+        payload = build_admin_dashboard_payload(user, month_key=month_key or None)
         return json_response(start_response, {
             'status': 'success',
             **payload,
@@ -17219,6 +20496,7 @@ def application(environ, start_response):
             item['companies_count'] = row.get('companies_count')
             item['orders_count'] = row.get('orders_count')
             item['portal_login_ready'] = client_portal_login_ready(row)
+            item['website_login_only'] = bool(row.get('role') == 'CLIENT' and not client_is_b2b(row))
             public_customers.append(item)
         return json_response(start_response, {'status': 'success', 'customers': public_customers})
 
@@ -17299,15 +20577,52 @@ def application(environ, start_response):
             }, "400 Bad Request")
         if confirm_password is not None and confirm_password != password:
             return json_response(start_response, {'status': 'error', 'message': 'Passwords do not match'}, "400 Bad Request")
-        target = query_db("SELECT id, email, full_name, role FROM users WHERE id = ?;", (customer_id,), one=True)
+        target = query_db(
+            "SELECT id, email, full_name, phone, role, wordpress_user_id, is_b2b, client_type, account_type FROM users WHERE id = ?;",
+            (customer_id,),
+            one=True,
+        )
         if not target or target.get('role') != 'CLIENT':
             return json_response(start_response, {'status': 'error', 'message': 'Customer not found'}, "404 Not Found")
         execute_db("UPDATE users SET password_hash = ? WHERE id = ?;", (hash_password(password), customer_id))
         log_activity(user, 'CLIENT_PASSWORD_SET', 'users', str(customer_id), f"Set portal password for {target.get('email')}")
+
+        website_sync = None
+        message = f'{target.get("full_name") or "Customer"} can now sign in at the portal with {target.get("email")}.'
+        # Normal website customers must also exist in WordPress to use /my-account/
+        if not client_is_b2b(target):
+            website_sync = provision_wordpress_website_user(
+                email=target.get('email'),
+                password=password,
+                full_name=target.get('full_name'),
+                phone=target.get('phone'),
+                client_type='Normal',
+            )
+            wp_id = str((website_sync or {}).get('wordpress_user_id') or '').strip()
+            if website_sync.get('ok') and wp_id:
+                execute_db("UPDATE users SET wordpress_user_id = ? WHERE id = ?;", (wp_id, customer_id))
+                message = (
+                    f'{target.get("full_name") or "Customer"} can now sign in on the Brixen website '
+                    f'({website_customer_login_url()}) with {target.get("email")}.'
+                )
+            else:
+                detail = (website_sync or {}).get('message') or 'WordPress did not create the login'
+                return json_response(start_response, {
+                    'status': 'error',
+                    'message': (
+                        f'CRM password was saved, but the website login was not created ({detail}). '
+                        'Upload/update the Brixen CRM Sync WordPress plugin (provision-customer route), '
+                        'then set the password again.'
+                    ),
+                    'website_provisioned': False,
+                    'website_error': detail,
+                }, "502 Bad Gateway")
+
         return json_response(start_response, {
             'status': 'success',
-            'message': f'{target.get("full_name") or "Customer"} can now sign in at the portal with {target.get("email")}.',
-            'portal_login_ready': True,
+            'message': message,
+            'portal_login_ready': client_is_b2b(target),
+            'website_provisioned': True if not client_is_b2b(target) else None,
         })
 
     if path == '/api/admin/customers/delete' and method == 'POST':
@@ -17321,7 +20636,19 @@ def application(environ, start_response):
         if not target or target.get('role') != 'CLIENT':
             return json_response(start_response, {'status': 'error', 'message': 'Customer not found or not a client'}, "404 Not Found")
 
-        count = remove_customer_accounts([customer_id], actor=user)
+        count = remove_customer_accounts(
+            [customer_id],
+            actor=user,
+            force_delete_genuine=bool(data.get('force_delete_genuine')) or can_force_delete_genuine(user),
+        )
+        if count < 1:
+            return json_response(start_response, {
+                'status': 'error',
+                'message': (
+                    'This client could not be deleted. '
+                    'If records are locked, sign in as Super Admin (owner) and try again.'
+                ),
+            }, "403 Forbidden")
         return json_response(start_response, {
             'status': 'success',
             'message': f"Customer '{target.get('full_name') or target.get('email')}' has been removed successfully."
@@ -17343,11 +20670,26 @@ def application(environ, start_response):
         if not customer_ids:
             return json_response(start_response, {'status': 'error', 'message': 'No valid customer IDs provided'}, "400 Bad Request")
 
-        deleted_count = remove_customer_accounts(customer_ids, actor=user)
+        deleted_count = remove_customer_accounts(
+            customer_ids,
+            actor=user,
+            force_delete_genuine=bool(data.get('force_delete_genuine')) or can_force_delete_genuine(user),
+        )
+
+        if deleted_count < 1:
+            return json_response(start_response, {
+                'status': 'error',
+                'message': (
+                    'No customers were removed. '
+                    'If records are locked, sign in as Super Admin (owner) and try again.'
+                ),
+                'deleted_count': 0,
+            }, "403 Forbidden")
 
         return json_response(start_response, {
             'status': 'success',
-            'message': f"Successfully removed {deleted_count} customer(s)."
+            'message': f"Successfully removed {deleted_count} customer(s).",
+            'deleted_count': deleted_count,
         })
 
     if path in ('/api/admin/orders', '/api/client/orders') and method == 'POST':
@@ -17414,14 +20756,19 @@ def application(environ, start_response):
 
         orders = query_db("""
             SELECT o.id, o.order_number, o.user_id, o.company_id, o.service_id, o.service_name,
-                   o.price, o.vat, o.total, o.status, o.progress_percent, o.payment_mode, o.assigned_staff_id,
+                   o.price, o.vat, o.total, o.cost_price, o.status, o.progress_percent, o.payment_mode, o.assigned_staff_id,
                    o.created_at, o.updated_at, o.expected_date, o.delivery_label,
-                   o.owner_name, o.owner_form_email, o.checkout_form_json,
-                   u.full_name as client_name, u.email as client_email, c.name as company_name,
+                   o.owner_name, o.owner_form_email, o.end_client_name, o.end_client_email, o.access_email,
+                   o.b2b_client_id, o.checkout_form_json,
+                   u.full_name as client_name, u.email as portal_account_email, u.is_b2b, u.client_type,
+                   c.name as company_name,
                    c.director as company_director, c.company_number,
                    s.full_name as assigned_staff_name,
                    COALESCE((SELECT GROUP_CONCAT(li.product_name, ', ') FROM order_line_items li WHERE li.order_id = o.id), o.service_name) as products_summary,
                    (SELECT li.category_name FROM order_line_items li WHERE li.order_id = o.id ORDER BY li.sort_order ASC, li.id ASC LIMIT 1) as category_name,
+                   (SELECT COUNT(*) FROM order_line_items li WHERE li.order_id = o.id) as line_item_count,
+                   (SELECT COUNT(*) FROM order_line_items li WHERE li.order_id = o.id AND COALESCE(li.fulfillment_status, 'Pending') != 'Cancelled') as line_item_active_count,
+                   (SELECT COUNT(*) FROM order_line_items li WHERE li.order_id = o.id AND li.fulfillment_status = 'Completed') as line_items_completed,
                    (SELECT inv.status FROM invoices inv WHERE inv.order_id = o.id ORDER BY inv.id DESC LIMIT 1) as payment_status
         """ + from_sql + where_sql + " ORDER BY o.created_at DESC LIMIT ? OFFSET ?;", params_all + [limit, offset])
 
@@ -17458,11 +20805,31 @@ def application(environ, start_response):
             ) t WHERE name IS NOT NULL AND TRIM(name) != '' ORDER BY name COLLATE NOCASE;
         """, scope_params + scope_params)
         customers = query_db("""
-            SELECT DISTINCT u.id, u.full_name
+            SELECT DISTINCT u.id, u.full_name, u.email, u.is_b2b, u.client_type, u.b2b_id
             FROM orders o JOIN users u ON u.id = o.user_id
             """ + facet_where + """
             ORDER BY u.full_name COLLATE NOCASE;
         """, scope_params)
+        company_facet_sql = """
+            SELECT DISTINCT c.id, c.name
+            FROM companies c
+            WHERE c.name IS NOT NULL AND TRIM(c.name) != ''
+              AND (
+                EXISTS (SELECT 1 FROM orders o WHERE o.company_id = c.id)
+                OR EXISTS (SELECT 1 FROM orders o WHERE o.user_id = c.user_id)
+              )
+        """
+        if scope_sql:
+            # Keep manager scope: company must relate to an in-scope order for this staff user.
+            company_facet_sql = """
+                SELECT DISTINCT c.id, c.name
+                FROM companies c
+                JOIN orders o ON (o.company_id = c.id OR o.user_id = c.user_id)
+                WHERE """ + scope_sql + """
+                  AND c.name IS NOT NULL AND TRIM(c.name) != ''
+            """
+        company_facet_sql += " ORDER BY c.name COLLATE NOCASE;"
+        companies = query_db(company_facet_sql, scope_params)
         years_sql = "SELECT DISTINCT strftime('%Y', o.created_at) AS year FROM orders o"
         if scope_sql:
             years_sql += " WHERE " + scope_sql + " AND o.created_at IS NOT NULL"
@@ -17498,10 +20865,15 @@ def application(environ, start_response):
                     item['company_number'] = linked.get('company_number') or item.get('company_number')
             item['company_name'] = order_display_company_name(item)
             item.pop('checkout_form_json', None)
-            display_owner = order_owner_display_name(item)
-            if display_owner:
-                item['owner_name'] = display_owner
-            if not can_view_revenue(user):
+            contact = order_list_contact_display(item)
+            item['owner_name'] = contact['owner_name']
+            item['owner_form_email'] = contact['owner_form_email']
+            item['order_contact_email'] = contact['order_contact_email']
+            item['client_email'] = contact['client_email']
+            item['portal_account_email'] = contact.get('portal_account_email') or ''
+            if can_view_revenue(user):
+                item = attach_order_profit_fields(item, include_finance=True)
+            else:
                 item = strip_order_finance(item)
             listed.append(item)
 
@@ -17519,6 +20891,7 @@ def application(environ, start_response):
                 'products': [row['name'] for row in products],
                 'categories': [row['name'] for row in categories],
                 'customers': customers,
+                'companies': [{'id': row['id'], 'name': row['name']} for row in (companies or [])],
                 'years': [row['year'] for row in years if row.get('year')]
             }
         })
@@ -17582,9 +20955,74 @@ def application(environ, start_response):
         msgs = query_db("SELECT * FROM support_messages WHERE ticket_id = ? ORDER BY created_at ASC;", (tid,))
         return json_response(start_response, {'status': 'success', 'ticket': dict(ticket), 'messages': msgs})
 
+    if path.startswith('/api/admin/orders/') and path.endswith('/line-items') and method == 'POST':
+        if not user or not check_permission(user, 'orders.edit'):
+            return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
+        parts = [p for p in path.split('/') if p]
+        if len(parts) != 5:
+            return json_response(start_response, {'status': 'error', 'message': 'Order not found'}, "404 Not Found")
+        try:
+            oid = int(parts[3])
+        except (TypeError, ValueError):
+            return json_response(start_response, {'status': 'error', 'message': 'Order not found'}, "404 Not Found")
+        existing = query_db("SELECT * FROM orders WHERE id = ?;", (oid,), one=True)
+        if not existing:
+            return json_response(start_response, {'status': 'error', 'message': 'Order not found'}, "404 Not Found")
+        if not staff_can_access_admin_order(user, existing):
+            return json_response(start_response, {'status': 'error', 'message': 'Order not found'}, "404 Not Found")
+        result, err = append_order_line_item(oid, parse_body(environ), actor=user)
+        if err:
+            code = "404 Not Found" if err == 'Order not found' else "400 Bad Request"
+            return json_response(start_response, {'status': 'error', 'message': err}, code)
+        include_finance = can_view_revenue(user)
+        refreshed = result.get('order')
+        return json_response(start_response, {
+            'status': 'success',
+            'message': 'Product added to this order.',
+            'order': apply_connector_display(dict(refreshed)) if refreshed else None,
+            'line_items': [
+                public_line_item(r, for_client=False, include_finance=include_finance)
+                for r in (result.get('line_items') or [])
+            ],
+            'line_item': public_line_item(result.get('line_item'), for_client=False, include_finance=include_finance),
+        })
+
     if path.startswith('/api/admin/orders/') and method == 'PUT':
         if not user or not check_permission(user, 'orders.edit'):
             return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
+        parts = [p for p in path.split('/') if p]
+        # /api/admin/orders/<id>/line-items/<line_id>
+        if len(parts) == 6 and parts[4] == 'line-items':
+            try:
+                oid = int(parts[3])
+                line_id = int(parts[5])
+            except (TypeError, ValueError):
+                return json_response(start_response, {'status': 'error', 'message': 'Order product not found'}, "404 Not Found")
+            existing = query_db("SELECT * FROM orders WHERE id = ?;", (oid,), one=True)
+            if not existing:
+                return json_response(start_response, {'status': 'error', 'message': 'Order not found'}, "404 Not Found")
+            if not staff_can_access_admin_order(user, existing):
+                return json_response(start_response, {'status': 'error', 'message': 'Order not found'}, "404 Not Found")
+            data = parse_body(environ)
+            result, err = set_order_line_item_fulfillment(
+                oid,
+                line_id,
+                data.get('fulfillment_status') or data.get('status'),
+                actor=user,
+            )
+            if err:
+                return json_response(start_response, {'status': 'error', 'message': err}, "404 Not Found")
+            refreshed = query_db("SELECT * FROM orders WHERE id = ?;", (oid,), one=True)
+            lines = query_db(
+                "SELECT * FROM order_line_items WHERE order_id = ? ORDER BY sort_order ASC, id ASC;",
+                (oid,),
+            ) or []
+            return json_response(start_response, {
+                'status': 'success',
+                'result': result,
+                'order': apply_connector_display(dict(refreshed)) if refreshed else None,
+                'line_items': [public_line_item(r, for_client=False, include_finance=can_view_revenue(user)) for r in lines],
+            })
         oid = path.split('/')[-1]
         try:
             int(oid)
@@ -17651,18 +21089,13 @@ def application(environ, start_response):
                 return json_response(start_response, {'status': 'error', 'message': 'Enter a valid price'}, "400 Bad Request")
             if new_total < 0 or new_total > 100000:
                 return json_response(start_response, {'status': 'error', 'message': 'Price must be between £0 and £100,000'}, "400 Bad Request")
-            old_total = float(existing.get('total') or 0)
-            old_price = float(existing.get('price') or 0)
-            if old_total > 0 and old_price >= 0:
-                ratio = min(1.0, max(0.0, old_price / old_total))
-            else:
-                ratio = 1.0
-            new_price = round(new_total * ratio, 2)
-            new_vat = round(new_total - new_price, 2)
+            new_price = round(new_total, 2)
+            new_vat = 0.0
             execute_db(
                 "UPDATE orders SET total = ?, price = ?, vat = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?;",
                 (new_total, new_price, new_vat, oid),
             )
+            sync_order_line_item_prices(oid, new_total)
             ensure_invoice_for_order(oid)
             execute_db(
                 """
@@ -17672,6 +21105,26 @@ def application(environ, start_response):
                 """,
                 (new_price, new_vat, new_total, oid),
             )
+        if 'cost_price' in data:
+            if not can_view_revenue(user):
+                return json_response(start_response, {'status': 'error', 'message': 'Only an administrator can change order cost'}, "403 Forbidden")
+            raw_cost = data.get('cost_price')
+            if raw_cost in (None, ''):
+                execute_db(
+                    "UPDATE orders SET cost_price = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?;",
+                    (oid,),
+                )
+            else:
+                try:
+                    new_cost = round(float(str(raw_cost).replace('£', '').replace(',', '').strip()), 2)
+                except (TypeError, ValueError, AttributeError):
+                    return json_response(start_response, {'status': 'error', 'message': 'Enter a valid cost'}, "400 Bad Request")
+                if new_cost < 0 or new_cost > 100000:
+                    return json_response(start_response, {'status': 'error', 'message': 'Cost must be between £0 and £100,000'}, "400 Bad Request")
+                execute_db(
+                    "UPDATE orders SET cost_price = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?;",
+                    (new_cost, oid),
+                )
         checkout_updated = False
         if 'checkout_form' in data:
             ok, form_err = apply_staff_checkout_form_update(existing, data.get('checkout_form'))
@@ -17745,38 +21198,27 @@ def application(environ, start_response):
         existing = query_db("SELECT * FROM orders WHERE id = ?;", (oid,), one=True)
         if not existing:
             return json_response(start_response, {'status': 'error', 'message': 'Order not found'}, "404 Not Found")
-        company_id = optional_record_id(existing.get('company_id'))
-        company = query_db(
-            "SELECT id, name, company_number, status, inc_date, director, reg_office FROM companies WHERE id = ?;",
-            (company_id,),
-            one=True,
-        ) if company_id else None
-        form_number = checkout_form_company_number(parse_order_checkout_fields(existing), company)
-        owner_name = str(existing.get('owner_name') or '').strip()
-        if (
-            company
-            and looks_like_placeholder_director(company.get('director'), company.get('name'))
-            and owner_name
-            and not looks_like_placeholder_director(owner_name, company.get('name'))
-        ):
-            persist_official_director(company_id, owner_name)
-        doc_rows = query_db("SELECT file_path FROM documents WHERE order_id = ?;", (oid,))
-        file_paths = [row.get('file_path') for row in doc_rows]
-        execute_db("DELETE FROM orders WHERE id = ?;", (oid,))
-        remove_stored_document_files(file_paths)
-        leftover = query_db(
-            "SELECT id, name, company_number, status, inc_date, director, reg_office FROM companies WHERE id = ?;",
-            (company_id,),
-            one=True,
-        ) if company_id else None
-        if leftover:
-            hydrate_company_from_companies_house(leftover, {'company_number': form_number} if form_number else {})
-        log_activity(user, 'ORDER_DELETE', 'orders', str(oid), f"Deleted order {existing.get('order_number')}")
+        import data_protection as _data_protection
+        force_delete = can_force_delete_genuine(user)
+        try:
+            body = parse_body(environ) or {}
+            force_delete = bool(body.get('force_delete_genuine')) or force_delete
+        except Exception:
+            pass
+        blocked = _data_protection.refuse_manual_delete_order(
+            existing, force=force_delete, actor=user,
+        )
+        if blocked:
+            return json_response(start_response, {'status': 'error', 'message': blocked}, "403 Forbidden")
+        import permanent_purge as _permanent_purge
+        result = _permanent_purge.purge_order_from_live(order=existing, actor=user, scrub_backups=True)
+        remove_stored_document_files(result.get('doc_paths') or [])
+        log_activity(user, 'ORDER_PERMANENTLY_DELETED', 'orders', str(oid), f"Permanently deleted order {existing.get('order_number')} from DB and backups")
         return json_response(start_response, {
             'status': 'success',
-            'message': 'Order deleted. The company card was kept.',
-            'company_id': company_id,
-            'company_kept': bool(leftover),
+            'message': 'Order permanently deleted from the database and backups.',
+            'company_id': optional_record_id(existing.get('company_id')),
+            'company_kept': True,
         })
 
     if path == '/api/admin/services' and method == 'GET':
@@ -17800,14 +21242,20 @@ def application(environ, start_response):
             price = float(data.get('price'))
         except (TypeError, ValueError):
             return json_response(start_response, {'status': 'error', 'message': 'Price must be a number'}, "400 Bad Request")
+        try:
+            cost_price = float(data.get('cost_price') if data.get('cost_price') not in (None, '') else 0)
+        except (TypeError, ValueError):
+            return json_response(start_response, {'status': 'error', 'message': 'Original price must be a number'}, "400 Bad Request")
+        if price < 0 or cost_price < 0:
+            return json_response(start_response, {'status': 'error', 'message': 'Prices cannot be negative'}, "400 Bad Request")
         sid = execute_db("""
-            INSERT INTO services (name, description, category, price, duration, status, featured, vat_rate, renewal_period)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+            INSERT INTO services (name, description, category, price, cost_price, duration, status, featured, vat_rate, renewal_period)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """, (
-            name, description or name, category, price,
+            name, description or name, category, price, cost_price,
             data.get('duration') or '12 Months', 'Active',
             1 if data.get('featured') else 0,
-            float(data.get('vat_rate', 0.20) or 0.20),
+            float(data.get('vat_rate', 0) or 0),
             data.get('renewal_period') or 'Annual'
         ))
         created = query_db("SELECT * FROM services WHERE id = ?;", (sid,), one=True)
@@ -17847,15 +21295,27 @@ def application(environ, start_response):
                 price = float(existing.get('price') or 0)
             except (TypeError, ValueError):
                 price = 0.0
+        if 'cost_price' in data:
+            try:
+                cost_price = float(data.get('cost_price') if data.get('cost_price') not in (None, '') else 0)
+            except (TypeError, ValueError):
+                return json_response(start_response, {'status': 'error', 'message': 'Original price must be a number'}, "400 Bad Request")
+            if cost_price < 0:
+                return json_response(start_response, {'status': 'error', 'message': 'Original price cannot be negative'}, "400 Bad Request")
+        else:
+            try:
+                cost_price = float(existing.get('cost_price') or 0)
+            except (TypeError, ValueError):
+                cost_price = 0.0
         status_raw = data.get('status') if 'status' in data else existing.get('status')
         status = 'Active' if str(status_raw or 'Active').strip().lower() in ('active', 'publish', '1', 'true') else 'Inactive'
         execute_db("""
             UPDATE services
-            SET name = ?, description = ?, category = ?, price = ?, duration = ?, status = ?
+            SET name = ?, description = ?, category = ?, price = ?, cost_price = ?, duration = ?, status = ?
             WHERE id = ?;
-        """, (name, description or name, category, price, duration, status, sid))
+        """, (name, description or name, category, price, cost_price, duration, status, sid))
         updated = query_db("SELECT * FROM services WHERE id = ?;", (sid,), one=True)
-        log_activity(user, 'SERVICE_UPDATED', 'services', str(sid), f"Updated service {name} (£{price:.2f})")
+        log_activity(user, 'SERVICE_UPDATED', 'services', str(sid), f"Updated service {name} (sell £{price:.2f}, cost £{cost_price:.2f})")
         return json_response(start_response, {'status': 'success', 'message': 'Service updated.', 'service': updated})
 
     if path.startswith('/api/admin/services/') and method == 'DELETE':
@@ -18992,24 +22452,40 @@ def application(environ, start_response):
                 'status': 'error',
                 'message': 'You cannot assign that role'
             }, "403 Forbidden")
-        existing = query_db("SELECT id FROM users WHERE LOWER(email) = ?;", (email,), one=True)
-        if existing:
+        existing = query_db("SELECT * FROM users WHERE LOWER(email) = ?;", (email,), one=True)
+        try:
+            import permanent_purge as _permanent_purge
+            if role == 'CLIENT' and _permanent_purge.is_purged_email(email):
+                return json_response(start_response, {
+                    'status': 'error',
+                    'message': 'This email was permanently deleted and cannot be restored or recreated.',
+                }, "403 Forbidden")
+        except Exception:
+            pass
+        if existing and existing.get('role') != 'CLIENT':
             return json_response(start_response, {'status': 'error', 'message': 'Email is already in use'}, "409 Conflict")
+
         local_id = f"local_user_{uuid.uuid4().hex[:16]}"
         client_type = (data.get('client_type') or '').strip().lower()
         if role == 'CLIENT':
             if client_type in ('b2b', 'b2b customer') or data.get('is_b2b') in (1, '1', True):
                 is_b2b_val = 1
                 client_type_val = 'B2B'
-                acct_type_val = 'B2B Client (Brixen Website Panel)'
-                b2b_id_val = generate_next_b2b_id()
-                success_msg = f'B2B Client account created ({b2b_id_val}). They can sign in with this email and password.'
+                acct_type_val = 'B2B Client (CRM Portal Account)'
+                b2b_id_val = (existing or {}).get('b2b_id') or generate_next_b2b_id()
+                success_msg = (
+                    f'B2B client account created ({b2b_id_val}). '
+                    'They can sign in to the CRM portal with this email and password.'
+                )
             else:
                 is_b2b_val = 0
                 client_type_val = 'Normal'
-                acct_type_val = 'Normal Client (Standard Website Account)'
+                acct_type_val = 'Normal Client (Website Account)'
                 b2b_id_val = None
-                success_msg = 'Normal Client account created. They can sign in with this email and password.'
+                success_msg = (
+                    'Normal customer created. They sign in on the Brixen website only '
+                    f'({website_customer_login_url()}), not this CRM portal.'
+                )
         else:
             is_b2b_val = 0
             client_type_val = 'Normal'
@@ -19017,10 +22493,71 @@ def application(environ, start_response):
             b2b_id_val = None
             success_msg = 'User created. They can sign in with this email and password.'
 
-        user_id = execute_db("""
-            INSERT INTO users (wordpress_user_id, email, password_hash, full_name, phone, country, role, status, department, is_b2b, client_type, b2b_id, account_type)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-        """, (local_id, email, hash_password(password), full_name, phone, country, role, status_val, department, is_b2b_val, client_type_val, b2b_id_val, acct_type_val))
+        if existing and role == 'CLIENT' and client_is_b2b(existing) and not is_b2b_val:
+            return json_response(start_response, {
+                'status': 'error',
+                'message': 'This email is already a B2B portal customer. Open them from Customers instead of creating a Normal account.',
+            }, "409 Conflict")
+
+        if existing and existing.get('role') == 'CLIENT':
+            user_id = existing['id']
+            execute_db(
+                """
+                UPDATE users
+                SET full_name = ?, phone = ?, country = ?, password_hash = ?, status = ?,
+                    is_b2b = ?, client_type = ?, b2b_id = COALESCE(?, b2b_id), account_type = ?
+                WHERE id = ?;
+                """,
+                (
+                    full_name, phone, country, hash_password(password), status_val,
+                    is_b2b_val, client_type_val, b2b_id_val, acct_type_val, user_id,
+                ),
+            )
+            success_msg = (
+                'This customer already existed. Name, phone, and password were updated.'
+                if not is_b2b_val else
+                f'This customer already existed and is now a B2B portal account ({b2b_id_val}).'
+            )
+        else:
+            try:
+                user_id = execute_db("""
+                    INSERT INTO users (wordpress_user_id, email, password_hash, full_name, phone, country, role, status, department, is_b2b, client_type, b2b_id, account_type)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """, (local_id, email, hash_password(password), full_name, phone, country, role, status_val, department, is_b2b_val, client_type_val, b2b_id_val, acct_type_val))
+            except Exception as exc:
+                return json_response(start_response, {
+                    'status': 'error',
+                    'message': f'Could not create customer: {exc}',
+                }, "400 Bad Request")
+
+        website_provisioned = None
+        if role == 'CLIENT' and not is_b2b_val:
+            website_provisioned = False
+            try:
+                wp_sync = provision_wordpress_website_user(
+                    email=email,
+                    password=password,
+                    full_name=full_name,
+                    phone=phone,
+                    client_type='Normal',
+                )
+            except Exception as exc:
+                wp_sync = {'ok': False, 'message': str(exc)}
+            wp_id = str((wp_sync or {}).get('wordpress_user_id') or '').strip()
+            if (wp_sync or {}).get('ok') and wp_id:
+                execute_db("UPDATE users SET wordpress_user_id = ? WHERE id = ?;", (wp_id, user_id))
+                website_provisioned = True
+                if 'already existed' not in success_msg:
+                    success_msg = (
+                        f'Normal customer created. They can sign in on the Brixen website '
+                        f'({website_customer_login_url()}) with this email and password.'
+                    )
+            else:
+                detail = (wp_sync or {}).get('message') or 'WordPress account was not created'
+                success_msg = (
+                    f'{success_msg} Website login could not be synced ({detail}). '
+                    'Use Customers → Set portal password if they still cannot sign in on the website.'
+                )
         created = query_db("""
             SELECT id, wordpress_user_id, email, full_name, phone, country, role, department, status, avatar_url, created_at, is_b2b, client_type, b2b_id, account_type
             FROM users WHERE id = ?;
@@ -19030,7 +22567,8 @@ def application(environ, start_response):
         return json_response(start_response, {
             'status': 'success',
             'message': success_msg,
-            'user': public_user
+            'user': public_user,
+            'website_provisioned': website_provisioned,
         })
 
     if path.startswith('/api/admin/staff/') and method == 'PUT':
@@ -19554,6 +23092,7 @@ def application(environ, start_response):
         }
         settings_dict = {row['key']: row['value'] for row in rows if row['key'] in allowed}
         settings_dict['companies_house_configured'] = bool(companies_house_api_key())
+        settings_dict['getaddress_configured'] = bool(getaddress_api_key())
         settings_dict['smtp_configured'] = smtp_configured()
         if not settings_dict.get('uk_formfill_pro_url'):
             settings_dict['uk_formfill_pro_url'] = uk_formfill_pro_url()
@@ -19630,7 +23169,7 @@ def application(environ, start_response):
         writable = {
             'company_name', 'support_email', 'currency', 'order_prefix', 'invoice_prefix',
             'support_phone', 'logo_url', 'smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass', 'smtp_from',
-            'uk_formfill_pro_url', 'team_notification_emails', 'companies_house_api_key',
+            'uk_formfill_pro_url', 'team_notification_emails', 'companies_house_api_key', 'getaddress_api_key',
             'compliance_alerts_enabled', 'compliance_alerts_send_hour', 'compliance_alerts_timezone',
             'compliance_alerts_interval_hours', 'compliance_alerts_verified_only',
             'compliance_alerts_whatsapp_enabled', 'compliance_alerts_test_mode',
@@ -19641,6 +23180,8 @@ def application(environ, start_response):
             if k not in writable:
                 continue
             if k == 'companies_house_api_key' and not str(v or '').strip():
+                continue
+            if k == 'getaddress_api_key' and not str(v or '').strip():
                 continue
             if k == 'smtp_pass' and not str(v or '').strip():
                 continue
@@ -19692,6 +23233,10 @@ def application(environ, start_response):
         summary = _ca.run_daily_compliance_alert_pass(force=True)
         log_activity(user, 'COMPLIANCE_ALERT_PASS', 'settings', '1', f"Manual compliance pass sent={summary.get('sent')}")
         return json_response(start_response, {'status': 'success', 'summary': summary})
+
+    accounts_file_response = dispatch_accounts_file_route(environ, start_response, path, method, user)
+    if accounts_file_response is not None:
+        return accounts_file_response
 
     start_response("404 Not Found", [('Content-Type', 'application/json')])
     return [json.dumps({'status': 'error', 'message': f'Route {path} not found'}).encode('utf-8')]
