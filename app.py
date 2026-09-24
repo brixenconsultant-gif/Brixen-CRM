@@ -39,6 +39,7 @@ ALLOWED_CORS_ORIGINS = frozenset({
     'https://portal.brixenconsultants.com:5050',
     'http://127.0.0.1:5050',
     'http://localhost:5050',
+    'http://localhost:5173'
 })
 INTERNAL_STAFF_ROLES = ('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF')
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
