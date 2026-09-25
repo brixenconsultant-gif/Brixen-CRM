@@ -37,6 +37,7 @@ ALLOWED_CORS_ORIGINS = frozenset({
     'http://portal.brixenconsultants.com',
     'http://portal.brixenconsultants.com:5050',
     'https://portal.brixenconsultants.com:5050',
+    'https://ledger-frontend-eosin.vercel.app',
     'http://127.0.0.1:5050',
     'http://localhost:5050',
     'http://localhost:5173'
