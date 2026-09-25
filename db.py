@@ -436,6 +436,18 @@ def ensure_schema():
         );
         CREATE INDEX IF NOT EXISTS idx_company_owners_email ON company_owners(form_email);
         CREATE INDEX IF NOT EXISTS idx_company_owners_company ON company_owners(company_id);
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            message TEXT NOT NULL,
+            type TEXT NOT NULL DEFAULT 'info',
+            link TEXT,
+            is_read INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON notifications(user_id, is_read, created_at DESC);
     """)
     company_cols = {row[1] for row in conn.execute("PRAGMA table_info(companies)").fetchall()}
     if 'utr_number' not in company_cols:

@@ -14247,11 +14247,48 @@ def build_admin_dashboard_payload(user, *, month_key=None):
     )['c'] or 0)
     month_orders = tot_orders
 
+    # Previous Month calculations for MoM Growth / Trends
+    prev_year, prev_month = shift_calendar_month(year, month, -1)
+    prev_month_start = f'{prev_year:04d}-{prev_month:02d}-01'
+    prev_month_end = month_start
+    prev_month_clause = "created_at >= ? AND created_at < ?"
+    prev_month_params = (prev_month_start, prev_month_end)
+
+    prev_orders = int(query_db(
+        f"SELECT COUNT(*) as c FROM orders WHERE {prev_month_clause};",
+        prev_month_params,
+        one=True,
+    )['c'] or 0)
+
+    month_new_customers = int(query_db(
+        f"SELECT COUNT(*) as c FROM users WHERE role = 'CLIENT' AND {month_clause};",
+        month_params,
+        one=True,
+    )['c'] or 0)
+    prev_month_new_customers = int(query_db(
+        f"SELECT COUNT(*) as c FROM users WHERE role = 'CLIENT' AND {prev_month_clause};",
+        prev_month_params,
+        one=True,
+    )['c'] or 0)
+
     def _pct(part, whole):
         whole = float(whole or 0)
         if whole <= 0:
             return 0
         return int(round(100.0 * float(part or 0) / whole))
+
+    def _calc_trend(current, previous):
+        c = float(current or 0)
+        p = float(previous or 0)
+        if p == 0:
+            if c > 0:
+                return {'text': '+100%', 'direction': 'up', 'pct': 100}
+            return {'text': '0%', 'direction': 'up', 'pct': 0}
+        diff = ((c - p) / abs(p)) * 100.0
+        rounded = round(diff, 1)
+        if rounded >= 0:
+            return {'text': f'+{rounded:g}%', 'direction': 'up', 'pct': rounded}
+        return {'text': f'{rounded:g}%', 'direction': 'down', 'pct': rounded}
 
     stats = {
         'total_customers': tot_customers,
@@ -14271,6 +14308,8 @@ def build_admin_dashboard_payload(user, *, month_key=None):
         'pending_rate': _pct(pending_orders, tot_orders),
         'month': month_key,
         'month_label': datetime.date(year, month, 1).strftime('%B %Y'),
+        'sales_trend': _calc_trend(tot_orders, prev_orders),
+        'customers_trend': _calc_trend(month_new_customers, prev_month_new_customers),
     }
 
     charts = {
@@ -14280,51 +14319,59 @@ def build_admin_dashboard_payload(user, *, month_key=None):
         'orders_yearly': [],
     }
 
-    # Daily order counts for the selected month
+    # Daily order counts & revenue for the selected month
     daily_rows = query_db(f"""
-        SELECT CAST(strftime('%d', created_at) AS INTEGER) AS day_n, COUNT(*) AS cnt
+        SELECT CAST(strftime('%d', created_at) AS INTEGER) AS day_n,
+               COUNT(*) AS cnt,
+               COALESCE(SUM(CASE WHEN status NOT IN ('Cancelled', 'Refunded') THEN total ELSE 0 END), 0) AS rev
         FROM orders
         WHERE {month_clause}
         GROUP BY strftime('%d', created_at)
         ORDER BY day_n;
     """, month_params) or []
-    by_day = {int(r['day_n']): int(r['cnt'] or 0) for r in daily_rows if r.get('day_n')}
+    by_day = {int(r['day_n']): {'cnt': int(r['cnt'] or 0), 'revenue': float(r['rev'] or 0)} for r in daily_rows if r.get('day_n')}
     if year == today.year and month == today.month:
         last_day = today.day
     else:
         last_day = (datetime.date(next_year, next_month, 1) - datetime.timedelta(days=1)).day
-    charts['orders_daily'] = [{'label': str(d), 'cnt': by_day.get(d, 0)} for d in range(1, last_day + 1)]
+    charts['orders_daily'] = [{'label': str(d), 'cnt': by_day.get(d, {}).get('cnt', 0), 'revenue': round(by_day.get(d, {}).get('revenue', 0.0), 2)} for d in range(1, last_day + 1)]
 
     # Last 7 days
     week_rows = query_db("""
-        SELECT date(created_at) AS d, COUNT(*) AS cnt
+        SELECT date(created_at) AS d,
+               COUNT(*) AS cnt,
+               COALESCE(SUM(CASE WHEN status NOT IN ('Cancelled', 'Refunded') THEN total ELSE 0 END), 0) AS rev
         FROM orders
         WHERE date(created_at) >= date('now', 'localtime', '-6 days')
         GROUP BY date(created_at)
         ORDER BY d;
     """) or []
-    by_week = {str(r['d']): int(r['cnt'] or 0) for r in week_rows if r.get('d')}
+    by_week = {str(r['d']): {'cnt': int(r['cnt'] or 0), 'revenue': float(r['rev'] or 0)} for r in week_rows if r.get('d')}
     for offset in range(6, -1, -1):
         day = today - datetime.timedelta(days=offset)
         key = day.isoformat()
         charts['orders_weekly'].append({
             'label': day.strftime('%a'),
-            'cnt': by_week.get(key, 0),
+            'cnt': by_week.get(key, {}).get('cnt', 0),
+            'revenue': round(by_week.get(key, {}).get('revenue', 0.0), 2),
         })
 
-    # Last 12 months order counts
+    # Last 12 months order counts & revenue
     year_rows = query_db("""
-        SELECT strftime('%Y-%m', created_at) AS month, COUNT(*) AS cnt
+        SELECT strftime('%Y-%m', created_at) AS month,
+               COUNT(*) AS cnt,
+               COALESCE(SUM(CASE WHEN status NOT IN ('Cancelled', 'Refunded') THEN total ELSE 0 END), 0) AS rev
         FROM orders
         GROUP BY strftime('%Y-%m', created_at);
     """) or []
-    by_year_month = {str(r['month']): int(r['cnt'] or 0) for r in year_rows if r.get('month')}
+    by_year_month = {str(r['month']): {'cnt': int(r['cnt'] or 0), 'revenue': float(r['rev'] or 0)} for r in year_rows if r.get('month')}
     for offset in range(11, -1, -1):
         y, m = shift_calendar_month(today.year, today.month, -offset)
         key = f'{y:04d}-{m:02d}'
         charts['orders_yearly'].append({
             'label': datetime.date(y, m, 1).strftime('%b'),
-            'cnt': by_year_month.get(key, 0),
+            'cnt': by_year_month.get(key, {}).get('cnt', 0),
+            'revenue': round(by_year_month.get(key, {}).get('revenue', 0.0), 2),
         })
 
     # Recent activity feed for top carousel
@@ -14469,6 +14516,27 @@ def build_admin_dashboard_payload(user, *, month_key=None):
             "SELECT COALESCE(SUM(total), 0) as s FROM invoices WHERE status = 'Pending';",
             one=True,
         )['s'] or 0)
+
+        # Previous Month for financial trends
+        prev_completed_revenue = float(query_db(
+            f"SELECT COALESCE(SUM(total), 0) as s FROM orders WHERE {prev_month_clause} AND status = 'Completed';",
+            prev_month_params,
+            one=True,
+        )['s'] or 0)
+        prev_total_turnover = float(query_db(
+            f"SELECT COALESCE(SUM(total), 0) as s FROM orders WHERE {prev_month_clause} AND status NOT IN ('Cancelled', 'Refunded');",
+            prev_month_params,
+            one=True,
+        )['s'] or 0)
+        prev_cost_orders = query_db(
+            f"SELECT id, service_id, service_name, total, status, cost_price FROM orders WHERE {prev_month_clause} AND status NOT IN ('Cancelled', 'Refunded');",
+            prev_month_params,
+        ) or []
+        prev_total_cost = 0.0
+        for row in prev_cost_orders:
+            prev_total_cost += float(resolve_order_cost(row)['cost'] or 0)
+        prev_net_profit = round(prev_total_turnover - prev_total_cost, 2)
+
         stats['total_revenue'] = f"£{completed_revenue:,.2f}"
         stats['pending_payments'] = f"£{pending_payments:,.2f}"
         stats['total_revenue_raw'] = round(completed_revenue, 2)
@@ -14477,6 +14545,9 @@ def build_admin_dashboard_payload(user, *, month_key=None):
         stats['total_cost'] = round(total_cost, 2)
         stats['net_profit'] = net_profit
         stats['net_profit_display'] = f"£{net_profit:,.2f}"
+        stats['revenue_trend'] = _calc_trend(completed_revenue, prev_completed_revenue)
+        stats['turnover_trend'] = _calc_trend(total_turnover, prev_total_turnover)
+        stats['profit_trend'] = _calc_trend(net_profit, prev_net_profit)
         ops['revenue'] = stats['total_revenue']
         charts['monthly'] = build_monthly_revenue_chart(6, end_year=year, end_month=month)
 
@@ -20755,15 +20826,31 @@ def application(environ, start_response):
     if path == '/api/client/notifications' and method == 'GET':
         if not user:
             return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
-        notes = query_db("SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC;", (user['id'],))
+        notes = query_db("SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50;", (user['id'],))
         unread_cnt = query_db("SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND is_read = 0;", (user['id'],), one=True)['c']
-        return json_response(start_response, {'status': 'success', 'notifications': notes, 'unread_count': unread_cnt})
+        return json_response(start_response, {'status': 'success', 'notifications': notes or [], 'unread_count': unread_cnt or 0})
 
     if path == '/api/client/notifications/read' and method == 'POST':
         if not user:
             return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
-        execute_db("UPDATE notifications SET is_read = 1 WHERE user_id = ?;", (user['id'],))
+        body = parse_json_body(environ)
+        note_id = body.get('id') if isinstance(body, dict) else None
+        if note_id:
+            execute_db("UPDATE notifications SET is_read = 1 WHERE user_id = ? AND id = ?;", (user['id'], note_id))
+        else:
+            execute_db("UPDATE notifications SET is_read = 1 WHERE user_id = ?;", (user['id'],))
         return json_response(start_response, {'status': 'success', 'message': 'Notifications marked read'})
+
+    if (path == '/api/client/notifications/clear' or (path == '/api/client/notifications' and method == 'DELETE')) and method in ('POST', 'DELETE'):
+        if not user:
+            return json_response(start_response, {'status': 'error', 'message': 'Not authenticated'}, "401 Unauthorized")
+        body = parse_json_body(environ)
+        note_id = body.get('id') if isinstance(body, dict) else None
+        if note_id:
+            execute_db("DELETE FROM notifications WHERE user_id = ? AND id = ?;", (user['id'], note_id))
+        else:
+            execute_db("DELETE FROM notifications WHERE user_id = ?;", (user['id'],))
+        return json_response(start_response, {'status': 'success', 'message': 'Notifications cleared'})
 
     # ----------------------------------------------------
     # API: Admin CMS
