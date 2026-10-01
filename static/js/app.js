@@ -6756,6 +6756,7 @@ function renderStaffOrderProducts(lines, order, showFinance) {
     if (!box) return;
     const rows = Array.isArray(lines) ? lines : [];
     const canEdit = canManageOrders();
+    const canEditPrice = typeof canEditOrderPrice === 'function' ? canEditOrderPrice() : false;
     const productSummary = (order && (order.products_summary || order.service_name)) || '—';
     if (!rows.length) {
         const extra = canEdit
@@ -6772,11 +6773,18 @@ function renderStaffOrderProducts(lines, order, showFinance) {
         const statusControl = canEdit && item.id
             ? `<select class="table-select staff-line-status-select ${staffOrderStatusBadgeClass(status)}" data-line-id="${item.id}" onchange="updateStaffOrderLineItemStatus(${Number(order && order.id) || staffOrderId}, ${Number(item.id)}, this.value)">${staffLineItemStatusOptions(status)}</select>`
             : `<span class="staff-line-status-pill ${staffOrderStatusBadgeClass(status)}">${escapeHtml(status)}</span>`;
+        const itemTotal = parseFloat(item.line_total != null ? item.line_total : item.unit_price || 0).toFixed(2);
+        const priceControl = canEditPrice && item.id
+            ? `<div class="staff-line-price-wrap" style="display:inline-flex; align-items:center; gap:3px;">
+                <span style="font-weight:600; color:var(--color-text-main, #1e293b); font-size:0.85rem;">£</span>
+                <input type="number" min="0" max="100000" step="0.01" inputmode="decimal" class="table-select table-price-input" style="width:85px; padding:3px 6px; font-weight:600; font-size:0.85rem; text-align:left; border:1px solid var(--color-border, #cbd5e1); border-radius:6px; background:#fff;" value="${itemTotal}" data-line-id="${item.id}" onchange="updateStaffOrderLineItemPrice(${Number(order && order.id) || staffOrderId}, ${Number(item.id)}, this.value, this)" onkeydown="if(event.key==='Enter'){event.preventDefault(); this.blur();}" aria-label="Product price">
+               </div>`
+            : `£${itemTotal}`;
         return `<tr>
             <td>${escapeHtml(item.category_name || '—')}</td>
             <td><strong>${escapeHtml(item.product_name || '—')}</strong></td>
             <td class="cell-line-status">${statusControl}</td>
-            ${showFinance ? `<td>£${parseFloat(item.line_total != null ? item.line_total : item.unit_price || 0).toFixed(2)}</td>` : ''}
+            ${showFinance ? `<td class="cell-line-total">${priceControl}</td>` : ''}
         </tr>`;
     }).join('')}</tbody></table>
     ${canEdit ? '<p class="staff-order-section-copy" style="margin-top:10px;"><button type="button" class="btn-secondary btn-table" onclick="toggleStaffAddProductPicker()">Add another product</button></p>' : ''}`;
@@ -6928,6 +6936,43 @@ async function updateStaffOrderLineItemStatus(orderId, lineItemId, newStatus) {
         if (autoStatus) setStaffOrderStatusDisplay(autoStatus);
     } catch (err) {
         alert(err.message || 'Unable to update product status.');
+        if (staffOrderId === orderId) await openStaffOrderWorkspace(orderId);
+    }
+}
+
+async function updateStaffOrderLineItemPrice(orderId, lineItemId, newPrice, inputEl) {
+    if (!canEditOrderPrice()) {
+        alert('Only an administrator can change product prices.');
+        if (staffOrderId === orderId) await openStaffOrderWorkspace(orderId);
+        return;
+    }
+    const parsed = parseFloat(String(newPrice || '').replace(/£/g, '').replace(/,/g, '').trim());
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100000) {
+        alert('Enter a valid price between £0 and £100,000.');
+        if (staffOrderId === orderId) await openStaffOrderWorkspace(orderId);
+        return;
+    }
+    const price = Math.round(parsed * 100) / 100;
+    try {
+        const res = await fetch(`/api/admin/orders/${orderId}/line-items/${lineItemId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ price }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Unable to update product price.');
+        }
+        if (typeof loadAdminOrders === 'function') loadAdminOrders();
+        if (staffOrderId === orderId) {
+            await openStaffOrderWorkspace(orderId);
+        }
+        if (typeof showPortalToast === 'function') {
+            showPortalToast('Product price updated.', 'success', 'Price Updated');
+        }
+    } catch (err) {
+        alert(err.message || 'Unable to update product price.');
         if (staffOrderId === orderId) await openStaffOrderWorkspace(orderId);
     }
 }

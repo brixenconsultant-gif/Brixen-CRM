@@ -90,5 +90,23 @@ class TestOrders(unittest.TestCase):
         checkout_after = query_db("SELECT checkout_form_json FROM orders WHERE id = 1;", one=True)
         self.assertEqual(checkout_before['checkout_form_json'], checkout_after['checkout_form_json'])
 
+    def test_05_admin_update_order_line_item_price(self):
+        status, headers, body = make_request('/api/auth/login', method='POST', body={'email': 'admin@brixenconsultant.co.uk', 'password': 'AdminPass123!'})
+        admin_token = extract_session_token(headers)
+        cookie = f"session_token={admin_token}"
+        line = query_db("SELECT id, line_total FROM order_line_items WHERE order_id = 1 LIMIT 1;", one=True)
+        self.assertTrue(line)
+        line_id = line['id']
+        st, _, res = make_request(
+            f'/api/admin/orders/1/line-items/{line_id}',
+            method='PUT',
+            body={'price': 199.50},
+            cookie=cookie,
+        )
+        self.assertEqual(st, '200 OK')
+        self.assertEqual(res.get('status'), 'success')
+        updated_line = query_db("SELECT unit_price, line_total FROM order_line_items WHERE id = ?;", (line_id,), one=True)
+        self.assertEqual(float(updated_line['line_total']), 199.50)
+
 if __name__ == '__main__':
     unittest.main()

@@ -6468,37 +6468,89 @@ def sync_order_status_from_line_items(order_id, actor=None):
     return derived
 
 
-def set_order_line_item_fulfillment(order_id, line_item_id, status, actor=None):
+def update_order_line_item(order_id, line_item_id, data, actor=None):
     order_id = optional_record_id(order_id)
     line_item_id = optional_record_id(line_item_id)
-    status = normalize_line_item_fulfillment_status(status)
     if not order_id or not line_item_id:
         return None, 'Order product not found'
     row = query_db(
-        "SELECT id, order_id, product_name FROM order_line_items WHERE id = ? AND order_id = ?;",
+        "SELECT id, order_id, product_name, quantity, unit_price, line_total, fulfillment_status FROM order_line_items WHERE id = ? AND order_id = ?;",
         (line_item_id, order_id),
         one=True,
     )
     if not row:
         return None, 'Order product not found'
-    execute_db(
-        "UPDATE order_line_items SET fulfillment_status = ? WHERE id = ? AND order_id = ?;",
-        (status, line_item_id, order_id),
-    )
-    order_status = sync_order_status_from_line_items(order_id, actor=actor)
-    if actor:
-        log_activity(
-            actor,
-            'LINE_ITEM_STATUS',
-            'order_line_items',
-            str(line_item_id),
-            f"{row.get('product_name') or 'Product'} → {status}",
+
+    payload = data if isinstance(data, dict) else {}
+    status_raw = payload.get('fulfillment_status') if payload.get('fulfillment_status') is not None else payload.get('status')
+    order_status = None
+    curr_status = row.get('fulfillment_status') or 'Pending'
+
+    if status_raw is not None:
+        status = normalize_line_item_fulfillment_status(status_raw)
+        execute_db(
+            "UPDATE order_line_items SET fulfillment_status = ? WHERE id = ? AND order_id = ?;",
+            (status, line_item_id, order_id),
         )
+        curr_status = status
+        order_status = sync_order_status_from_line_items(order_id, actor=actor)
+        if actor:
+            log_activity(
+                actor,
+                'LINE_ITEM_STATUS',
+                'order_line_items',
+                str(line_item_id),
+                f"{row.get('product_name') or 'Product'} → {status}",
+            )
+
+    raw_price = None
+    if 'price' in payload and payload['price'] is not None:
+        raw_price = payload['price']
+    elif 'line_total' in payload and payload['line_total'] is not None:
+        raw_price = payload['line_total']
+    elif 'unit_price' in payload and payload['unit_price'] is not None:
+        raw_price = payload['unit_price']
+
+    new_order_total = None
+    line_total_val = row.get('line_total')
+    if raw_price is not None:
+        if actor and not can_edit_order_price(actor):
+            return None, 'Only an administrator can change product prices'
+        try:
+            price_val = float(str(raw_price).replace('£', '').replace(',', '').strip())
+        except (TypeError, ValueError, AttributeError):
+            return None, 'Enter a valid price'
+        if price_val < 0 or price_val > 100000:
+            return None, 'Price must be between £0 and £100,000'
+        price_val = round(price_val, 2)
+        line_total_val = price_val
+        qty = max(int(row.get('quantity') or 1), 1)
+        unit_p = round(price_val / qty, 2) if 'unit_price' not in payload else round(float(str(payload['unit_price']).replace('£', '').replace(',', '').strip()), 2)
+        execute_db(
+            "UPDATE order_line_items SET unit_price = ?, line_total = ? WHERE id = ? AND order_id = ?;",
+            (unit_p, price_val, line_item_id, order_id),
+        )
+        new_order_total = refresh_order_totals_from_line_items(order_id)
+        if actor:
+            log_activity(
+                actor,
+                'LINE_ITEM_PRICE',
+                'order_line_items',
+                str(line_item_id),
+                f"{row.get('product_name') or 'Product'} price updated to £{price_val:.2f}",
+            )
+
     return {
         'line_item_id': line_item_id,
-        'fulfillment_status': status,
+        'fulfillment_status': curr_status,
+        'line_total': line_total_val,
         'order_status': order_status,
+        'order_total': new_order_total,
     }, None
+
+
+def set_order_line_item_fulfillment(order_id, line_item_id, status, actor=None):
+    return update_order_line_item(order_id, line_item_id, {'fulfillment_status': status}, actor=actor)
 
 
 def public_line_item(row, for_client=False, include_finance=True):
@@ -21450,14 +21502,15 @@ def application(environ, start_response):
             if not staff_can_access_admin_order(user, existing):
                 return json_response(start_response, {'status': 'error', 'message': 'Order not found'}, "404 Not Found")
             data = parse_body(environ)
-            result, err = set_order_line_item_fulfillment(
+            result, err = update_order_line_item(
                 oid,
                 line_id,
-                data.get('fulfillment_status') or data.get('status'),
+                data,
                 actor=user,
             )
             if err:
-                return json_response(start_response, {'status': 'error', 'message': err}, "404 Not Found")
+                code = "403 Forbidden" if ("permission" in err.lower() or "administrator" in err.lower()) else ("404 Not Found" if "not found" in err.lower() else "400 Bad Request")
+                return json_response(start_response, {'status': 'error', 'message': err}, code)
             refreshed = query_db("SELECT * FROM orders WHERE id = ?;", (oid,), one=True)
             lines = query_db(
                 "SELECT * FROM order_line_items WHERE order_id = ? ORDER BY sort_order ASC, id ASC;",
