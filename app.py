@@ -312,6 +312,20 @@ def smtp_configured():
     return bool(cfg['host'] and cfg['user'] and cfg['password'])
 
 
+def are_emails_enabled():
+    env_val = os.environ.get('DISABLE_EMAILS', '').strip().lower()
+    if env_val in ('true', '1', 'yes'):
+        return False
+    try:
+        row = query_db("SELECT value FROM settings WHERE key = 'emails_enabled';", one=True)
+        if row and str(row.get('value') or '').strip().lower() in ('false', '0', 'off', 'disabled'):
+            return False
+    except Exception:
+        pass
+    return True
+
+
+
 # Keep in sync with email_engine.EMAIL_FONT_STACK (safe system fonts only).
 EMAIL_FONT_STACK = (
     '-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif'
@@ -667,6 +681,11 @@ class EmailService:
         if not smtp_configured():
             print(f"[EmailService Log] Email to {recipient_email} ('{subject}') - SMTP not configured.")
             return False, "SMTP not configured"
+        if not are_emails_enabled():
+            print(f"[EmailService Log] Outbound emails are disabled in system settings. Suppressed '{subject}' to {recipient_email}")
+            if outbox_id:
+                _mark_outbound_email(outbox_id, 'suppressed', error='Emails disabled in settings')
+            return True, "Emails are disabled in system settings"
         import time
         last_error = None
         attempts = 0
@@ -19189,13 +19208,14 @@ def application(environ, start_response):
         })
 
     # ----------------------------------------------------
-    # API: System Settings
+    # API: System Settings & Email Toggle
     # ----------------------------------------------------
-    if path == '/api/settings' and method == 'GET':
+    if path in ('/api/settings', '/api/admin/settings') and method == 'GET':
         public_keys = {
             'company_name', 'logo_url', 'primary_color', 'support_email',
             'support_phone', 'currency', 'vat_rate', 'order_prefix', 'invoice_prefix',
-            'portal_url'
+            'portal_url', 'team_notification_emails', 'uk_formfill_pro_url',
+            'smtp_host', 'smtp_port', 'smtp_user', 'smtp_from', 'emails_enabled'
         }
         blocked_fragments = (
             'secret', 'password', 'passwd', 'token', 'hash', 'credential',
@@ -19211,7 +19231,48 @@ def application(environ, start_response):
             if any(frag in key_l for frag in blocked_fragments):
                 continue
             settings_dict[key] = r['value']
+        settings_dict['emails_enabled'] = are_emails_enabled()
+        settings_dict['smtp_configured'] = smtp_configured()
         return json_response(start_response, {'status': 'success', 'settings': settings_dict})
+
+    if path in ('/api/settings', '/api/admin/settings') and method == 'POST':
+        if not user or user.get('role') not in ('SUPER_ADMIN', 'ADMIN', 'MANAGER'):
+            return json_response(start_response, {'status': 'error', 'message': 'Unauthorized'}, "403 Forbidden")
+        data = parse_body(environ)
+        ALLOWED_SAVE_KEYS = (
+            'company_name', 'support_email', 'team_notification_emails',
+            'currency', 'order_prefix', 'companies_house_api_key',
+            'getaddress_api_key', 'uk_formfill_pro_url', 'smtp_host',
+            'smtp_port', 'smtp_user', 'smtp_pass', 'smtp_from', 'emails_enabled'
+        )
+        for k in ALLOWED_SAVE_KEYS:
+            if k in data:
+                v = data[k]
+                if isinstance(v, bool):
+                    v = 'true' if v else 'false'
+                elif v is not None:
+                    v = str(v).strip()
+                if v is not None:
+                    execute_db("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?);", (k, v))
+        return json_response(start_response, {'status': 'success', 'message': 'Settings saved successfully!'})
+
+    if path == '/api/settings/email-toggle' and method in ('GET', 'POST'):
+        if method == 'GET':
+            return json_response(start_response, {
+                'status': 'success',
+                'emails_enabled': are_emails_enabled()
+            })
+        if not user or user.get('role') not in ('SUPER_ADMIN', 'ADMIN', 'MANAGER'):
+            return json_response(start_response, {'status': 'error', 'message': 'Unauthorized'}, "403 Forbidden")
+        data = parse_body(environ)
+        enabled = bool(data.get('enabled', True))
+        val = 'true' if enabled else 'false'
+        execute_db("INSERT OR REPLACE INTO settings (key, value) VALUES ('emails_enabled', ?);", (val,))
+        return json_response(start_response, {
+            'status': 'success',
+            'emails_enabled': enabled,
+            'message': f"Emails {'enabled' if enabled else 'disabled'} successfully."
+        })
 
     # ----------------------------------------------------
     # API: User Preferences (Theme, UI settings)

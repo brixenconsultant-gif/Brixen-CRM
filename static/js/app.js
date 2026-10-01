@@ -11393,6 +11393,18 @@ async function loadAdminSettings() {
                     ? 'Customer emails are enabled. Uploaded documents will email the client automatically.'
                     : 'Add your Hostinger SMTP details below, save, then send a test email to confirm delivery.';
             }
+            const emailSwitch = document.getElementById('set-emails-master-switch');
+            const emailBadge = document.getElementById('set-emails-switch-badge');
+            if (emailSwitch) {
+                const isEnabled = s.emails_enabled !== false;
+                emailSwitch.checked = isEnabled;
+                if (emailBadge) {
+                    emailBadge.textContent = isEnabled ? 'ACTIVE (ON)' : 'DISABLED (OFF)';
+                    emailBadge.style.color = isEnabled ? '#059669' : '#dc2626';
+                    emailBadge.style.background = isEnabled ? '#ecfdf5' : '#fef2f2';
+                    emailBadge.style.borderColor = isEnabled ? '#a7f3d0' : '#fecaca';
+                }
+            }
             const ca = s.compliance_alerts || {};
             const setChk = (id, val) => { const el = document.getElementById(id); if (el) el.checked = !!val; };
             const setVal = (id, val) => { const el = document.getElementById(id); if (el && val != null && val !== '') el.value = val; };
@@ -11408,6 +11420,35 @@ async function loadAdminSettings() {
             setVal('set-compliance-whatsapp-url', ca.whatsapp_url || s.compliance_alerts_whatsapp_url || '');
         }
     } catch (err) { console.error(err); }
+}
+
+async function onEmailMasterSwitchChange(el) {
+    const badge = document.getElementById('set-emails-switch-badge');
+    const enabled = !!(el && el.checked);
+    if (badge) {
+        badge.textContent = enabled ? 'ACTIVE (ON)' : 'DISABLED (OFF)';
+        badge.style.color = enabled ? '#059669' : '#dc2626';
+        badge.style.background = enabled ? '#ecfdf5' : '#fef2f2';
+        badge.style.borderColor = enabled ? '#a7f3d0' : '#fecaca';
+    }
+    try {
+        const res = await fetch('/api/settings/email-toggle', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: enabled })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.status !== 'success') {
+            throw new Error(data.message || 'Failed to toggle email status');
+        }
+        if (typeof showPortalToast === 'function') {
+            showPortalToast(enabled ? 'Outbound emails enabled (ON)' : 'Outbound emails disabled (OFF)', 'info', 'Settings');
+        }
+    } catch (err) {
+        console.error(err);
+        alert(err.message || 'Error toggling emails');
+    }
 }
 
 async function sendRmkComplianceTestEmail() {
@@ -11483,6 +11524,7 @@ async function saveAdminSettings(e) {
     if (smtp_user.trim()) payload.smtp_user = smtp_user.trim();
     if (smtp_pass.trim()) payload.smtp_pass = smtp_pass.trim();
     if (smtp_from.trim()) payload.smtp_from = smtp_from.trim();
+    payload.emails_enabled = !!(document.getElementById('set-emails-master-switch') || {}).checked;
     payload.compliance_alerts_enabled = !!(document.getElementById('set-compliance-enabled') || {}).checked;
     payload.compliance_alerts_verified_only = !!(document.getElementById('set-compliance-verified-only') || {}).checked;
     payload.compliance_alerts_whatsapp_enabled = !!(document.getElementById('set-compliance-whatsapp') || {}).checked;
