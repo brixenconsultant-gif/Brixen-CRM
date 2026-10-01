@@ -20907,6 +20907,55 @@ def application(environ, start_response):
         log_activity(user, 'CUSTOMER_STATUS_CHANGE', 'users', str(cid), f"Updated status to {new_status}")
         return json_response(start_response, {'status': 'success', 'message': f'Customer status updated to {new_status}'})
 
+    if path == '/api/admin/customers/type' and method == 'POST':
+        if not user or not check_permission(user, 'clients.edit'):
+            return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")
+        data = parse_body(environ)
+        customer_id, err = to_optional_int(data.get('customer_id'), 'customer_id')
+        if err or not customer_id:
+            return json_response(start_response, {'status': 'error', 'message': 'Customer ID is required'}, "400 Bad Request")
+        raw_type = (data.get('client_type') or '').strip().lower()
+        target = query_db("SELECT id, email, full_name, role, is_b2b, client_type, b2b_id FROM users WHERE id = ?;", (customer_id,), one=True)
+        if not target or target.get('role') != 'CLIENT':
+            return json_response(start_response, {'status': 'error', 'message': 'Customer not found'}, "404 Not Found")
+
+        if raw_type in ('b2b', 'b2b customer', 'b2b client'):
+            is_b2b_val = 1
+            client_type_val = 'B2B'
+            acct_type_val = 'B2B Client (Deals on behalf of others)'
+            b2b_id_val = target.get('b2b_id') or generate_next_b2b_id()
+            execute_db(
+                "UPDATE users SET is_b2b = ?, client_type = ?, account_type = ?, b2b_id = ? WHERE id = ?;",
+                (is_b2b_val, client_type_val, acct_type_val, b2b_id_val, customer_id)
+            )
+        elif raw_type in ('business', 'business customer', 'corporate'):
+            is_b2b_val = 0
+            client_type_val = 'Business'
+            acct_type_val = 'Business Client (Multiple Companies)'
+            b2b_id_val = None
+            execute_db(
+                "UPDATE users SET is_b2b = ?, client_type = ?, account_type = ? WHERE id = ?;",
+                (is_b2b_val, client_type_val, acct_type_val, customer_id)
+            )
+        else:
+            is_b2b_val = 0
+            client_type_val = 'Individual'
+            acct_type_val = 'Individual Client (Single Company)'
+            b2b_id_val = None
+            execute_db(
+                "UPDATE users SET is_b2b = ?, client_type = ?, account_type = ? WHERE id = ?;",
+                (is_b2b_val, client_type_val, acct_type_val, customer_id)
+            )
+
+        log_activity(user, 'CUSTOMER_TYPE_UPDATE', 'users', str(customer_id), f"Changed customer type for {target.get('email')} to {client_type_val}")
+        return json_response(start_response, {
+            'status': 'success',
+            'message': f"Customer type updated to {client_type_val}",
+            'client_type': client_type_val,
+            'is_b2b': is_b2b_val,
+            'b2b_id': b2b_id_val or target.get('b2b_id') or ''
+        })
+
     if path == '/api/admin/customers/phone' and method == 'POST':
         if not user or not check_permission(user, 'clients.edit'):
             return json_response(start_response, {'status': 'error', 'message': 'Insufficient permissions'}, "403 Forbidden")

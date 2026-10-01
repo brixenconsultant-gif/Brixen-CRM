@@ -8625,21 +8625,21 @@ function renderAdminCustomers() {
         const portalReady = isB2B && c.portal_login_ready !== false;
         const portalLabel = isB2B ? (portalReady ? 'Portal login' : 'Needs portal password') : 'Website account';
         
-        let typeBadgeHtml = '';
-        if (isB2B) {
-            typeBadgeHtml = `<span class="b2b-badge" title="Deals on behalf of others">${escapeHtml(c.b2b_id || 'B2B Partner')}</span>`;
-        } else if (cat === 'Business') {
-            typeBadgeHtml = `<span class="badge" style="background:#e0e7ff; color:#3730a3; font-weight:700; border-radius:6px; padding:2px 8px; font-size:0.75rem;" title="Multiple companies">Business (Multi)</span>`;
-        } else {
-            typeBadgeHtml = `<span class="badge" style="background:#f1f5f9; color:#475569; font-weight:700; border-radius:6px; padding:2px 8px; font-size:0.75rem;" title="1 company only">Individual (1 Co)</span>`;
-        }
+        const b2bLabel = c.b2b_id ? `B2B (${escapeHtml(c.b2b_id)})` : 'B2B Client';
+        const typeSelectHtml = `
+            <select class="customer-type-inline-select" data-prev-type="${cat}" style="font-size:0.75rem; font-weight:700; padding:4px 8px; border-radius:6px; cursor:pointer; border:1px solid ${isB2B ? '#f59e0b' : (cat === 'Business' ? '#a5b4fc' : '#cbd5e1')}; background:${isB2B ? '#fffbeb' : (cat === 'Business' ? '#e0e7ff' : '#f1f5f9')}; color:${isB2B ? '#b45309' : (cat === 'Business' ? '#3730a3' : '#475569')}; outline:none;" onchange="changeCustomerTypeInline(${c.id}, this.value, this)">
+                <option value="Individual" ${cat === 'Individual' ? 'selected' : ''}>Individual (1 Co)</option>
+                <option value="Business" ${cat === 'Business' ? 'selected' : ''}>Business (Multi)</option>
+                <option value="B2B" ${cat === 'B2B' ? 'selected' : ''}>${b2bLabel}</option>
+            </select>
+        `;
 
         return `
             <tr>
                 <td style="text-align:center;"><input type="checkbox" class="chk-customer-item" value="${c.id}" onchange="updateCustomerSelectionState()"></td>
                 <td style="font-weight:700;">${escapeHtml(c.full_name || '')}${isNew ? ' <span class="signup-new-badge">New</span>' : ''}</td>
                 <td>${escapeHtml(c.email || '')}</td>
-                <td>${typeBadgeHtml}</td>
+                <td>${typeSelectHtml}</td>
                 <td>${escapeHtml(formatDateTime(c.created_at) || formatDate(c.created_at) || '—')}</td>
                 <td>${escapeHtml(sourceLabel)}</td>
                 <td>${c.companies_count ?? 0}</td>
@@ -8658,6 +8658,45 @@ function renderAdminCustomers() {
     }).join('');
     updateCustomerSelectionState();
     if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
+}
+
+async function changeCustomerTypeInline(customerId, newType, selectEl) {
+    if (!customerId) return;
+    const prevType = selectEl ? selectEl.getAttribute('data-prev-type') || 'Individual' : 'Individual';
+    if (selectEl) selectEl.disabled = true;
+    try {
+        const res = await fetch('/api/admin/customers/type', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ customer_id: customerId, client_type: newType })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.status === 'success') {
+            const target = adminCustomersCache.find(x => Number(x.id) === Number(customerId));
+            if (target) {
+                target.client_type = data.client_type;
+                target.is_b2b = data.is_b2b;
+                if (data.b2b_id) target.b2b_id = data.b2b_id;
+            }
+            if (typeof showPortalToast === 'function') {
+                showPortalToast(`Customer updated to ${data.client_type || newType}`, 'success', 'Customer Type');
+            }
+            renderAdminCustomers();
+        } else {
+            alert(data.message || 'Failed to update customer type.');
+            if (selectEl) {
+                selectEl.value = prevType;
+                selectEl.disabled = false;
+            }
+        }
+    } catch (err) {
+        alert('Network error: ' + (err.message || err));
+        if (selectEl) {
+            selectEl.value = prevType;
+            selectEl.disabled = false;
+        }
+    }
 }
 
 function openB2BClientOrders(clientId) {
